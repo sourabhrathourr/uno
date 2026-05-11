@@ -613,6 +613,7 @@ function GameTable({
   const drawAnimationInitializedRef = useRef(false)
   const drawAnimationLastEventIdRef = useRef<string | null>(null)
   const prevRouletteActiveRef = useRef<{ playerId: string; cardCount: number } | null>(null)
+  const phoneViewport = useMediaQuery("(max-width: 520px)")
   const narrowViewport = useMediaQuery("(max-width: 680px)")
   const shortViewport = useMediaQuery("(max-height: 760px)")
   const compactSurface = narrowViewport || shortViewport
@@ -1027,13 +1028,23 @@ function GameTable({
           />
         ))}
 
-        <div className="mx-auto flex h-full min-h-0 w-full max-w-[680px] flex-col gap-2 px-2 py-2">
-          <header className="flex shrink-0 items-center justify-between gap-2 rounded-2xl border border-white/10 bg-white/[0.035] px-3 py-2 shadow-[0_14px_42px_rgba(0,0,0,0.28)]">
+        <div
+          className={
+            "mx-auto flex h-full min-h-0 w-full max-w-[680px] flex-col px-2 " +
+            (phoneViewport ? "gap-1.5 py-1.5" : "gap-2 py-2")
+          }
+        >
+          <header
+            className={
+              "flex shrink-0 items-center justify-between gap-2 border border-white/10 bg-white/[0.035] px-3 shadow-[0_14px_42px_rgba(0,0,0,0.28)] " +
+              (phoneViewport ? "rounded-[1.15rem] py-1.5" : "rounded-2xl py-2")
+            }
+          >
             <div className="min-w-0">
               <p className="text-[9px] font-medium tracking-[0.18em] text-white/42 uppercase">
                 UNO No Mercy
               </p>
-              <h1 className="truncate text-base font-semibold tracking-tight">
+              <h1 className="truncate text-sm font-semibold tracking-tight sm:text-base">
                 Room {room.code}
               </h1>
             </div>
@@ -1054,6 +1065,7 @@ function GameTable({
             room={room}
             game={game}
             selfPlayerId={player.id}
+            dense={phoneViewport}
             canTakeDrawPenalty={Boolean(playerGame?.canTakeDrawPenalty)}
             onTakeDrawPenalty={onTakePenalty}
           />
@@ -1065,7 +1077,9 @@ function GameTable({
                 "linear-gradient(135deg, rgba(255,255,255,0.09), rgba(255,255,255,0) 18%, rgba(0,0,0,0.18) 62%), repeating-linear-gradient(92deg, rgba(255,255,255,0.035) 0 10px, rgba(0,0,0,0.05) 10px 22px), linear-gradient(90deg, #5a341d, #7a4829 38%, #4b2917)",
             }}
             className={
-              "relative isolate min-h-0 flex-1 overflow-hidden rounded-[1.35rem] border p-2 shadow-[0_26px_70px_rgba(0,0,0,0.46)] transition-[border-color,box-shadow] " +
+              "relative isolate min-h-0 flex-1 overflow-hidden border shadow-[0_26px_70px_rgba(0,0,0,0.46)] transition-[border-color,box-shadow] " +
+              (phoneViewport ? "rounded-[1.15rem] p-1.5" : "rounded-[1.35rem] p-2") +
+              " " +
               (tableDragActive
                 ? "border-white/35 shadow-[0_26px_70px_rgba(0,0,0,0.46),inset_0_0_0_2px_rgba(255,255,255,0.16)]"
                 : draggingCardId
@@ -1131,22 +1145,45 @@ function GameTable({
                 </div>
               )}
 
-              <div className="grid min-h-0 flex-1 place-items-center py-2">
-                <div className="flex w-full max-w-[360px] flex-col items-center justify-center gap-2">
-                  <div className="flex items-start justify-center gap-4">
+              <div
+                className={
+                  "flex min-h-0 flex-1 justify-center " +
+                  (phoneViewport ? "items-start pt-1" : "items-center py-2")
+                }
+              >
+                <div
+                  className={
+                    "flex w-full flex-col items-center " +
+                    (phoneViewport
+                      ? "max-w-[336px] justify-start gap-1.5"
+                      : "max-w-[360px] justify-center gap-2")
+                  }
+                >
+                  <div
+                    className={
+                      "flex items-start justify-center " +
+                      (phoneViewport ? "gap-3" : "gap-4")
+                    }
+                  >
                     <DeckStack
                       canDraw={Boolean(playerGame?.canDraw)}
                       alreadyDrawn={Boolean(playerGame?.canEndTurn)}
                       drawPileCount={game?.drawPileCount ?? 0}
                       size="sm"
+                      dense={phoneViewport}
                       onDraw={onDrawCard}
                     />
-                    <DiscardStack card={game?.topDiscard ?? null} size="sm" />
+                    <DiscardStack
+                      card={game?.topDiscard ?? null}
+                      size="sm"
+                      dense={phoneViewport}
+                    />
                   </div>
                   <TableStagedPlay
                     cards={tableStagedCards}
                     playerName={tableStagedPlayerName}
                     mode={tableStagedMode}
+                    dense={phoneViewport}
                     targetColor={
                       rouletteChoice?.color ??
                       (game?.stagedPlay?.kind === "roulette"
@@ -1161,7 +1198,7 @@ function GameTable({
             </div>
           </section>
 
-          {(error || playerGame?.catchablePlayerIds.length) && (
+          {(error || Boolean(playerGame?.catchablePlayerIds.length)) && (
             <div className="shrink-0 space-y-1">
               {error && (
                 <p className="rounded-xl border border-red-400/20 bg-red-500/12 px-3 py-2 text-xs text-red-100 shadow-[0_14px_34px_rgba(0,0,0,0.26)] backdrop-blur-md">
@@ -1733,7 +1770,7 @@ function MobileChatSheet({
               role="dialog"
               aria-modal="true"
               aria-labelledby="mobile-chat-title"
-              className="absolute inset-x-0 bottom-0 flex max-h-[88dvh] min-h-[58dvh] flex-col rounded-t-[1.35rem] border border-white/10 bg-[#090806] text-white shadow-[0_-28px_80px_rgba(0,0,0,0.58)]"
+              className="absolute inset-x-0 bottom-0 flex h-[82dvh] max-h-[92dvh] min-h-[min(560px,88dvh)] flex-col rounded-t-[1.35rem] border border-white/10 bg-[#090806] text-white shadow-[0_-28px_80px_rgba(0,0,0,0.58)] sm:h-[76dvh]"
             >
               <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
                 <div className="min-w-0">
@@ -1757,6 +1794,7 @@ function MobileChatSheet({
               <ChatMessageList
                 messages={messages}
                 selfPlayerId={selfPlayerId}
+                emptyVariant="sheet"
                 className="flex-1 px-4 py-3"
               />
 
@@ -1789,19 +1827,26 @@ function MobilePlayerStrip({
   room,
   game,
   selfPlayerId,
+  dense = false,
   canTakeDrawPenalty,
   onTakeDrawPenalty,
 }: {
   room: RoomSnapshot
   game: RoomSnapshot["game"]
   selfPlayerId: string
+  dense?: boolean
   canTakeDrawPenalty: boolean
   onTakeDrawPenalty: () => void
 }) {
   const players = orderPlayersAroundSelf(room.players, selfPlayerId)
 
   return (
-    <div className="uno-scrollbar flex shrink-0 gap-1.5 overflow-x-auto rounded-2xl border border-white/10 bg-white/[0.035] p-1.5 shadow-[0_12px_34px_rgba(0,0,0,0.24)]">
+    <div
+      className={
+        "uno-scrollbar flex shrink-0 overflow-x-auto border border-white/10 bg-white/[0.035] shadow-[0_12px_34px_rgba(0,0,0,0.24)] " +
+        (dense ? "gap-1 rounded-[1.15rem] p-1" : "gap-1.5 rounded-2xl p-1.5")
+      }
+    >
       {players.map((candidate) => {
         const state = game?.players.find(
           (gamePlayer) => gamePlayer.playerId === candidate.id,
@@ -1832,7 +1877,9 @@ function MobilePlayerStrip({
             key={candidate.id}
             data-seat-player-id={candidate.id}
             className={
-              "relative flex min-w-[138px] items-center gap-2 rounded-xl border px-2 py-1.5 transition-[background-color,border-color,box-shadow,opacity] duration-300 " +
+              "relative flex items-center rounded-xl border transition-[background-color,border-color,box-shadow,opacity] duration-300 " +
+              (dense ? "min-w-[126px] gap-1.5 px-1.5 py-1" : "min-w-[138px] gap-2 px-2 py-1.5") +
+              " " +
               (winnerPlacement?.position === 1
                 ? "border-amber-200/70 bg-amber-200/18 shadow-[0_0_28px_rgba(252,211,77,0.22)]"
                 : declaredUno && !eliminated && !winnerPlacement
@@ -1845,24 +1892,26 @@ function MobilePlayerStrip({
           >
             <div
               className={
-                "grid size-9 shrink-0 place-items-center rounded-full border " +
+                "grid shrink-0 place-items-center rounded-full border " +
+                (dense ? "size-8" : "size-9") +
+                " " +
                 (active
                   ? "border-amber-100/60 bg-amber-100/20 text-amber-50"
                   : "border-white/12 bg-white/[0.07] text-white/72")
               }
             >
               {winnerPlacement ? (
-                <Trophy className="size-4" strokeWidth={2.1} />
+                <Trophy className={dense ? "size-3.5" : "size-4"} strokeWidth={2.1} />
               ) : (
-                <UserRound className="size-5" strokeWidth={1.8} />
+                <UserRound className={dense ? "size-4" : "size-5"} strokeWidth={1.8} />
               )}
             </div>
             <div className="min-w-0 flex-1">
-              <p className="truncate text-xs font-semibold text-white/88">
+              <p className={(dense ? "text-[11px]" : "text-xs") + " truncate font-semibold text-white/88"}>
                 {candidate.name}
                 {isYou ? " · You" : ""}
               </p>
-              <p className="mt-0.5 truncate text-[10px] text-white/45">
+              <p className={(dense ? "text-[9px]" : "text-[10px]") + " mt-0.5 truncate text-white/45"}>
                 {status}
               </p>
             </div>
@@ -1904,10 +1953,12 @@ function MobilePlayerStrip({
 function ChatMessageList({
   messages,
   selfPlayerId,
+  emptyVariant = "panel",
   className,
 }: {
   messages: ChatMessage[]
   selfPlayerId: string
+  emptyVariant?: "panel" | "sheet"
   className?: string
 }) {
   const listRef = useRef<HTMLDivElement | null>(null)
@@ -1918,6 +1969,46 @@ function ChatMessageList({
     list.scrollTo({ top: list.scrollHeight, behavior: "smooth" })
   }, [messages.length])
 
+  const emptyState =
+    emptyVariant === "sheet" ? (
+      <div className="relative isolate flex min-h-[280px] flex-1 flex-col items-center justify-center overflow-hidden rounded-2xl border border-white/10 bg-[#0d0c0a] px-5 py-8 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.055),inset_0_0_0_1px_rgba(255,255,255,0.025)]">
+        <div className="pointer-events-none absolute inset-x-5 top-0 h-px bg-white/14" />
+        <div className="pointer-events-none absolute bottom-0 left-8 right-8 h-px bg-black/70" />
+        <div className="relative grid size-14 place-items-center rounded-2xl border border-white/10 bg-white/[0.045] text-white/78 shadow-[0_16px_36px_rgba(0,0,0,0.3),inset_0_1px_0_rgba(255,255,255,0.08)]">
+          <MessageCircle className="size-6" strokeWidth={1.8} />
+          <span className="absolute -right-1 -top-1 grid size-5 place-items-center rounded-full border border-yellow-200/25 bg-yellow-200/12 text-yellow-100 shadow-[0_8px_18px_rgba(0,0,0,0.28)]">
+            <Sparkles className="size-3" strokeWidth={2} />
+          </span>
+        </div>
+        <p className="mt-4 text-base font-semibold tracking-[-0.01em] text-white/90">
+          The table is quiet
+        </p>
+        <p className="mt-1 max-w-[15rem] text-sm leading-6 text-white/48">
+          Send the first jab, emoji, or GIF before the next draw stack lands.
+        </p>
+        <div className="mt-5 flex flex-wrap justify-center gap-1.5">
+          {["Preset", "Emoji", "GIF"].map((label) => (
+            <span
+              key={label}
+              className="rounded-full border border-white/10 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-white/48"
+            >
+              {label}
+            </span>
+          ))}
+        </div>
+      </div>
+    ) : (
+      <div className="grid min-h-[116px] place-items-center rounded-xl bg-black/18 px-4 text-center shadow-[inset_0_0_0_1px_rgba(255,255,255,0.045)]">
+        <div>
+          <Sparkles className="mx-auto size-4 text-yellow-200/75" strokeWidth={1.9} />
+          <p className="mt-2 text-sm font-medium text-white/76">No chatter yet</p>
+          <p className="mt-1 text-xs leading-relaxed text-white/42">
+            Type a message or open quick actions.
+          </p>
+        </div>
+      </div>
+    )
+
   return (
     <div
       ref={listRef}
@@ -1927,15 +2018,7 @@ function ChatMessageList({
       }
     >
       {messages.length === 0 ? (
-        <div className="grid min-h-[116px] place-items-center rounded-xl bg-black/18 px-4 text-center shadow-[inset_0_0_0_1px_rgba(255,255,255,0.045)]">
-          <div>
-            <Sparkles className="mx-auto size-4 text-yellow-200/75" strokeWidth={1.9} />
-            <p className="mt-2 text-sm font-medium text-white/76">No chatter yet</p>
-            <p className="mt-1 text-xs leading-relaxed text-white/42">
-              Type a message or open quick actions.
-            </p>
-          </div>
-        </div>
+        emptyState
       ) : (
         messages.map((message) => (
           <ChatMessageBubble
@@ -2013,34 +2096,40 @@ function ChatComposer({
         </div>
 
         <div className="flex items-end gap-1.5">
-        <textarea
-          value={text}
-          onChange={(event) => onTextChange(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter" || event.shiftKey) return
-            event.preventDefault()
-            onSendText()
-          }}
-          rows={comfortable ? 2 : 1}
-          maxLength={250}
-          placeholder={comfortable ? "Talk your trash..." : "Talk..."}
-          className={
-            "min-w-0 flex-1 resize-none rounded-lg border border-white/10 bg-neutral-950/74 text-sm leading-5 text-white/84 outline-none transition-[border-color,background-color,box-shadow] duration-200 ease-[cubic-bezier(0.2,0,0,1)] placeholder:text-white/32 focus:border-white/24 focus:bg-neutral-950 focus:shadow-[0_0_0_3px_rgba(255,255,255,0.055)] " +
-            (comfortable ? "min-h-12 px-3 py-2.5" : "min-h-9 px-2.5 py-2")
-          }
-        />
-        <button
-          type="button"
-          onClick={onSendText}
-          disabled={!text.trim()}
-          className={
-            "grid shrink-0 place-items-center rounded-lg bg-white text-neutral-950 shadow-[0_10px_24px_rgba(0,0,0,0.24)] transition-[background-color,opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] hover:bg-white/86 active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 " +
-            (comfortable ? "size-12" : "size-9")
-          }
-          aria-label="Send message"
-        >
-          <SendHorizontal className={comfortable ? "size-4" : "size-3.5"} strokeWidth={2.2} />
-        </button>
+          <textarea
+            value={text}
+            onChange={(event) => onTextChange(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" || event.shiftKey) return
+              event.preventDefault()
+              onSendText()
+            }}
+            rows={comfortable ? 2 : 1}
+            maxLength={250}
+            placeholder={comfortable ? "Talk your trash..." : "Talk..."}
+            enterKeyHint="send"
+            className={
+              "min-w-0 flex-1 resize-none rounded-lg border border-white/10 bg-neutral-950/74 text-white/84 outline-none transition-[border-color,background-color,box-shadow] duration-200 ease-[cubic-bezier(0.2,0,0,1)] placeholder:text-white/32 focus:border-white/24 focus:bg-neutral-950 focus:shadow-[0_0_0_3px_rgba(255,255,255,0.055)] " +
+              (comfortable
+                ? "min-h-12 px-3 py-2.5 text-base leading-6"
+                : "min-h-9 px-2.5 py-2 text-sm leading-5")
+            }
+          />
+          <button
+            type="button"
+            onClick={onSendText}
+            disabled={!text.trim()}
+            className={
+              "grid shrink-0 place-items-center rounded-lg bg-white text-neutral-950 shadow-[0_10px_24px_rgba(0,0,0,0.24)] transition-[background-color,opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] hover:bg-white/86 active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 " +
+              (comfortable ? "size-12" : "size-9")
+            }
+            aria-label="Send message"
+          >
+            <SendHorizontal
+              className={comfortable ? "size-4" : "size-3.5"}
+              strokeWidth={2.2}
+            />
+          </button>
         </div>
       </div>
     </div>
@@ -2726,19 +2815,37 @@ function DeckStack({
   alreadyDrawn,
   drawPileCount,
   size,
+  dense = false,
   onDraw,
 }: {
   canDraw: boolean
   alreadyDrawn: boolean
   drawPileCount: number
   size: ResponsiveCardSize
+  dense?: boolean
   onDraw: () => void
 }) {
   const compact = size === "sm"
+  const denseCompact = dense && compact
+  const cardScale = denseCompact ? 0.88 : 1
 
   return (
-    <div data-draw-pile="true" className="flex flex-col items-center gap-1.5 sm:gap-2">
-      <div className={compact ? "relative h-[112px] w-[82px]" : "relative h-[178px] w-[128px]"}>
+    <div
+      data-draw-pile="true"
+      className={
+        "flex flex-col items-center " +
+        (denseCompact ? "gap-1" : "gap-1.5 sm:gap-2")
+      }
+    >
+      <div
+        className={
+          compact
+            ? denseCompact
+              ? "relative h-[94px] w-[72px]"
+              : "relative h-[112px] w-[82px]"
+            : "relative h-[178px] w-[128px]"
+        }
+      >
         {[0, 1, 2, 3].map((layer) => (
           <div
             key={layer}
@@ -2749,7 +2856,12 @@ function DeckStack({
             }}
           />
         ))}
-        <div className="absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2">
+        <div
+          className="absolute left-1/2 top-1/2 z-10"
+          style={{
+            transform: `translate(-50%, -50%) scale(${cardScale})`,
+          }}
+        >
           <UnoCard card={cardBackPlaceholder} faceDown size={size} static />
         </div>
       </div>
@@ -2757,11 +2869,16 @@ function DeckStack({
         type="button"
         disabled={!canDraw}
         onClick={onDraw}
-        className="h-8 rounded-lg border border-white/12 bg-black/35 px-2.5 text-xs font-medium text-white/84 transition-[background-color,border-color,color,transform] hover:border-white/22 hover:bg-white/10 hover:text-white active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-45 sm:h-9 sm:px-3 sm:text-sm"
+        className={
+          "rounded-lg border border-white/12 bg-black/35 font-medium text-white/84 transition-[background-color,border-color,color,transform] hover:border-white/22 hover:bg-white/10 hover:text-white active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-45 " +
+          (denseCompact ? "h-7 px-2 text-[11px]" : "h-8 px-2.5 text-xs sm:h-9 sm:px-3 sm:text-sm")
+        }
       >
         {alreadyDrawn ? "Drawn" : "Draw one"}
       </button>
-      <p className="text-[11px] text-white/45 sm:text-xs">{drawPileCount} in deck</p>
+      <p className={(denseCompact ? "text-[10px]" : "text-[11px] sm:text-xs") + " text-white/45"}>
+        {drawPileCount} in deck
+      </p>
     </div>
   )
 }
@@ -2769,30 +2886,53 @@ function DeckStack({
 function DiscardStack({
   card,
   size,
+  dense = false,
 }: {
   card: Card | null
   size: ResponsiveCardSize
+  dense?: boolean
 }) {
   const compact = size === "sm"
+  const denseCompact = dense && compact
+  const cardScale = denseCompact ? 0.88 : 1
 
   return (
-    <div className="flex flex-col items-center gap-1.5 sm:gap-2">
-      <div className="relative">
+    <div className={(denseCompact ? "gap-1" : "gap-1.5 sm:gap-2") + " flex flex-col items-center"}>
+      <div
+        className={
+          compact
+            ? denseCompact
+              ? "relative h-[94px] w-[68px]"
+              : "relative h-[102px] w-[72px]"
+            : "relative h-[170px] w-[120px]"
+        }
+      >
         <div className="absolute inset-0 translate-x-2 translate-y-1.5 rounded-xl border border-black/40 bg-black/24 sm:translate-x-3 sm:translate-y-2 sm:rounded-2xl" />
         <div className="absolute inset-0 translate-x-1 translate-y-0.5 rounded-xl border border-black/30 bg-white/8 sm:translate-x-1.5 sm:translate-y-1 sm:rounded-2xl" />
         {card ? (
-          <UnoCard card={card} size={size} static />
+          <div
+            className="absolute left-1/2 top-1/2 z-10"
+            style={{
+              transform: `translate(-50%, -50%) scale(${cardScale})`,
+            }}
+          >
+            <UnoCard card={card} size={size} static />
+          </div>
         ) : (
           <div
             className={
               compact
-                ? "h-[102px] w-[72px] rounded-lg border border-white/10 bg-black/20"
+                ? denseCompact
+                  ? "h-[94px] w-[68px] rounded-lg border border-white/10 bg-black/20"
+                  : "h-[102px] w-[72px] rounded-lg border border-white/10 bg-black/20"
                 : "h-[170px] w-[120px] rounded-xl border border-white/10 bg-black/20"
             }
           />
         )}
       </div>
-      <p className="text-[11px] text-white/50 sm:text-xs">Discard pile</p>
+      <p className={(denseCompact ? "text-[10px]" : "text-[11px] sm:text-xs") + " text-white/50"}>
+        Discard pile
+      </p>
     </div>
   )
 }
@@ -2802,6 +2942,7 @@ function TableStagedPlay({
   playerName,
   mode,
   targetColor,
+  dense = false,
   canEdit,
   onCardClick,
 }: {
@@ -2809,26 +2950,34 @@ function TableStagedPlay({
   playerName: string | null
   mode: "stage" | "roulette"
   targetColor: PlayColor | null
+  dense?: boolean
   canEdit: boolean
   onCardClick: (card: Card) => void
 }) {
   const half = (cards.length - 1) / 2
   const compact = cards.length > 5
-  const gap = compact ? 26 : 38
-  const width = Math.min(370, Math.max(154, 92 + cards.length * gap))
+  const cardScale = dense ? 0.78 : 1
+  const gap = dense ? (compact ? 18 : 28) : compact ? 26 : 38
+  const width = Math.min(
+    dense ? 320 : 370,
+    Math.max(dense ? 118 : 154, (dense ? 64 : 92) + cards.length * gap),
+  )
+  const cardAnchor = 36 * cardScale
   const isRoulette = mode === "roulette"
 
   return (
     <div
       className={
-        "mx-auto w-full max-w-[390px] rounded-2xl border p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] " +
+        "mx-auto w-full border shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] " +
+        (dense ? "max-w-[340px] rounded-xl p-2" : "max-w-[390px] rounded-2xl p-3") +
+        " " +
         (isRoulette
           ? "border-amber-100/18 bg-amber-200/10"
           : "border-black/25 bg-black/24")
       }
     >
       <div className="flex min-h-5 items-center justify-between gap-3 px-1">
-        <p className="truncate text-xs font-medium text-white/72">
+        <p className={(dense ? "text-[11px]" : "text-xs") + " truncate font-medium text-white/72"}>
           {cards.length > 0
             ? isRoulette
               ? `${playerName ?? "Player"} picking up ${cards.length} card${cards.length === 1 ? "" : "s"}`
@@ -2851,18 +3000,25 @@ function TableStagedPlay({
       </div>
       <div
         data-roulette-source={isRoulette ? "true" : undefined}
-        className="relative mt-2 grid h-[120px] place-items-center overflow-visible rounded-xl border border-white/8 bg-black/18 p-2 shadow-[inset_0_12px_28px_rgba(0,0,0,0.18)] sm:h-[132px] sm:p-3"
+        className={
+          "relative grid place-items-center overflow-visible rounded-xl border border-white/8 bg-black/18 shadow-[inset_0_12px_28px_rgba(0,0,0,0.18)] " +
+          (dense ? "mt-1.5 h-[88px] p-1.5" : "mt-2 h-[120px] p-2 sm:h-[132px] sm:p-3")
+        }
       >
         {cards.length > 0 ? (
-          <div className="relative h-[106px] sm:h-[112px]" style={{ width }}>
+          <div
+            className={dense ? "relative h-[78px]" : "relative h-[106px] sm:h-[112px]"}
+            style={{ width }}
+          >
             {cards.map((card, index) => {
               const offset = index - half
               return (
                 <div
                   key={card.id}
-                  className="absolute bottom-1 left-1/2 sm:bottom-1.5"
+                  className="absolute bottom-0 left-1/2 sm:bottom-1.5"
                   style={{
-                    transform: `translateX(${offset * gap - 36}px) rotate(${offset * 3.5}deg)`,
+                    transform: `translateX(${offset * gap - cardAnchor}px) rotate(${offset * 3.5}deg) scale(${cardScale})`,
+                    transformOrigin: "bottom center",
                     zIndex: 10 + index,
                   }}
                 >
@@ -2878,7 +3034,13 @@ function TableStagedPlay({
             })}
           </div>
         ) : (
-          <div className="h-[78px] w-[132px] rounded-xl border border-dashed border-white/16 bg-white/[0.035]" />
+          <div
+            className={
+              dense
+                ? "h-[52px] w-[112px] rounded-lg border border-dashed border-white/16 bg-white/[0.035]"
+                : "h-[78px] w-[132px] rounded-xl border border-dashed border-white/16 bg-white/[0.035]"
+            }
+          />
         )}
       </div>
     </div>
@@ -3287,69 +3449,73 @@ function InviteJoinScreen({
 }) {
   const waitingCount = room?.players.length ?? 0
   const waitingCopy = loadingPreview
-    ? "Opening the invite..."
+    ? "Checking the room..."
     : waitingCount === 0
-      ? "The table is being set up."
+      ? "The room is open, but the seats are still loading."
       : waitingCount === 1
-        ? `${room?.players[0]?.name ?? "Someone"} is waiting for you.`
-        : `${waitingCount} players are waiting for you.`
+        ? `${room?.players[0]?.name ?? "Someone"} has a seat ready for you.`
+        : `${waitingCount} players are already seated.`
 
   return (
-    <main className="min-h-svh bg-neutral-950 text-white antialiased">
-      <div className="mx-auto grid min-h-svh w-full max-w-6xl items-center gap-6 px-5 py-8 sm:px-8 lg:grid-cols-[minmax(0,1fr)_360px] lg:px-10">
+    <main className="flex min-h-dvh bg-[#0A0A0A] px-4 py-5 text-white antialiased sm:p-6">
+      <div className="mx-auto grid w-full max-w-5xl items-center gap-6 py-8 sm:gap-8 lg:grid-cols-[minmax(0,1fr)_340px]">
         <section className="min-w-0">
-          <p className="text-xs font-medium tracking-[0.18em] text-white/45 uppercase">
+          <p className="text-[11px] font-medium tracking-[0.2em] text-white/45 uppercase sm:text-xs">
             UNO No Mercy invite
           </p>
-          <h1 className="mt-4 max-w-2xl text-4xl font-semibold tracking-tight sm:text-5xl">
-            You have a seat at the table.
+          <h1 className="mt-3 max-w-xl text-balance text-4xl font-semibold leading-[1.04] tracking-tight sm:text-5xl">
+            Join a private No Mercy table.
           </h1>
-          <p className="mt-4 max-w-xl text-base leading-7 text-white/58">
-            {waitingCopy} Enter your name and you will land straight in the game
-            room.
+          <p className="mt-4 max-w-xl text-pretty text-base leading-7 text-white/58">
+            {waitingCopy} Drop your name, claim your seat, and jump into the
+            same live room.
           </p>
 
           <form
-            className="mt-8 max-w-xl rounded-lg border border-white/10 bg-white/[0.035] p-4"
+            className="mt-8 w-full max-w-xl rounded-xl border border-white/10 bg-white/[0.035] p-4 shadow-[0_16px_46px_rgba(0,0,0,0.3),inset_0_1px_0_rgba(255,255,255,0.05)] sm:p-5"
             onSubmit={(event) => {
               event.preventDefault()
               onJoin()
             }}
           >
-            <label className="text-sm font-medium text-white/78" htmlFor="invite-name">
-              Display name
+            <label className="text-sm font-medium text-white/82" htmlFor="invite-name">
+              Player name
             </label>
-            <div className="mt-2 flex flex-col gap-3 sm:flex-row">
+            <p className="mt-1 text-xs leading-5 text-white/42">
+              This shows on your seat, in chat, and when you get caught.
+            </p>
+            <div className="mt-3 flex flex-col gap-3 sm:flex-row">
               <input
                 id="invite-name"
                 value={playerName}
                 onChange={(event) => onPlayerName(event.target.value)}
-                placeholder="Your name"
-                className="h-10 min-w-0 flex-1 rounded-md border border-white/10 bg-black/30 px-3 text-sm text-white outline-none placeholder:text-white/35 focus:border-white/30"
+                placeholder="Arc"
+                className="min-h-11 w-full flex-none rounded-lg border border-white/10 bg-black/42 px-3.5 text-base text-white outline-none transition-[border-color,background-color,box-shadow] duration-200 placeholder:text-white/30 focus:border-white/28 focus:bg-black/58 focus:shadow-[0_0_0_3px_rgba(255,255,255,0.055)] sm:h-10 sm:flex-1 sm:text-sm"
                 maxLength={24}
+                autoComplete="nickname"
                 autoFocus
               />
               <Button
                 type="submit"
                 disabled={joining || !room}
-                className="h-10 bg-white text-neutral-950 hover:bg-white/85"
+                className="h-10 self-start rounded-lg bg-white px-4 text-sm text-neutral-950 shadow-[0_10px_22px_rgba(0,0,0,0.22)] transition-[background-color,opacity,scale] hover:bg-white/86 active:scale-[0.96] sm:self-auto"
               >
-                {joining ? "Joining..." : "Enter room"}
+                {joining ? "Joining..." : "Join table"}
                 <ArrowRight />
               </Button>
             </div>
             {error && (
-              <p className="mt-3 rounded-md border border-red-400/20 bg-red-500/10 px-3 py-2 text-sm text-red-100">
+              <p className="mt-3 rounded-xl border border-red-400/20 bg-red-500/10 px-3 py-2 text-sm text-red-100">
                 {error}
               </p>
             )}
           </form>
         </section>
 
-        <aside className="rounded-lg border border-white/10 bg-white/[0.04] p-5">
+        <aside className="rounded-xl border border-white/10 bg-white/[0.035] p-4 shadow-[0_16px_46px_rgba(0,0,0,0.28),inset_0_1px_0_rgba(255,255,255,0.05)] sm:p-5">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="text-xs text-white/45">Room code</p>
+              <p className="text-xs text-white/45">Invite code</p>
               <p className="mt-1 font-mono text-2xl font-semibold tracking-wider">
                 {roomCode}
               </p>
@@ -3364,7 +3530,7 @@ function InviteJoinScreen({
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <UsersRound className="size-4 text-white/55" />
-                <h2 className="text-sm font-medium">At the table</h2>
+                <h2 className="text-sm font-medium text-white/86">Seats at the table</h2>
               </div>
               <span className="text-xs text-white/42">
                 {room ? `${room.players.length}/${room.houseRules.maxPlayers}` : "--"}
