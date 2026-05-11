@@ -24,6 +24,8 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
+      "@workspace/game": ["../../packages/game/src/index.ts"],
+      "@workspace/game/*": ["../../packages/game/src/*"],
       "@workspace/ui/*": ["../../packages/ui/src/*"]
     }
   }

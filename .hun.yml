@@ -1,0 +1,14 @@
+name: uno
+services:
+    server:
+        cmd: pnpm run dev
+        cwd: ./apps/server
+        ready: listening on
+    web:
+        cmd: pnpm run dev
+        cwd: ./apps/web
+        port: 3000
+        ready: ready in
+detect:
+    version: v2
+    profile: hybrid

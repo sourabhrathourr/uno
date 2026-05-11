@@ -10,6 +10,8 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
+      "@workspace/game": ["../game/src/index.ts"],
+      "@workspace/game/*": ["../game/src/*"],
       "@workspace/ui/*": ["./src/*"]
     }
   },
