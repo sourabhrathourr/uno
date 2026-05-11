@@ -291,6 +291,8 @@ export function drawOne(
   pushEvent(game, {
     type: "card-drawn",
     playerId,
+    cardCount: 1,
+    drawKind: "single",
     message: drawStackPowerEscape
       ? `${playerName(context, playerId)} drew 1 card before stacking.`
       : `${playerName(context, playerId)} drew 1 card.`,
@@ -350,6 +352,8 @@ export function takeDrawPenalty(
   pushEvent(game, {
     type: "draw-penalty",
     playerId,
+    cardCount: amount,
+    drawKind: "penalty",
     message: `${playerName(context, playerId)} took the +${amount} penalty.`,
   })
 
@@ -387,6 +391,8 @@ export function drawRouletteCard(
     type: "card-drawn",
     playerId,
     cards: [next],
+    cardCount: 1,
+    drawKind: "roulette-reveal",
     message: `${playerName(context, playerId)} revealed ${cardLabel(next)}.`,
   })
 
@@ -411,6 +417,8 @@ function completeRouletteDraw(
     type: "card-drawn",
     playerId,
     cards: drawnCards,
+    cardCount: drawnCards.length,
+    drawKind: "roulette-complete",
     message:
       drawnCards.length === 0
         ? `${playerName(context, playerId)} found no roulette cards to draw.`

@@ -29,6 +29,8 @@ export type GameEvent = {
   playerId?: string
   targetPlayerId?: string
   cards?: Card[]
+  cardCount?: number
+  drawKind?: "single" | "penalty" | "roulette-reveal" | "roulette-complete"
   createdAt: string
 }
 

@@ -1,4 +1,4 @@
-import { Link, createFileRoute, useNavigate } from "@tanstack/react-router"
+import { createFileRoute, useNavigate } from "@tanstack/react-router"
 import { useState } from "react"
 
 import { Button } from "@workspace/ui/components/button"
@@ -22,7 +22,7 @@ function App() {
   async function handleCreateRoom() {
     const cleanName = playerName.trim()
     if (!cleanName) {
-      setError("Enter your name to create a room.")
+      setError("Tell the table who you are first.")
       return
     }
 
@@ -58,54 +58,59 @@ function App() {
   }
 
   return (
-    <div className="flex min-h-svh bg-neutral-950 p-6 text-white antialiased">
-      <div className="mx-auto flex w-full max-w-4xl flex-col justify-center gap-8">
-        <div className="max-w-xl">
-          <p className="text-xs font-medium tracking-[0.18em] text-white/45 uppercase">
+    <main className="flex min-h-dvh bg-[#0A0A0A] px-4 py-5 text-white antialiased sm:p-6">
+      <div className="mx-auto flex w-full max-w-4xl flex-col justify-center gap-6 py-8 sm:gap-8">
+        <section className="max-w-2xl">
+          <p className="text-[11px] font-medium tracking-[0.2em] text-white/45 uppercase sm:text-xs">
             UNO No Mercy
           </p>
-          <h1 className="mt-3 text-4xl font-semibold tracking-tight">
-            Create a room and deal in.
+          <h1 className="mt-3 max-w-xl text-balance text-4xl font-semibold leading-[1.04] tracking-tight sm:text-5xl">
+            Book a private No Mercy table.
           </h1>
-          <p className="mt-3 max-w-lg text-sm leading-6 text-white/55">
-            This MVP runs through one authoritative Node.js server. Share the room
-            code or the URL, and every player joins the same Socket.IO lobby.
+          <p className="mt-4 max-w-xl text-pretty text-base leading-7 text-white/58">
+            Send the code, pull everyone into one live room, and let the
+            stack-offs, color calls, and UNO catches unfold in real time.
           </p>
-        </div>
+        </section>
 
-        <div className="max-w-xl rounded-lg border border-white/10 bg-white/[0.035] p-5">
-          <label className="text-sm font-medium text-white/80" htmlFor="player-name">
+        <form
+          className="w-full max-w-xl rounded-xl border border-white/10 bg-white/[0.035] p-4 shadow-[0_16px_46px_rgba(0,0,0,0.3),inset_0_1px_0_rgba(255,255,255,0.05)] sm:p-5"
+          onSubmit={(event) => {
+            event.preventDefault()
+            void handleCreateRoom()
+          }}
+        >
+          <label className="text-sm font-medium text-white/82" htmlFor="player-name">
             Player name
           </label>
-          <div className="mt-2 flex flex-col gap-3 sm:flex-row">
+          <p className="mt-1 text-xs leading-5 text-white/42">
+            This shows on your seat, in chat, and when you get caught.
+          </p>
+          <div className="mt-3 flex flex-col gap-3 sm:flex-row">
             <input
               id="player-name"
               value={playerName}
               onChange={(event) => setPlayerName(event.target.value)}
-              className="h-9 min-w-0 flex-1 rounded-md border border-white/10 bg-black/30 px-3 text-sm text-white outline-none placeholder:text-white/35 focus:border-white/30"
-              placeholder="Sourabh"
+              className="min-h-11 w-full flex-none rounded-lg border border-white/10 bg-black/42 px-3.5 text-base text-white outline-none transition-[border-color,background-color,box-shadow] duration-200 placeholder:text-white/30 focus:border-white/28 focus:bg-black/58 focus:shadow-[0_0_0_3px_rgba(255,255,255,0.055)] sm:h-10 sm:flex-1 sm:text-sm"
+              placeholder="Arc"
               maxLength={24}
+              autoComplete="nickname"
             />
             <Button
-              type="button"
+              type="submit"
               disabled={creating}
-              onClick={handleCreateRoom}
-              className="bg-white text-neutral-950 hover:bg-white/85"
+              className="h-10 self-start rounded-lg bg-white px-4 text-sm text-neutral-950 shadow-[0_10px_22px_rgba(0,0,0,0.22)] transition-[background-color,opacity,scale] hover:bg-white/86 active:scale-[0.96] sm:self-auto"
             >
               {creating ? "Creating..." : "Create room"}
             </Button>
           </div>
           {error && (
-            <p className="mt-3 rounded-md border border-red-400/20 bg-red-500/10 px-3 py-2 text-sm text-red-100">
+            <p className="mt-3 rounded-xl border border-red-400/20 bg-red-500/10 px-3 py-2 text-sm text-red-100">
               {error}
             </p>
           )}
-        </div>
-
-        <Link to="/cards" className="text-sm text-white/55 hover:text-white">
-          Open card lab
-        </Link>
+        </form>
       </div>
-    </div>
+    </main>
   )
 }

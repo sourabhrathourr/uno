@@ -26,7 +26,7 @@ export function CardBack() {
         </g>
         {/* "UNO" upright — sits on top of the tilted red oval. */}
         <text
-          x="50"
+          x="47.5"
           y="78"
           textAnchor="middle"
           dominantBaseline="middle"

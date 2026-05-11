@@ -39,6 +39,7 @@ import {
   CHAT_PRESETS,
   type ChatMessage,
   type Card,
+  type GameEvent,
   type GameError,
   type Player,
   type PlayerGameSnapshot,
@@ -63,10 +64,17 @@ import {
   playCardSound,
   playFx,
   playShuffleSound,
+  playWinnerSound,
 } from "@/lib/sound"
 import { useSoundSystem } from "@/lib/use-sound-system"
 
 type ResponsiveCardSize = "sm" | "md"
+type DeckDrawFlightState = {
+  id: string
+  eventId: string
+  targetPlayerId: string
+  cardCount: number
+}
 
 export const Route = createFileRoute("/room/$roomCode")({
   component: RoomPage,
@@ -241,7 +249,13 @@ function RoomPage() {
           playFx("blocked", { volume: 0.6 })
           break
         case "game-won":
-          playFx("coinBling", { volume: 0.8 })
+          playWinnerSound(
+            room.game?.winnerPlacements.some(
+              (placement) =>
+                placement.playerId === nextEvent.playerId &&
+                placement.position === 1,
+            ) ?? false,
+          )
           break
         default:
           break
@@ -593,7 +607,11 @@ function GameTable({
     cards: Card[]
     targetPlayerId: string
   } | null>(null)
+  const [rouletteConsumedKey, setRouletteConsumedKey] = useState<string | null>(null)
+  const [deckDrawFlights, setDeckDrawFlights] = useState<DeckDrawFlightState[]>([])
   const rouletteAcceptedKeyRef = useRef<string | null>(null)
+  const drawAnimationInitializedRef = useRef(false)
+  const drawAnimationLastEventIdRef = useRef<string | null>(null)
   const prevRouletteActiveRef = useRef<{ playerId: string; cardCount: number } | null>(null)
   const narrowViewport = useMediaQuery("(max-width: 680px)")
   const shortViewport = useMediaQuery("(max-height: 760px)")
@@ -701,7 +719,7 @@ function GameTable({
     ? `${game.stagedPlay.playerId}:${game.stagedPlay.cards.map((card) => card.id).join("-")}`
     : null
   const stagedPlayConsumed = Boolean(
-    stagedPlayKey && rouletteAcceptedKeyRef.current === stagedPlayKey,
+    stagedPlayKey && rouletteConsumedKey === stagedPlayKey,
   )
   const tableStagedCards = localStagedPlayActive
     ? selectedCards
@@ -801,6 +819,7 @@ function GameTable({
       .join("-")}`
     if (rouletteAcceptedKeyRef.current === acceptedKey) return
     rouletteAcceptedKeyRef.current = acceptedKey
+    setRouletteConsumedKey(null)
 
     setRouletteFly({
       sessionId: acceptedKey,
@@ -813,6 +832,40 @@ function GameTable({
     game?.stagedPlay?.playerId,
     game?.stagedPlay?.cards,
   ])
+
+  useEffect(() => {
+    if (!game) return
+    const events = game.events
+    const lastEventId = events[events.length - 1]?.id ?? null
+
+    if (!drawAnimationInitializedRef.current) {
+      drawAnimationInitializedRef.current = true
+      drawAnimationLastEventIdRef.current = lastEventId
+      return
+    }
+
+    if (!lastEventId) return
+
+    const lastSeenId = drawAnimationLastEventIdRef.current
+    const startIndex = lastSeenId
+      ? events.findIndex((event) => event.id === lastSeenId) + 1
+      : 0
+
+    if (startIndex <= 0) {
+      drawAnimationLastEventIdRef.current = lastEventId
+      return
+    }
+
+    const newFlights = events
+      .slice(startIndex)
+      .map(deckDrawFlightFromEvent)
+      .filter((flight): flight is DeckDrawFlightState => Boolean(flight))
+
+    drawAnimationLastEventIdRef.current = lastEventId
+    if (newFlights.length === 0) return
+
+    setDeckDrawFlights((current) => [...current, ...newFlights].slice(-6))
+  }, [game?.events])
 
   useEffect(() => {
     if (!game) return
@@ -954,9 +1007,25 @@ function GameTable({
             cards={rouletteFly.cards}
             targetPlayerId={rouletteFly.targetPlayerId}
             isSelfTarget={rouletteFly.targetPlayerId === player.id}
-            onDone={() => setRouletteFly(null)}
+            startDelayMs={520}
+            onDone={() => {
+              setRouletteConsumedKey(rouletteFly.sessionId)
+              setRouletteFly(null)
+            }}
           />
         )}
+        {deckDrawFlights.map((flight) => (
+          <DeckDrawFlight
+            key={flight.id}
+            targetPlayerId={flight.targetPlayerId}
+            cardCount={flight.cardCount}
+            onDone={() =>
+              setDeckDrawFlights((current) =>
+                current.filter((candidate) => candidate.id !== flight.id),
+              )
+            }
+          />
+        ))}
 
         <div className="mx-auto flex h-full min-h-0 w-full max-w-[680px] flex-col gap-2 px-2 py-2">
           <header className="flex shrink-0 items-center justify-between gap-2 rounded-2xl border border-white/10 bg-white/[0.035] px-3 py-2 shadow-[0_14px_42px_rgba(0,0,0,0.28)]">
@@ -1231,9 +1300,25 @@ function GameTable({
           cards={rouletteFly.cards}
           targetPlayerId={rouletteFly.targetPlayerId}
           isSelfTarget={rouletteFly.targetPlayerId === player.id}
-          onDone={() => setRouletteFly(null)}
+          startDelayMs={520}
+          onDone={() => {
+            setRouletteConsumedKey(rouletteFly.sessionId)
+            setRouletteFly(null)
+          }}
         />
       )}
+      {deckDrawFlights.map((flight) => (
+        <DeckDrawFlight
+          key={flight.id}
+          targetPlayerId={flight.targetPlayerId}
+          cardCount={flight.cardCount}
+          onDone={() =>
+            setDeckDrawFlights((current) =>
+              current.filter((candidate) => candidate.id !== flight.id),
+            )
+          }
+        />
+      ))}
       <div className="mx-auto flex h-full min-h-0 w-full max-w-[1500px] flex-col gap-2 px-2 py-2 sm:gap-3 sm:px-4 sm:py-3 lg:px-8">
         <header className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 pb-2 sm:pb-3">
           <div>
@@ -1482,6 +1567,29 @@ function GameTable({
 }
 
 type ChatTray = "presets" | "emoji" | "gifs"
+
+function deckDrawFlightFromEvent(event: GameEvent): DeckDrawFlightState | null {
+  if (!event.playerId) return null
+  if (event.type === "draw-penalty") {
+    return {
+      id: `${event.id}:draw-flight`,
+      eventId: event.id,
+      targetPlayerId: event.playerId,
+      cardCount: Math.max(1, event.cardCount ?? event.cards?.length ?? 1),
+    }
+  }
+
+  if (event.type === "card-drawn" && event.drawKind === "single") {
+    return {
+      id: `${event.id}:draw-flight`,
+      eventId: event.id,
+      targetPlayerId: event.playerId,
+      cardCount: Math.max(1, event.cardCount ?? event.cards?.length ?? 1),
+    }
+  }
+
+  return null
+}
 
 function TableChatPanel({
   messages,
@@ -2629,7 +2737,7 @@ function DeckStack({
   const compact = size === "sm"
 
   return (
-    <div className="flex flex-col items-center gap-1.5 sm:gap-2">
+    <div data-draw-pile="true" className="flex flex-col items-center gap-1.5 sm:gap-2">
       <div className={compact ? "relative h-[112px] w-[82px]" : "relative h-[178px] w-[128px]"}>
         {[0, 1, 2, 3].map((layer) => (
           <div
@@ -4231,11 +4339,13 @@ function RouletteFlyToHand({
   cards,
   targetPlayerId,
   isSelfTarget,
+  startDelayMs = 0,
   onDone,
 }: {
   cards: Card[]
   targetPlayerId: string
   isSelfTarget: boolean
+  startDelayMs?: number
   onDone: () => void
 }) {
   const [layout, setLayout] = useState<{
@@ -4250,50 +4360,54 @@ function RouletteFlyToHand({
       return
     }
 
-    const sourceEl = document.querySelector<HTMLElement>(
-      "[data-roulette-source='true']",
-    )
-    const handEl = isSelfTarget
-      ? document.querySelector<HTMLElement>("[data-self-hand='true']")
-      : null
-    const destEl =
-      handEl ??
-      document.querySelector<HTMLElement>(
-        `[data-seat-player-id="${CSS.escape(targetPlayerId)}"]`,
+    const timer = window.setTimeout(() => {
+      const sourceEl = document.querySelector<HTMLElement>(
+        "[data-roulette-source='true']",
       )
+      const handEl = isSelfTarget
+        ? document.querySelector<HTMLElement>("[data-self-hand='true']")
+        : null
+      const destEl =
+        handEl ??
+        document.querySelector<HTMLElement>(
+          `[data-seat-player-id="${CSS.escape(targetPlayerId)}"]`,
+        )
 
-    const sourceRect = sourceEl?.getBoundingClientRect()
-    const destRect = destEl?.getBoundingClientRect()
+      const sourceRect = sourceEl?.getBoundingClientRect()
+      const destRect = destEl?.getBoundingClientRect()
 
-    const fallbackSource = {
-      left: window.innerWidth / 2 - 160,
-      top: window.innerHeight / 2 - 60,
-      width: 320,
-      height: 120,
-    }
-    const fallbackDest = isSelfTarget
-      ? { left: window.innerWidth / 2, top: window.innerHeight - 120 }
-      : { left: window.innerWidth / 2, top: window.innerHeight * 0.18 }
+      const fallbackSource = {
+        left: window.innerWidth / 2 - 160,
+        top: window.innerHeight / 2 - 60,
+        width: 320,
+        height: 120,
+      }
+      const fallbackDest = isSelfTarget
+        ? { left: window.innerWidth / 2, top: window.innerHeight - 120 }
+        : { left: window.innerWidth / 2, top: window.innerHeight * 0.18 }
 
-    setLayout({
-      source: sourceRect
-        ? {
-            left: sourceRect.left,
-            top: sourceRect.top,
-            width: sourceRect.width,
-            height: sourceRect.height,
-          }
-        : fallbackSource,
-      dest: destRect
-        ? {
-            left: destRect.left + destRect.width / 2,
-            top: isSelfTarget
-              ? destRect.bottom - Math.min(destRect.height * 0.32, 72)
-              : destRect.top + destRect.height / 2,
-          }
-        : fallbackDest,
-    })
-  }, [cards, targetPlayerId, isSelfTarget, onDone])
+      setLayout({
+        source: sourceRect
+          ? {
+              left: sourceRect.left,
+              top: sourceRect.top,
+              width: sourceRect.width,
+              height: sourceRect.height,
+            }
+          : fallbackSource,
+        dest: destRect
+          ? {
+              left: destRect.left + destRect.width / 2,
+              top: isSelfTarget
+                ? destRect.bottom - Math.min(destRect.height * 0.32, 72)
+                : destRect.top + destRect.height / 2,
+            }
+          : fallbackDest,
+      })
+    }, startDelayMs)
+
+    return () => window.clearTimeout(timer)
+  }, [cards, targetPlayerId, isSelfTarget, startDelayMs, onDone])
 
   useEffect(() => {
     if (!layout) return
@@ -4376,6 +4490,123 @@ function RouletteFlyToHand({
             }}
           >
             <UnoCard card={card} size="sm" static />
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function DeckDrawFlight({
+  targetPlayerId,
+  cardCount,
+  onDone,
+}: {
+  targetPlayerId: string
+  cardCount: number
+  onDone: () => void
+}) {
+  const [layout, setLayout] = useState<{
+    source: { left: number; top: number }
+    dest: { left: number; top: number }
+  } | null>(null)
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      const timer = window.setTimeout(onDone, 180)
+      return () => window.clearTimeout(timer)
+    }
+
+    const sourceEl = document.querySelector<HTMLElement>("[data-draw-pile='true']")
+    const destEl = document.querySelector<HTMLElement>(
+      `[data-seat-player-id="${CSS.escape(targetPlayerId)}"]`,
+    )
+    const sourceRect = sourceEl?.getBoundingClientRect()
+    const destRect = destEl?.getBoundingClientRect()
+
+    setLayout({
+      source: sourceRect
+        ? {
+            left: sourceRect.left + sourceRect.width / 2,
+            top: sourceRect.top + Math.min(sourceRect.height * 0.34, 70),
+          }
+        : {
+            left: window.innerWidth / 2 - 90,
+            top: window.innerHeight / 2,
+          },
+      dest: destRect
+        ? {
+            left: destRect.left + destRect.width / 2,
+            top: destRect.top + destRect.height / 2,
+          }
+        : {
+            left: window.innerWidth / 2,
+            top: window.innerHeight * 0.18,
+          },
+    })
+  }, [targetPlayerId, onDone])
+
+  useEffect(() => {
+    if (!layout) return
+    const visibleCount = Math.min(Math.max(cardCount, 1), 10)
+    const stagger = visibleCount > 6 ? 52 : 68
+    const timer = window.setTimeout(onDone, (visibleCount - 1) * stagger + 660)
+    return () => window.clearTimeout(timer)
+  }, [layout, cardCount, onDone])
+
+  if (!layout) return null
+
+  const visibleCount = Math.min(Math.max(cardCount, 1), 10)
+  const stagger = visibleCount > 6 ? 52 : 68
+
+  return (
+    <div className="pointer-events-none fixed inset-0 z-[58]" aria-hidden="true">
+      <style>
+        {`
+          @keyframes uno-deck-draw-flight {
+            0% {
+              opacity: 0;
+              transform: translate(-50%, -50%) translate(var(--uno-draw-from-x), var(--uno-draw-from-y)) rotate(var(--uno-draw-rot-start)) scale(0.72);
+            }
+            12% {
+              opacity: 1;
+              transform: translate(-50%, -50%) translate(var(--uno-draw-from-x), calc(var(--uno-draw-from-y) - 18px)) rotate(var(--uno-draw-rot-start)) scale(0.9);
+            }
+            70% {
+              opacity: 1;
+            }
+            100% {
+              opacity: 0;
+              transform: translate(-50%, -50%) translate(var(--uno-draw-to-x), var(--uno-draw-to-y)) rotate(var(--uno-draw-rot-end)) scale(0.28);
+            }
+          }
+        `}
+      </style>
+
+      {Array.from({ length: visibleCount }, (_, index) => {
+        const offset = index - (visibleCount - 1) / 2
+        return (
+          <div
+            key={index}
+            className="absolute left-0 top-0"
+            style={{
+              ["--uno-draw-from-x" as string]: `${layout.source.left + offset * 2}px`,
+              ["--uno-draw-from-y" as string]: `${layout.source.top + offset * -1}px`,
+              ["--uno-draw-to-x" as string]: `${layout.dest.left}px`,
+              ["--uno-draw-to-y" as string]: `${layout.dest.top}px`,
+              ["--uno-draw-rot-start" as string]: `${offset * 3}deg`,
+              ["--uno-draw-rot-end" as string]: `${offset > 0 ? 14 : -14}deg`,
+              animation: `uno-deck-draw-flight 580ms cubic-bezier(0.3, 0.72, 0.18, 1) ${
+                index * stagger
+              }ms forwards`,
+              opacity: 0,
+              zIndex: 58 + index,
+              willChange: "transform, opacity",
+            }}
+          >
+            <UnoCard card={cardBackPlaceholder} faceDown size="sm" static />
           </div>
         )
       })}

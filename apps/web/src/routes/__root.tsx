@@ -13,7 +13,42 @@ export const Route = createRootRoute({
         content: "width=device-width, initial-scale=1",
       },
       {
-        title: "TanStack Start Starter",
+        name: "theme-color",
+        content: "#0A0A0A",
+      },
+      {
+        name: "description",
+        content:
+          "Create a private UNO No Mercy room, share an invite code, and play live with friends using stacked draw cards, house rules, and table chat.",
+      },
+      {
+        title: "UNO No Mercy Online | Private Multiplayer Rooms",
+      },
+      {
+        property: "og:title",
+        content: "UNO No Mercy Online",
+      },
+      {
+        property: "og:description",
+        content:
+          "Start a private No Mercy table, send the code, and play live with friends.",
+      },
+      {
+        property: "og:type",
+        content: "website",
+      },
+      {
+        name: "twitter:card",
+        content: "summary",
+      },
+      {
+        name: "twitter:title",
+        content: "UNO No Mercy Online",
+      },
+      {
+        name: "twitter:description",
+        content:
+          "Private live rooms for stacked draw cards, house rules, and table chat.",
       },
     ],
     links: [

@@ -105,6 +105,41 @@ export function playFx(name: LibrarySound, options?: SoundOptions) {
   playLibrary(SOUNDS[name], options)
 }
 
+export function playWinnerSound(firstPlace = false) {
+  if (typeof window === "undefined") return
+  if (!isSfxEnabled()) return
+
+  const sequence: Array<{
+    delay: number
+    sound: LibrarySound
+    volume: number
+    playbackRate?: number
+  }> = firstPlace
+    ? [
+        { delay: 0, sound: "powerUp", volume: 0.56, playbackRate: 0.92 },
+        { delay: 130, sound: "successChime", volume: 0.78, playbackRate: 1 },
+        { delay: 340, sound: "levelUp", volume: 0.74, playbackRate: 1.04 },
+        { delay: 610, sound: "coinBling", volume: 0.62, playbackRate: 0.94 },
+        { delay: 760, sound: "coinBling", volume: 0.42, playbackRate: 1.18 },
+      ]
+    : [
+        { delay: 0, sound: "successChime", volume: 0.58, playbackRate: 1 },
+        { delay: 220, sound: "coinBling", volume: 0.42, playbackRate: 1.08 },
+      ]
+
+  window.setTimeout(() => playLocalSound("cardDrop", firstPlace ? 0.34 : 0.24), 30)
+  for (const item of sequence) {
+    window.setTimeout(
+      () =>
+        playFx(item.sound, {
+          volume: item.volume,
+          playbackRate: item.playbackRate,
+        }),
+      item.delay,
+    )
+  }
+}
+
 const PRELOAD_LIST = Object.values(SOUNDS)
 
 let preloadStarted = false
