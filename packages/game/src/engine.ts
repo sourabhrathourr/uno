@@ -52,6 +52,7 @@ export function createGame(context: GameContext): GameState {
     drawStack: null,
     pendingChoice: null,
     unoVulnerablePlayerIds: [],
+    unoDeclaredPlayerIds: [],
     drawnThisTurnPlayerId: null,
     stagedPlay: null,
     winnerPlacements: [],
@@ -86,11 +87,14 @@ export function projectPublicGame(
       .sort((a, b) => a.seat - b.seat)
       .map((player) => {
         const winnerPlacement = winnerPlacementFor(game, player.id)
+        const handCount = winnerPlacement
+          ? 0
+          : (game.handsByPlayerId[player.id]?.length ?? 0)
         return {
           playerId: player.id,
-          handCount: winnerPlacement
-            ? 0
-            : (game.handsByPlayerId[player.id]?.length ?? 0),
+          handCount,
+          declaredUno:
+            handCount === 1 && (game.unoDeclaredPlayerIds ?? []).includes(player.id),
           eliminated: game.eliminatedPlayerIds.includes(player.id),
           winnerPlacement: winnerPlacement ? { ...winnerPlacement } : null,
           connected: player.connected,
@@ -127,12 +131,7 @@ export function projectPlayerGame(
         (game.handsByPlayerId[targetPlayerId]?.length ?? 0) === 1,
     ),
     canDraw:
-      !isGameFinished(game) &&
-      game.turnPlayerId === playerId &&
-      !game.drawStack &&
-      !game.pendingChoice &&
-      !game.drawnThisTurnPlayerId &&
-      isPlayerActive(game, playerId),
+      canDrawOneFromDeck(game, playerId),
     canEndTurn:
       !isGameFinished(game) &&
       game.turnPlayerId === playerId &&
@@ -197,7 +196,7 @@ export function playCards(
   const validation = validatePlay(game, context, playerId, cards, input)
   if (!validation.ok) return validation
 
-  beginTurnAction(game)
+  beginTurnAction(game, playerId)
   game.drawnThisTurnPlayerId = null
   game.stagedPlay = null
 
@@ -234,12 +233,19 @@ export function playCards(
   })
 
   if (input.declaredUno && hand.length === 1) {
+    game.unoDeclaredPlayerIds = unique([
+      ...(game.unoDeclaredPlayerIds ?? []),
+      playerId,
+    ])
     pushEvent(game, {
       type: "uno-called",
       playerId,
       message: `${playerName(context, playerId)} called UNO.`,
     })
   } else if (context.houseRules.callUno && hand.length === 1) {
+    game.unoDeclaredPlayerIds = game.unoDeclaredPlayerIds.filter(
+      (targetPlayerId) => targetPlayerId !== playerId,
+    )
     game.unoVulnerablePlayerIds = unique([...game.unoVulnerablePlayerIds, playerId])
   }
 
@@ -266,7 +272,8 @@ export function drawOne(
   }
   if (game.turnPlayerId !== playerId) return fail("not-your-turn", "It is not your turn.")
   if (game.pendingChoice) return fail("pending-choice", "Resolve the pending choice first.")
-  if (game.drawStack) {
+  const drawStackPowerEscape = canDrawBeforeStackingFinalPowerCard(game, playerId)
+  if (game.drawStack && !drawStackPowerEscape) {
     return fail("draw-stack-active", "Stack a draw card or take the full penalty.")
   }
   if (!isPlayerActive(game, playerId)) {
@@ -276,7 +283,7 @@ export function drawOne(
     return fail("already-drew", "You already drew this turn. Play a card or pass.")
   }
 
-  beginTurnAction(game)
+  beginTurnAction(game, playerId)
   game.stagedPlay = null
   const drawn = drawCards(game, 1)
   addCardsToHand(game, playerId, drawn)
@@ -284,7 +291,9 @@ export function drawOne(
   pushEvent(game, {
     type: "card-drawn",
     playerId,
-    message: `${playerName(context, playerId)} drew 1 card.`,
+    message: drawStackPowerEscape
+      ? `${playerName(context, playerId)} drew 1 card before stacking.`
+      : `${playerName(context, playerId)} drew 1 card.`,
   })
   checkMercyEliminations(game, context)
   if (isGameFinished(game) || !isPlayerActive(game, playerId)) {
@@ -332,7 +341,7 @@ export function takeDrawPenalty(
     return fail("no-draw-penalty", "There is no draw penalty waiting for you.")
   }
 
-  beginTurnAction(game)
+  beginTurnAction(game, playerId)
   const amount = game.drawStack.amount
   const drawn = drawCards(game, amount)
   addCardsToHand(game, playerId, drawn)
@@ -362,7 +371,7 @@ export function drawRouletteCard(
     return fail("not-your-pickup", "Another player must pick up these cards.")
   }
 
-  beginTurnAction(game)
+  beginTurnAction(game, playerId)
 
   const pendingChoice = game.pendingChoice
   const next = drawCards(game, 1)[0]
@@ -507,7 +516,7 @@ function applyPlayedCardsEffect(
             ? `${playerName(context, nextPlayerId(game, playerId, 1))} was skipped.`
             : `${playerName(context, playerId)} skipped ${skipCount} turns.`,
       })
-      advanceTurn(game, playerId, skipCount + 1)
+      advanceTurnAfterSkips(game, playerId, skipCount)
       return
     }
     case "skip-everyone":
@@ -536,6 +545,17 @@ function applyPlayedCardsEffect(
           playerId,
           message: `${playerName(context, playerId)} played ${reverseCount} reverses. Direction stayed the same.`,
         })
+      }
+      if (activePlayerIds(game).length === 2) {
+        pushEvent(game, {
+          type: "turn-skipped",
+          playerId,
+          message: `${playerName(context, playerId)} reversed in a two-player game and plays again.`,
+        })
+        game.turnPlayerId = playerId
+        game.drawnThisTurnPlayerId = null
+        game.stagedPlay = null
+        return
       }
       advanceTurn(game, playerId, 1)
       return
@@ -840,6 +860,37 @@ function drawGroupKey(card: Card): string | null {
   }
 }
 
+function canDrawOneFromDeck(game: GameState, playerId: string): boolean {
+  if (isGameFinished(game)) return false
+  if (game.turnPlayerId !== playerId) return false
+  if (game.pendingChoice) return false
+  if (game.drawnThisTurnPlayerId) return false
+  if (!isPlayerActive(game, playerId)) return false
+
+  if (!game.drawStack) return true
+
+  return canDrawBeforeStackingFinalPowerCard(game, playerId)
+}
+
+function canDrawBeforeStackingFinalPowerCard(
+  game: GameState,
+  playerId: string,
+): boolean {
+  if (!game.drawStack || game.drawStack.targetPlayerId !== playerId) return false
+  if (game.pendingChoice) return false
+  if (game.drawnThisTurnPlayerId) return false
+  if (!isPlayerActive(game, playerId)) return false
+
+  const hand = game.handsByPlayerId[playerId] ?? []
+  if (hand.length !== 1) return false
+
+  const finalCard = hand[0]
+  if (!finalCard || !isForbiddenFinalCard(finalCard)) return false
+  if (!drawCount(finalCard)) return false
+
+  return canStackDrawCards(game, [finalCard])
+}
+
 function canPlaySingleCard(game: GameState, playerId: string, card: Card): boolean {
   if (isGameFinished(game)) return false
   if (game.turnPlayerId !== playerId) return false
@@ -969,6 +1020,7 @@ function drawCards(game: GameState, count: number): Card[] {
 function addCardsToHand(game: GameState, playerId: string, cards: Card[]) {
   game.handsByPlayerId[playerId] ??= []
   game.handsByPlayerId[playerId]?.push(...cards)
+  if (cards.length > 0) clearUnoDeclaration(game, playerId)
 }
 
 function reshuffleDrawPile(game: GameState) {
@@ -995,6 +1047,7 @@ function checkMercyEliminations(game: GameState, context: GameContext) {
     game.unoVulnerablePlayerIds = game.unoVulnerablePlayerIds.filter(
       (targetPlayerId) => targetPlayerId !== playerId,
     )
+    clearUnoDeclaration(game, playerId)
     pushEvent(game, {
       type: "player-eliminated",
       playerId,
@@ -1050,6 +1103,7 @@ function recordWinner(game: GameState, context: GameContext, playerId: string) {
   game.unoVulnerablePlayerIds = game.unoVulnerablePlayerIds.filter(
     (targetPlayerId) => targetPlayerId !== playerId,
   )
+  clearUnoDeclaration(game, playerId)
 
   pushEvent(game, {
     type: "game-won",
@@ -1072,11 +1126,23 @@ function finishGameIfComplete(game: GameState, context: GameContext) {
   game.drawnThisTurnPlayerId = null
   game.stagedPlay = null
   game.unoVulnerablePlayerIds = []
+  game.unoDeclaredPlayerIds = []
 }
 
 function advanceTurn(game: GameState, fromPlayerId: string, steps: number) {
   if (isGameFinished(game)) return
   game.turnPlayerId = nextPlayerId(game, fromPlayerId, steps)
+  game.drawnThisTurnPlayerId = null
+  game.stagedPlay = null
+}
+
+function advanceTurnAfterSkips(
+  game: GameState,
+  fromPlayerId: string,
+  skipCount: number,
+) {
+  if (isGameFinished(game)) return
+  game.turnPlayerId = nextPlayerIdSkippingOpponents(game, fromPlayerId, skipCount)
   game.drawnThisTurnPlayerId = null
   game.stagedPlay = null
 }
@@ -1098,6 +1164,40 @@ function nextPlayerId(game: GameState, fromPlayerId: string, steps: number): str
   }
 
   return game.playerOrder[index] as string
+}
+
+function nextPlayerIdSkippingOpponents(
+  game: GameState,
+  fromPlayerId: string,
+  skipCount: number,
+): string {
+  const active = activePlayerIds(game)
+  if (active.length === 0) return fromPlayerId
+  if (active.length === 1) return active[0] as string
+
+  let index = game.playerOrder.indexOf(fromPlayerId)
+  if (index < 0) index = 0
+
+  let remainingSkips = skipCount
+  const activeSet = new Set(active)
+
+  while (true) {
+    index = (index + game.direction + game.playerOrder.length) % game.playerOrder.length
+    const candidate = game.playerOrder[index] as string
+    if (!activeSet.has(candidate)) continue
+
+    if (candidate === fromPlayerId) {
+      if (remainingSkips <= 0) return candidate
+      continue
+    }
+
+    if (remainingSkips > 0) {
+      remainingSkips -= 1
+      continue
+    }
+
+    return candidate
+  }
 }
 
 function activePlayerIds(game: GameState): string[] {
@@ -1181,6 +1281,9 @@ function rotateHands(game: GameState) {
     const receiver = nextPlayerId(game, playerId, 1)
     game.handsByPlayerId[receiver] = snapshot.get(playerId) ?? []
   }
+
+  game.unoVulnerablePlayerIds = []
+  game.unoDeclaredPlayerIds = []
 }
 
 function swapHands(game: GameState, a: string, b: string) {
@@ -1188,11 +1291,21 @@ function swapHands(game: GameState, a: string, b: string) {
   const bHand = game.handsByPlayerId[b] ?? []
   game.handsByPlayerId[a] = bHand
   game.handsByPlayerId[b] = aHand
+  game.unoVulnerablePlayerIds = []
+  clearUnoDeclaration(game, a)
+  clearUnoDeclaration(game, b)
 }
 
-function beginTurnAction(game: GameState) {
+function beginTurnAction(game: GameState, playerId?: string) {
   game.unoVulnerablePlayerIds = []
+  if (playerId) clearUnoDeclaration(game, playerId)
   game.stagedPlay = null
+}
+
+function clearUnoDeclaration(game: GameState, playerId: string) {
+  game.unoDeclaredPlayerIds = (game.unoDeclaredPlayerIds ?? []).filter(
+    (targetPlayerId) => targetPlayerId !== playerId,
+  )
 }
 
 function topDiscard(game: GameState): Card | null {

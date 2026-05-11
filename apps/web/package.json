@@ -23,6 +23,7 @@
     "nitro": "latest",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
+    "react-sounds": "^1.0.30",
     "socket.io-client": "^4.8.1",
     "tailwindcss": "^4.1.18",
     "vite-tsconfig-paths": "^5.1.4"

@@ -55,6 +55,7 @@ export type PendingChoice =
 export type PlayerGamePublic = {
   playerId: string
   handCount: number
+  declaredUno: boolean
   eliminated: boolean
   winnerPlacement: WinnerPlacement | null
   connected: boolean
@@ -112,6 +113,7 @@ export type GameState = {
   drawStack: DrawStack | null
   pendingChoice: PendingChoice | null
   unoVulnerablePlayerIds: string[]
+  unoDeclaredPlayerIds: string[]
   drawnThisTurnPlayerId: string | null
   stagedPlay: StagedPlayState | null
   winnerPlacements: WinnerPlacement[]

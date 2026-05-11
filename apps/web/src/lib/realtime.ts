@@ -23,6 +23,10 @@ export function getGameSocket(): GameSocket {
     transports: ["websocket", "polling"],
   })
 
+  if (import.meta.env.DEV && typeof window !== "undefined") {
+    ;(window as unknown as { __gameSocket?: GameSocket }).__gameSocket = socket
+  }
+
   return socket
 }
 

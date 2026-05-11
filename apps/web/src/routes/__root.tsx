@@ -1,4 +1,5 @@
 import { HeadContent, Scripts, createRootRoute } from "@tanstack/react-router"
+import { SoundProvider } from "react-sounds"
 
 import appCss from "@workspace/ui/globals.css?url"
 
@@ -39,7 +40,7 @@ function RootDocument({ children }: { children: React.ReactNode }) {
         <HeadContent />
       </head>
       <body>
-        {children}
+        <SoundProvider>{children}</SoundProvider>
         <Scripts />
       </body>
     </html>

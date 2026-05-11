@@ -14,6 +14,8 @@ import {
   Trophy,
   UserRound,
   UsersRound,
+  Volume2,
+  VolumeX,
 } from "lucide-react"
 import {
   useEffect,
@@ -46,6 +48,12 @@ import {
   saveActiveRoomCode,
   savePlayerName,
 } from "@/lib/session"
+import {
+  playCardSound,
+  playFx,
+  playShuffleSound,
+} from "@/lib/sound"
+import { useSoundSystem } from "@/lib/use-sound-system"
 
 type ResponsiveCardSize = "sm" | "md"
 
@@ -64,8 +72,16 @@ function RoomPage() {
   const [error, setError] = useState<string | null>(null)
   const [socket, setSocket] = useState<GameSocket | null>(null)
   const [playerGame, setPlayerGame] = useState<PlayerGameSnapshot | null>(null)
+  const [startIntroPhase, setStartIntroPhase] = useState<
+    "idle" | "lights" | "shuffle" | "deal" | "done"
+  >("idle")
   const roomRef = useRef<RoomSnapshot | null>(null)
   const playerRef = useRef<Player | null>(null)
+  const lastEventIdRef = useRef<string | null>(null)
+  const lastTurnPlayerIdRef = useRef<string | null>(null)
+  const lastStatusRef = useRef<RoomSnapshot["status"] | null>(null)
+  const seenInitialGameSnapshotRef = useRef(false)
+  useSoundSystem()
 
   const normalizedRoomCode = roomCode.toUpperCase()
   const isHost = room?.hostPlayerId === player?.id
@@ -140,6 +156,87 @@ function RoomPage() {
       activeSocket.off("disconnect", handleDisconnect)
     }
   }, [normalizedRoomCode])
+
+  useEffect(() => {
+    if (!room) return
+    const previousStatus = lastStatusRef.current
+    lastStatusRef.current = room.status
+
+    if (
+      previousStatus !== null &&
+      previousStatus !== "playing" &&
+      room.status === "playing" &&
+      room.game
+    ) {
+      if (startIntroPhase === "idle" || startIntroPhase === "done") {
+        setStartIntroPhase("lights")
+      }
+    }
+
+    if (!room.game) {
+      lastTurnPlayerIdRef.current = null
+      lastEventIdRef.current = null
+      seenInitialGameSnapshotRef.current = false
+      return
+    }
+
+    lastTurnPlayerIdRef.current = room.game.turnPlayerId
+
+    const events = room.game.events
+
+    if (!seenInitialGameSnapshotRef.current) {
+      seenInitialGameSnapshotRef.current = true
+      lastEventIdRef.current = events[events.length - 1]?.id ?? null
+      return
+    }
+
+    if (events.length === 0) return
+    const lastSeenId = lastEventIdRef.current
+    const startIndex = lastSeenId
+      ? events.findIndex((event) => event.id === lastSeenId) + 1
+      : 0
+    if (startIndex <= 0) {
+      lastEventIdRef.current = events[events.length - 1]!.id
+      return
+    }
+    const newEvents = events.slice(startIndex)
+    if (newEvents.length === 0) return
+    lastEventIdRef.current = newEvents[newEvents.length - 1]!.id
+
+    for (const nextEvent of newEvents) {
+      switch (nextEvent.type) {
+        case "card-played":
+          if (nextEvent.playerId !== player?.id) {
+            playCardSound("play", nextEvent.cards?.length ?? 1)
+          }
+          break
+        case "card-drawn":
+          playCardSound("draw", nextEvent.cards?.length ?? 1)
+          break
+        case "draw-penalty":
+          playCardSound("draw", Math.min(nextEvent.cards?.length ?? 1, 4))
+          break
+        case "hand-swapped":
+        case "hands-rotated":
+          playShuffleSound()
+          break
+        case "uno-called":
+          playFx("successBlip", { volume: 0.55 })
+          break
+        case "uno-caught":
+          playFx("blocked", { volume: 0.5 })
+          break
+        case "player-eliminated":
+          playFx("blocked", { volume: 0.6 })
+          break
+        case "game-won":
+          playFx("coinBling", { volume: 0.8 })
+          break
+        default:
+          break
+      }
+    }
+  }, [room, player?.id, startIntroPhase])
 
   useEffect(() => {
     let cancelled = false
@@ -221,6 +318,7 @@ function RoomPage() {
   function setReady(ready: boolean) {
     if (!socket) return
     setError(null)
+    playFx(ready ? "toggleOn" : "toggleOff", { volume: 0.55 })
     socket.emit("room:setReady", { ready }, (result) => {
       if (!result.ok) {
         applyCommandError(result.error)
@@ -234,6 +332,7 @@ function RoomPage() {
   function startGame() {
     if (!socket) return
     setError(null)
+    playFx("buttonHard", { volume: 0.6 })
     socket.emit("room:start", (result) => {
       if (!result.ok) {
         applyCommandError(result.error)
@@ -336,7 +435,8 @@ function RoomPage() {
   }
 
   async function copyInvite() {
-    await window.navigator.clipboard.writeText(window.location.href)
+    const inviteUrl = new URL(`/room/${normalizedRoomCode}`, window.location.origin)
+    await copyTextToClipboard(inviteUrl.toString())
   }
 
   if (!player) {
@@ -366,112 +466,50 @@ function RoomPage() {
   }
 
   if ((room?.status === "playing" || room?.status === "finished") && room.game) {
+    const showIntro = startIntroPhase !== "idle" && startIntroPhase !== "done"
     return (
-      <GameTable
-        room={room}
-        player={player}
-        playerGame={playerGame?.playerId === player.id ? playerGame : null}
-        connected={connected}
-        error={error}
-        onCopyInvite={copyInvite}
-        onPlayCards={playCards}
-        onStageCards={stageCards}
-        onDrawCard={drawCard}
-        onEndTurn={endTurn}
-        onTakePenalty={takePenalty}
-        onDrawRouletteCard={drawRouletteCard}
-        onCatchUno={catchUno}
-      />
+      <>
+        <GameTable
+          room={room}
+          player={player}
+          playerGame={playerGame?.playerId === player.id ? playerGame : null}
+          connected={connected}
+          error={error}
+          onCopyInvite={copyInvite}
+          onPlayCards={playCards}
+          onStageCards={stageCards}
+          onDrawCard={drawCard}
+          onEndTurn={endTurn}
+          onTakePenalty={takePenalty}
+          onDrawRouletteCard={drawRouletteCard}
+          onCatchUno={catchUno}
+        />
+        {showIntro && (
+          <GameStartIntro
+            room={room}
+            selfPlayerId={player.id}
+            phase={startIntroPhase}
+            onPhaseChange={setStartIntroPhase}
+            onFinish={() => setStartIntroPhase("done")}
+          />
+        )}
+      </>
     )
   }
 
   return (
-    <main className="min-h-svh bg-neutral-950 text-white antialiased">
-      <div className="mx-auto flex min-h-svh w-full max-w-6xl flex-col gap-8 px-5 py-6 sm:px-8 lg:px-10">
-        <header className="flex flex-wrap items-center justify-between gap-4 border-b border-white/10 pb-5">
-          <div>
-            <p className="text-xs font-medium tracking-[0.18em] text-white/45 uppercase">
-              UNO No Mercy
-            </p>
-            <h1 className="mt-2 text-2xl font-semibold tracking-tight">
-              Room {roomCode.toUpperCase()}
-            </h1>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <StatusDot connected={connected} />
-            <CopyInviteButton onCopy={copyInvite} />
-          </div>
-        </header>
-
-        <section className="grid flex-1 gap-5 lg:grid-cols-[minmax(0,1fr)_320px]">
-          <div className="rounded-lg border border-white/10 bg-white/[0.035] p-5">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <h2 className="text-base font-medium">Lobby</h2>
-                <p className="mt-1 text-sm text-white/50">
-                  Share the code or invite link while everyone gets ready.
-                </p>
-              </div>
-              <div className="rounded-md border border-white/10 bg-black/20 px-3 py-2 font-mono text-sm">
-                {normalizedRoomCode}
-              </div>
-            </div>
-
-            <div className="mt-5 flex flex-wrap gap-2">
-              {!isHost && (
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={() => setReady(!currentPlayer?.ready)}
-                  className="bg-white text-neutral-950 hover:bg-white/85"
-                >
-                  <Check />
-                  {currentPlayer?.ready ? "Mark not ready" : "Ready up"}
-                </Button>
-              )}
-              {isHost && (
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={startGame}
-                  className="bg-white text-neutral-950 hover:bg-white/85"
-                >
-                  <Play />
-                  Start game
-                </Button>
-              )}
-            </div>
-
-            {error && (
-              <p className="mt-4 rounded-md border border-red-400/20 bg-red-500/10 px-3 py-2 text-sm text-red-100">
-                {error}
-              </p>
-            )}
-          </div>
-
-          <aside className="rounded-lg border border-white/10 bg-white/[0.035] p-5">
-            <div className="flex items-center gap-2">
-              <UsersRound className="size-4 text-white/60" />
-              <h2 className="text-base font-medium">
-                Players {room ? `${room.players.length}/${room.houseRules.maxPlayers}` : ""}
-              </h2>
-            </div>
-
-            <div className="mt-4 flex flex-col gap-2">
-              {room?.players.map((candidate) => (
-                <PlayerRow
-                  key={candidate.id}
-                  player={candidate}
-                  isHost={candidate.id === room.hostPlayerId}
-                  isYou={candidate.id === player?.id}
-                />
-              )) ?? <p className="text-sm text-white/45">Join to load this room.</p>}
-            </div>
-          </aside>
-        </section>
-      </div>
-    </main>
+    <LobbyWaitingRoom
+      room={room}
+      player={player}
+      roomCode={normalizedRoomCode}
+      connected={connected}
+      error={error}
+      isHost={isHost}
+      currentPlayerReady={Boolean(currentPlayer?.ready)}
+      onReady={setReady}
+      onStart={startGame}
+      onCopyInvite={copyInvite}
+    />
   )
 }
 
@@ -518,6 +556,14 @@ function GameTable({
   const [tableDragActive, setTableDragActive] = useState(false)
   const [celebratingWinnerId, setCelebratingWinnerId] = useState<string | null>(null)
   const celebratedWinnerIdsRef = useRef(new Set<string>())
+  const acknowledgedWinnerIdsRef = useRef<Set<string> | null>(null)
+  const [rouletteFly, setRouletteFly] = useState<{
+    sessionId: string
+    cards: Card[]
+    targetPlayerId: string
+  } | null>(null)
+  const rouletteAcceptedKeyRef = useRef<string | null>(null)
+  const prevRouletteActiveRef = useRef<{ playerId: string; cardCount: number } | null>(null)
   const narrowViewport = useMediaQuery("(max-width: 680px)")
   const shortViewport = useMediaQuery("(max-height: 760px)")
   const compactSurface = narrowViewport || shortViewport
@@ -603,6 +649,8 @@ function GameTable({
     (playerGame?.hand.length ?? 0) -
     selectedCards.length -
     (discardActionCard ? discardCardIds.length : 0)
+  const finishesWithForbiddenPower =
+    remainingAfterPlay === 0 && selectedCards.some((card) => isForbiddenFinalCard(card))
   const canDeclareUno =
     Boolean(isMyTurn) &&
     selectedCards.length > 0 &&
@@ -611,24 +659,36 @@ function GameTable({
   const canSubmitPlay =
     Boolean(isMyTurn) &&
     selectedCardsCanPlay &&
+    !finishesWithForbiddenPower &&
     (!needsColor || Boolean(chosenColor)) &&
     (!needsSwap || Boolean(swapWithPlayerId))
   const canPassTurn =
     Boolean(isMyTurn) && Boolean(playerGame?.canEndTurn) && selectedCardIds.length === 0
   const canUseEndTurnButton = selectedCardIds.length > 0 ? canSubmitPlay : canPassTurn
   const localStagedPlayActive = Boolean(isMyTurn && selectedCards.length > 0)
+  const stagedPlayKey = game?.stagedPlay
+    ? `${game.stagedPlay.playerId}:${game.stagedPlay.cards.map((card) => card.id).join("-")}`
+    : null
+  const stagedPlayConsumed = Boolean(
+    stagedPlayKey && rouletteAcceptedKeyRef.current === stagedPlayKey,
+  )
   const tableStagedCards = localStagedPlayActive
     ? selectedCards
-    : game?.stagedPlay?.cards ?? []
+    : stagedPlayConsumed
+      ? []
+      : game?.stagedPlay?.cards ?? []
   const tableStagedPlayerId = localStagedPlayActive
     ? player.id
-    : game?.stagedPlay?.playerId ?? null
+    : stagedPlayConsumed
+      ? null
+      : game?.stagedPlay?.playerId ?? null
   const tableStagedPlayerName = tableStagedPlayerId
     ? playerName(room, tableStagedPlayerId)
     : null
   const tableStagedMode =
-    (game?.stagedPlay?.kind === "roulette" && !localStagedPlayActive) ||
-    (rouletteChoice && tableStagedPlayerId === rouletteChoice.playerId)
+    !stagedPlayConsumed &&
+    ((game?.stagedPlay?.kind === "roulette" && !localStagedPlayActive) ||
+      (rouletteChoice && tableStagedPlayerId === rouletteChoice.playerId))
       ? "roulette"
       : "stage"
   const canEditTableStaged =
@@ -686,7 +746,56 @@ function GameTable({
   }, [selectedCardIds.join(":"), isMyTurn])
 
   useEffect(() => {
+    const stagedPlay = game?.stagedPlay
+    const pendingChoice = game?.pendingChoice
+    const previousActive = prevRouletteActiveRef.current
+
+    if (pendingChoice?.type === "roulette-draw") {
+      prevRouletteActiveRef.current = {
+        playerId: pendingChoice.playerId,
+        cardCount: pendingChoice.drawnCards.length,
+      }
+      return
+    }
+
+    prevRouletteActiveRef.current = null
+
+    if (!previousActive) return
+    if (!stagedPlay || stagedPlay.kind !== "roulette") return
+    if (stagedPlay.playerId !== previousActive.playerId) return
+    if (stagedPlay.cards.length === 0) return
+
+    const acceptedKey = `${stagedPlay.playerId}:${stagedPlay.cards
+      .map((card) => card.id)
+      .join("-")}`
+    if (rouletteAcceptedKeyRef.current === acceptedKey) return
+    rouletteAcceptedKeyRef.current = acceptedKey
+
+    setRouletteFly({
+      sessionId: acceptedKey,
+      cards: stagedPlay.cards,
+      targetPlayerId: stagedPlay.playerId,
+    })
+  }, [
+    game?.pendingChoice,
+    game?.stagedPlay?.kind,
+    game?.stagedPlay?.playerId,
+    game?.stagedPlay?.cards,
+  ])
+
+  useEffect(() => {
+    if (!game) return
+    if (acknowledgedWinnerIdsRef.current !== null) return
+    const initial = new Set<string>()
+    for (const placement of game.winnerPlacements) {
+      initial.add(placement.playerId)
+    }
+    acknowledgedWinnerIdsRef.current = initial
+  }, [game])
+
+  useEffect(() => {
     if (!firstWinnerPlacement) return
+    if (acknowledgedWinnerIdsRef.current?.has(firstWinnerPlacement.playerId)) return
     if (celebratedWinnerIdsRef.current.has(firstWinnerPlacement.playerId)) return
 
     celebratedWinnerIdsRef.current.add(firstWinnerPlacement.playerId)
@@ -782,16 +891,29 @@ function GameTable({
 
   function handleEndTurnButton() {
     if (selectedCardIds.length > 0) {
+      playCardSound("play", selectedCardIds.length)
       submitPlay()
       return
     }
-    if (canPassTurn) onEndTurn()
+    if (canPassTurn) {
+      playCardSound("play", 1)
+      onEndTurn()
+    }
   }
 
   return (
     <main className="h-dvh overflow-hidden bg-[#070604] text-white antialiased">
       {celebratingWinner && (
         <FirstPlaceCelebration playerName={celebratingWinner.name} />
+      )}
+      {rouletteFly && (
+        <RouletteFlyToHand
+          key={rouletteFly.sessionId}
+          cards={rouletteFly.cards}
+          targetPlayerId={rouletteFly.targetPlayerId}
+          isSelfTarget={rouletteFly.targetPlayerId === player.id}
+          onDone={() => setRouletteFly(null)}
+        />
       )}
       <div className="mx-auto flex h-full min-h-0 w-full max-w-[1500px] flex-col gap-2 px-2 py-2 sm:gap-3 sm:px-4 sm:py-3 lg:px-8">
         <header className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 pb-2 sm:pb-3">
@@ -804,6 +926,7 @@ function GameTable({
             </h1>
           </div>
           <div className="flex items-center gap-2">
+            <SoundToggle />
             <StatusDot connected={connected} />
             <CopyInviteButton onCopy={onCopyInvite} />
           </div>
@@ -936,7 +1059,10 @@ function GameTable({
               ) : null}
             </div>
 
-            <div className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-white/10 bg-black/35 p-2 shadow-[0_18px_60px_rgba(0,0,0,0.25)] sm:rounded-2xl sm:p-3">
+            <div
+              data-self-hand="true"
+              className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-white/10 bg-black/35 p-2 shadow-[0_18px_60px_rgba(0,0,0,0.25)] sm:rounded-2xl sm:p-3"
+            >
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-medium text-white/82">Your hand</p>
@@ -1211,6 +1337,7 @@ function TableSeatRing({
             player={candidate}
             handCount={state?.handCount ?? 0}
             active={game?.turnPlayerId === candidate.id}
+            declaredUno={Boolean(state?.declaredUno)}
             eliminated={Boolean(state?.eliminated)}
             winnerPlacement={state?.winnerPlacement ?? null}
             connected={candidate.connected}
@@ -1236,6 +1363,7 @@ function TableAvatarSeat({
   player,
   handCount,
   active,
+  declaredUno,
   eliminated,
   winnerPlacement,
   connected,
@@ -1250,6 +1378,7 @@ function TableAvatarSeat({
   player: Player
   handCount: number
   active: boolean
+  declaredUno: boolean
   eliminated: boolean
   winnerPlacement: NonNullable<
     NonNullable<RoomSnapshot["game"]>["players"][number]["winnerPlacement"]
@@ -1267,9 +1396,11 @@ function TableAvatarSeat({
     ? `${ordinalLabel(winnerPlacement.position)} place`
     : null
   const isFirstPlace = winnerPlacement?.position === 1
+  const isUno = declaredUno && !winnerPlacement && !eliminated
 
   return (
     <div
+      data-seat-player-id={player.id}
       className={
         "absolute flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-1 transition-[opacity,transform,filter] duration-300 " +
         (winnerPlacement
@@ -1287,6 +1418,8 @@ function TableAvatarSeat({
             ? isFirstPlace
               ? "border-amber-200/80 bg-amber-200/20 shadow-[0_0_0_1px_rgba(252,211,77,0.3),0_0_46px_rgba(252,211,77,0.34),0_18px_38px_rgba(0,0,0,0.34)]"
               : "border-white/18 bg-white/[0.075]"
+            : isUno
+              ? "scale-[1.03] border-yellow-200/75 bg-red-500/[0.14] shadow-[0_0_0_1px_rgba(250,204,21,0.26),0_0_44px_rgba(239,68,68,0.28),0_18px_38px_rgba(0,0,0,0.34)]"
             : active
             ? "scale-[1.03] border-amber-200/70 bg-amber-200/16 shadow-[0_0_0_1px_rgba(252,211,77,0.25),0_0_42px_rgba(252,211,77,0.36),0_18px_38px_rgba(0,0,0,0.34)]"
             : isStaging
@@ -1316,6 +1449,8 @@ function TableAvatarSeat({
                 : "border-white/18 bg-white/[0.08] text-white/74"
               : active
               ? "border-amber-100/65 bg-amber-100/24 text-amber-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_0_24px_rgba(252,211,77,0.24)]"
+              : isUno
+                ? "border-yellow-100/70 bg-red-400/[0.18] text-yellow-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.24),0_0_24px_rgba(250,204,21,0.22)]"
               : "border-white/12 bg-white/[0.075] text-white/74")
           }
         >
@@ -1333,6 +1468,8 @@ function TableAvatarSeat({
                 : placementText
               : eliminated
               ? "Eliminated"
+              : isUno
+                ? "On UNO"
               : active
                 ? "Taking turn"
                 : isStaging
@@ -1354,8 +1491,15 @@ function TableAvatarSeat({
             #{winnerPlacement.position}
           </span>
         ) : (
-          <span className="rounded-full border border-white/10 bg-black/30 px-1.5 py-0.5 text-[11px] tabular-nums text-white/64 sm:px-2 sm:text-xs">
-            {handCount}
+          <span
+            className={
+              "rounded-full border px-1.5 py-0.5 text-[11px] font-semibold tabular-nums sm:px-2 sm:text-xs " +
+              (isUno
+                ? "border-yellow-100/45 bg-yellow-300/20 text-yellow-50"
+                : "border-white/10 bg-black/30 text-white/64")
+            }
+          >
+            {isUno ? "UNO" : handCount}
           </span>
         )}
         {drawStack && active && (
@@ -1492,6 +1636,10 @@ function drawAmount(card: Card) {
     default:
       return null
   }
+}
+
+function isForbiddenFinalCard(card: Card) {
+  return card.face.kind !== "number" && card.face.kind !== "discard-color"
 }
 
 function sameNumberGroup(cards: Card[]) {
@@ -1664,7 +1812,10 @@ function TableStagedPlay({
           <span className="shrink-0 text-[11px] text-white/42">tap to remove</span>
         )}
       </div>
-      <div className="relative mt-2 grid h-[120px] place-items-center overflow-visible rounded-xl border border-white/8 bg-black/18 p-2 shadow-[inset_0_12px_28px_rgba(0,0,0,0.18)] sm:h-[132px] sm:p-3">
+      <div
+        data-roulette-source={isRoulette ? "true" : undefined}
+        className="relative mt-2 grid h-[120px] place-items-center overflow-visible rounded-xl border border-white/8 bg-black/18 p-2 shadow-[inset_0_12px_28px_rgba(0,0,0,0.18)] sm:h-[132px] sm:p-3"
+      >
         {cards.length > 0 ? (
           <div className="relative h-[106px] sm:h-[112px]" style={{ width }}>
             {cards.map((card, index) => {
@@ -2166,7 +2317,10 @@ function InviteJoinScreen({
                 {roomCode}
               </p>
             </div>
-            <CopyInviteButton iconOnly onCopy={onCopyInvite} />
+            <div className="flex items-center gap-2">
+              {/* <SoundToggle /> */}
+              <CopyInviteButton iconOnly onCopy={onCopyInvite} />
+            </div>
           </div>
 
           <div className="mt-5 border-t border-white/10 pt-5">
@@ -2201,6 +2355,34 @@ function InviteJoinScreen({
       </div>
     </main>
   )
+}
+
+async function copyTextToClipboard(value: string) {
+  try {
+    if (window.isSecureContext && window.navigator.clipboard?.writeText) {
+      await window.navigator.clipboard.writeText(value)
+      return
+    }
+  } catch {
+    // Fall back below for browsers that expose clipboard but reject the write.
+  }
+
+  const textarea = document.createElement("textarea")
+  textarea.value = value
+  textarea.setAttribute("readonly", "")
+  textarea.style.position = "fixed"
+  textarea.style.left = "-9999px"
+  textarea.style.top = "0"
+  document.body.appendChild(textarea)
+  textarea.focus()
+  textarea.select()
+
+  try {
+    const copied = document.execCommand("copy")
+    if (!copied) throw new Error("Clipboard copy was rejected.")
+  } finally {
+    textarea.remove()
+  }
 }
 
 function CopyInviteButton({
@@ -2318,7 +2500,7 @@ function GameOptionCheckbox({
   return (
     <label
       className={
-        "flex h-9 items-center gap-2 rounded-lg border border-white/10 bg-white/[0.055] px-3 text-sm text-white/70 transition-[background-color,border-color,opacity] " +
+        "flex h-7 items-center gap-1.5 rounded-[min(var(--radius-md),12px)] border border-white/10 bg-white/[0.055] px-2.5 text-[0.8rem] font-medium whitespace-nowrap text-white/70 transition-[background-color,border-color,opacity] " +
         (disabled
           ? "cursor-not-allowed opacity-45"
           : "hover:border-white/18 hover:bg-white/[0.075]")
@@ -2474,6 +2656,799 @@ function PlayerRow({
       >
         {player.connected ? (player.ready || isHost ? "Ready" : "Waiting") : "Away"}
       </span>
+    </div>
+  )
+}
+
+function LobbyWaitingRoom({
+  room,
+  player,
+  roomCode,
+  connected,
+  error,
+  isHost,
+  currentPlayerReady,
+  onReady,
+  onStart,
+  onCopyInvite,
+}: {
+  room: RoomSnapshot | null
+  player: Player
+  roomCode: string
+  connected: boolean
+  error: string | null
+  isHost: boolean
+  currentPlayerReady: boolean
+  onReady: (ready: boolean) => void
+  onStart: () => void
+  onCopyInvite: () => Promise<void>
+}) {
+  const players = room?.players ?? []
+  const seatCount = players.length
+  const readyCount = players.filter(
+    (candidate) => candidate.ready || candidate.id === room?.hostPlayerId,
+  ).length
+  const maxPlayers = room?.houseRules.maxPlayers ?? 8
+  const everyoneReady = seatCount >= 2 && readyCount === seatCount
+
+  return (
+    <main className="relative h-dvh overflow-hidden bg-[#070604] text-white antialiased">
+      <style>
+        {`
+          @keyframes uno-lobby-flicker {
+            0%, 84%, 100% { opacity: 1; }
+            86% { opacity: 0.68; }
+            88% { opacity: 1; }
+            92% { opacity: 0.82; }
+            94% { opacity: 1; }
+          }
+          @keyframes uno-lobby-pulse {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(252, 211, 77, 0.45); }
+            50% { box-shadow: 0 0 0 12px rgba(252, 211, 77, 0); }
+          }
+        `}
+      </style>
+
+      <div
+        className="absolute inset-0"
+        style={{
+          backgroundImage:
+            "radial-gradient(circle at 50% 38%, rgba(255,210,150,0.10) 0%, rgba(0,0,0,0) 48%), radial-gradient(circle at 50% 78%, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0) 60%)",
+        }}
+        aria-hidden="true"
+      />
+
+      <div className="mx-auto flex h-full w-full max-w-[1500px] flex-col gap-3 px-3 py-3 sm:px-5 sm:py-4 lg:px-8">
+        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 pb-2 sm:pb-3">
+          <div>
+            <p className="text-[10px] font-medium tracking-[0.18em] text-white/45 uppercase sm:text-xs">
+              UNO No Mercy
+            </p>
+            <h1 className="mt-0.5 text-lg font-semibold tracking-tight sm:mt-1 sm:text-xl">
+              Room {roomCode}
+            </h1>
+          </div>
+          <div className="flex items-center gap-2">
+            <SoundToggle />
+            <StatusDot connected={connected} />
+            <CopyInviteButton onCopy={onCopyInvite} />
+          </div>
+        </header>
+
+        <section className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] gap-3 overflow-hidden lg:grid-cols-[minmax(0,1fr)_320px] lg:grid-rows-none">
+          <DimmedTablePreview
+            room={room}
+            player={player}
+            seatCount={seatCount}
+            readyCount={readyCount}
+            everyoneReady={everyoneReady}
+            isHost={isHost}
+            currentPlayerReady={currentPlayerReady}
+            onReady={onReady}
+            onStart={onStart}
+            onCopyInvite={onCopyInvite}
+            error={error}
+          />
+
+          <aside className="hidden min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035] p-4 lg:flex">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <UsersRound className="size-4 text-white/60" />
+                <h2 className="text-sm font-medium text-white/82">
+                  Players {seatCount}/{maxPlayers}
+                </h2>
+              </div>
+              <span
+                className={
+                  "rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-[0.14em] uppercase " +
+                  (everyoneReady
+                    ? "border-emerald-300/40 bg-emerald-400/10 text-emerald-200"
+                    : "border-white/12 bg-black/30 text-white/55")
+                }
+              >
+                {readyCount}/{seatCount || 0} ready
+              </span>
+            </div>
+
+            <div className="mt-4 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
+              {players.length === 0 ? (
+                <p className="rounded-md border border-white/8 bg-black/20 px-3 py-2 text-sm text-white/45">
+                  Waiting for the first player...
+                </p>
+              ) : (
+                players.map((candidate) => (
+                  <PlayerRow
+                    key={candidate.id}
+                    player={candidate}
+                    isHost={candidate.id === room?.hostPlayerId}
+                    isYou={candidate.id === player.id}
+                  />
+                ))
+              )}
+            </div>
+
+            <div className="mt-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-[11px] leading-relaxed text-white/45">
+              Tip — once everyone is in, the host hits start and the lights come on.
+            </div>
+          </aside>
+        </section>
+      </div>
+    </main>
+  )
+}
+
+function DimmedTablePreview({
+  room,
+  player,
+  seatCount,
+  readyCount,
+  everyoneReady,
+  isHost,
+  currentPlayerReady,
+  onReady,
+  onStart,
+  onCopyInvite,
+  error,
+}: {
+  room: RoomSnapshot | null
+  player: Player
+  seatCount: number
+  readyCount: number
+  everyoneReady: boolean
+  isHost: boolean
+  currentPlayerReady: boolean
+  onReady: (ready: boolean) => void
+  onStart: () => void
+  onCopyInvite: () => Promise<void>
+  error: string | null
+}) {
+  const players = room?.players ?? []
+  const maxPlayers = room?.houseRules.maxPlayers ?? 8
+  const narrowViewport = useMediaQuery("(max-width: 680px)")
+  const shortViewport = useMediaQuery("(max-height: 760px)")
+  const compactSurface = narrowViewport || shortViewport
+  const cardSize: ResponsiveCardSize = compactSurface ? "sm" : "md"
+
+  return (
+    <div
+      className="relative min-h-0 overflow-hidden rounded-2xl border border-white/10 p-2 shadow-[0_30px_90px_rgba(0,0,0,0.5)] sm:rounded-[1.75rem] sm:p-4"
+      style={{
+        backgroundImage:
+          "linear-gradient(135deg, rgba(255,255,255,0.04), rgba(255,255,255,0) 18%, rgba(0,0,0,0.32) 62%), repeating-linear-gradient(92deg, rgba(255,255,255,0.018) 0 10px, rgba(0,0,0,0.05) 10px 22px), linear-gradient(90deg, #2d1a0e, #3d2317 38%, #261509)",
+      }}
+    >
+      <div className="pointer-events-none absolute inset-0 rounded-2xl bg-black/40 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.32),inset_0_0_0_2px_rgba(255,255,255,0.025),inset_0_24px_80px_rgba(0,0,0,0.6)] sm:rounded-[1.75rem]" />
+
+      <DimmedSeatRing
+        players={players}
+        hostPlayerId={room?.hostPlayerId ?? null}
+        selfPlayerId={player.id}
+        compact={compactSurface}
+      />
+
+      <div className="relative z-10 flex h-full min-h-0 flex-col items-center justify-center gap-6 px-2 py-6 sm:px-6 sm:py-8">
+        <div className="grid place-items-center opacity-35 saturate-50 brightness-90 transition-[opacity,filter] duration-500">
+          <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-8 lg:gap-12">
+            <DimmedDeck size={cardSize} />
+            <DimmedDiscardSlot size={cardSize} />
+          </div>
+        </div>
+
+        <div
+          className="pointer-events-auto relative z-10 flex w-full max-w-md flex-col items-center gap-4 rounded-2xl border border-white/14 bg-neutral-950/72 px-6 py-5 text-center shadow-[0_24px_60px_rgba(0,0,0,0.45)] backdrop-blur-md sm:px-8 sm:py-6"
+          style={{
+            animation: everyoneReady
+              ? "uno-lobby-flicker 2.4s ease-in-out infinite"
+              : undefined,
+          }}
+        >
+          <span
+            className={
+              "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[10px] font-semibold tracking-[0.16em] uppercase " +
+              (everyoneReady
+                ? "border-amber-200/45 bg-amber-200/15 text-amber-100"
+                : "border-white/12 bg-white/[0.06] text-white/60")
+            }
+          >
+            <span
+              className={
+                "size-1.5 rounded-full " +
+                (everyoneReady ? "bg-amber-200" : "bg-white/55")
+              }
+              style={
+                everyoneReady
+                  ? { animation: "uno-lobby-pulse 1.6s ease-out infinite" }
+                  : undefined
+              }
+            />
+            {everyoneReady ? "Lights are about to come on" : "Lights off · Waiting"}
+          </span>
+          <div>
+            <p className="text-xl font-semibold text-white sm:text-2xl">
+              {seatCount < 2
+                ? "Need at least one more seat"
+                : everyoneReady
+                  ? "Table is ready"
+                  : `${readyCount}/${seatCount} players ready`}
+            </p>
+            <p className="mt-1.5 text-sm text-white/55">
+              {seatCount < 2
+                ? "Share the room code so a friend can join."
+                : everyoneReady
+                  ? isHost
+                    ? "Hit start to shuffle and deal."
+                    : "Waiting for the host to start the game."
+                  : isHost
+                    ? "You can start anytime — the rest will catch up."
+                    : "Ready up when you're set."}
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            {!isHost && (
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => onReady(!currentPlayerReady)}
+                className={
+                  currentPlayerReady
+                    ? "bg-white/10 text-white hover:bg-white/15"
+                    : "bg-white text-neutral-950 hover:bg-white/85"
+                }
+              >
+                <Check />
+                {currentPlayerReady ? "Mark not ready" : "Ready up"}
+              </Button>
+            )}
+            {isHost && seatCount < 2 && (
+              <CopyInviteButton onCopy={onCopyInvite} />
+            )}
+            {isHost && seatCount >= 2 && (
+              <Button
+                type="button"
+                size="sm"
+                onClick={onStart}
+                className="bg-white text-neutral-950 hover:bg-white/85"
+              >
+                <Play />
+                Start game
+              </Button>
+            )}
+            <span className="rounded-full border border-white/10 bg-black/30 px-2.5 py-1 text-[11px] text-white/55">
+              {seatCount}/{maxPlayers} seated
+            </span>
+          </div>
+
+          {error && (
+            <p className="w-full rounded-md border border-red-400/25 bg-red-500/12 px-3 py-2 text-sm text-red-100">
+              {error}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function DimmedSeatRing({
+  players,
+  hostPlayerId,
+  selfPlayerId,
+  compact,
+}: {
+  players: Player[]
+  hostPlayerId: string | null
+  selfPlayerId: string
+  compact: boolean
+}) {
+  const ordered = orderPlayersAroundSelf(players, selfPlayerId)
+
+  return (
+    <div className="pointer-events-none absolute inset-0 z-20">
+      {ordered.map((candidate, index) => {
+        const seat = tableSeatPosition(index, ordered.length, compact)
+        const isYou = candidate.id === selfPlayerId
+        const isHost = candidate.id === hostPlayerId
+        const readyOrHost = candidate.ready || isHost
+
+        return (
+          <div
+            key={candidate.id}
+            className="absolute flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-1"
+            style={{
+              left: `${seat.left}%`,
+              top: `${seat.top}%`,
+              opacity: candidate.connected ? 0.78 : 0.4,
+            }}
+          >
+            <div
+              className={
+                "relative z-10 flex min-w-[72px] items-center gap-1.5 rounded-xl border px-1.5 py-1.5 backdrop-blur-md sm:min-w-[144px] sm:gap-2 sm:rounded-2xl sm:px-2.5 sm:py-2 " +
+                (readyOrHost
+                  ? "border-emerald-200/30 bg-emerald-400/10"
+                  : "border-white/10 bg-black/45")
+              }
+              style={{
+                boxShadow: readyOrHost
+                  ? "0 0 0 1px rgba(110, 231, 183, 0.18), 0 12px 30px rgba(0, 0, 0, 0.35)"
+                  : "0 12px 30px rgba(0, 0, 0, 0.32)",
+              }}
+            >
+              <div className="grid size-9 shrink-0 place-items-center rounded-full border border-white/12 bg-white/[0.06] text-white/72 sm:size-12">
+                <UserRound className="size-5 sm:size-6" strokeWidth={1.8} />
+              </div>
+              <div className="hidden min-w-0 flex-1 sm:block">
+                <p className="truncate text-xs font-semibold text-white/86">
+                  {candidate.name}
+                  {isYou ? " · You" : ""}
+                </p>
+                <p className="mt-0.5 text-[11px] text-white/45">
+                  {!candidate.connected
+                    ? "Away"
+                    : readyOrHost
+                      ? isHost
+                        ? "Host · Ready"
+                        : "Ready"
+                      : "Waiting"}
+                </p>
+              </div>
+              <span
+                className={
+                  "rounded-full border px-1.5 py-0.5 text-[10px] tabular-nums sm:px-2 sm:text-[11px] " +
+                  (readyOrHost
+                    ? "border-emerald-200/35 bg-emerald-400/15 text-emerald-100"
+                    : "border-white/12 bg-black/35 text-white/55")
+                }
+              >
+                {readyOrHost ? "✓" : "..."}
+              </span>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function DimmedDeck({ size }: { size: ResponsiveCardSize }) {
+  const compact = size === "sm"
+  return (
+    <div className="flex flex-col items-center gap-1.5 sm:gap-2">
+      <div
+        className={
+          compact ? "relative h-[112px] w-[82px]" : "relative h-[178px] w-[128px]"
+        }
+      >
+        {[0, 1, 2, 3].map((layer) => (
+          <div
+            key={layer}
+            className="absolute rounded-xl border border-black/45 bg-neutral-900 shadow-[0_10px_24px_rgba(0,0,0,0.4)]"
+            style={{
+              inset: `${12 - layer * 3}px ${layer * 3}px ${layer * 3}px ${12 - layer * 3}px`,
+              transform: `translate(${layer * 3}px, ${layer * -3}px)`,
+            }}
+          />
+        ))}
+        <div className="absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2">
+          <UnoCard card={cardBackPlaceholder} faceDown size={size} static />
+        </div>
+      </div>
+      <p className="text-[11px] text-white/40 sm:text-xs">Deck · sleeping</p>
+    </div>
+  )
+}
+
+function DimmedDiscardSlot({ size }: { size: ResponsiveCardSize }) {
+  const compact = size === "sm"
+  return (
+    <div className="flex flex-col items-center gap-1.5 sm:gap-2">
+      <div
+        className={
+          compact
+            ? "h-[112px] w-[82px] rounded-xl border border-dashed border-white/10 bg-black/25"
+            : "h-[178px] w-[128px] rounded-xl border border-dashed border-white/10 bg-black/25"
+        }
+      />
+      <p className="text-[11px] text-white/40 sm:text-xs">Discard · empty</p>
+    </div>
+  )
+}
+
+function SoundToggle() {
+  const { enabled, setEnabled } = useSoundSystem()
+
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        const next = !enabled
+        setEnabled(next)
+        if (next) playFx("buttonSoft", { volume: 0.5 })
+      }}
+      aria-label={enabled ? "Mute sound effects" : "Unmute sound effects"}
+      title={enabled ? "Mute sound effects" : "Unmute sound effects"}
+      className={
+        "flex h-7 items-center gap-1.5 rounded-full border px-2.5 text-[11px] font-medium transition-[background-color,border-color,color] sm:h-8 sm:px-3 sm:text-xs " +
+        (enabled
+          ? "border-white/15 bg-white/[0.06] text-white/72 hover:border-white/25 hover:bg-white/[0.1] hover:text-white"
+          : "border-white/10 bg-black/30 text-white/45 hover:text-white/65")
+      }
+    >
+      {enabled ? (
+        <Volume2 className="size-3.5" strokeWidth={1.9} />
+      ) : (
+        <VolumeX className="size-3.5" strokeWidth={1.9} />
+      )}
+      <span className="hidden sm:inline">{enabled ? "Sound on" : "Muted"}</span>
+    </button>
+  )
+}
+
+function GameStartIntro({
+  room,
+  selfPlayerId,
+  phase,
+  onPhaseChange,
+  onFinish,
+}: {
+  room: RoomSnapshot
+  selfPlayerId: string
+  phase: "idle" | "lights" | "shuffle" | "deal" | "done"
+  onPhaseChange: (phase: "idle" | "lights" | "shuffle" | "deal" | "done") => void
+  onFinish: () => void
+}) {
+  const compact = useMediaQuery("(max-width: 680px)")
+  const [dealtTokens, setDealtTokens] = useState<
+    Array<{ id: number; left: number; top: number; delay: number }>
+  >([])
+  const [viewport, setViewport] = useState(() => ({
+    width: typeof window === "undefined" ? 1200 : window.innerWidth,
+    height: typeof window === "undefined" ? 800 : window.innerHeight,
+  }))
+  const playedShuffleRef = useRef(false)
+  const playedDealRef = useRef(false)
+
+  const orderedPlayers = useMemo(
+    () => orderPlayersAroundSelf(room.players, selfPlayerId),
+    [room.players, selfPlayerId],
+  )
+  const handSize = room.houseRules.startingHandSize ?? 7
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    function update() {
+      setViewport({ width: window.innerWidth, height: window.innerHeight })
+    }
+    update()
+    window.addEventListener("resize", update)
+    return () => window.removeEventListener("resize", update)
+  }, [])
+
+  useEffect(() => {
+    if (phase !== "lights") return
+    const timer = window.setTimeout(() => onPhaseChange("shuffle"), 520)
+    return () => window.clearTimeout(timer)
+  }, [phase, onPhaseChange])
+
+  useEffect(() => {
+    if (phase !== "shuffle") return
+    if (!playedShuffleRef.current) {
+      playedShuffleRef.current = true
+      playShuffleSound()
+    }
+    const timer = window.setTimeout(() => onPhaseChange("deal"), 720)
+    return () => window.clearTimeout(timer)
+  }, [phase, onPhaseChange])
+
+  useEffect(() => {
+    if (phase !== "deal") return
+    const tokens: Array<{ id: number; left: number; top: number; delay: number }> = []
+    let nextId = 0
+    for (let round = 0; round < handSize; round += 1) {
+      orderedPlayers.forEach((_, seatIndex) => {
+        const seat = tableSeatPosition(seatIndex, orderedPlayers.length, compact)
+        tokens.push({
+          id: nextId++,
+          left: seat.left,
+          top: seat.top,
+          delay: round * 140 + seatIndex * 30,
+        })
+      })
+    }
+    setDealtTokens(tokens)
+
+    if (!playedDealRef.current) {
+      playedDealRef.current = true
+      const dealSoundCount = Math.min(handSize * orderedPlayers.length, 7)
+      for (let index = 0; index < dealSoundCount; index += 1) {
+        window.setTimeout(
+          () => playCardSound("draw", 1),
+          index * Math.max(120, 180 - dealSoundCount * 8),
+        )
+      }
+    }
+
+    const total = tokens.length
+    const longest = total > 0 ? tokens[total - 1]!.delay + 520 : 600
+    const timer = window.setTimeout(() => {
+      onPhaseChange("done")
+      onFinish()
+    }, longest)
+    return () => window.clearTimeout(timer)
+  }, [phase, handSize, orderedPlayers, compact, onPhaseChange, onFinish])
+
+  if (phase === "idle" || phase === "done") return null
+
+  return (
+    <div
+      className="pointer-events-none fixed inset-0 z-40 overflow-hidden"
+      aria-hidden="true"
+    >
+      <style>
+        {`
+          @keyframes uno-intro-lights {
+            0% { opacity: 0.86; }
+            100% { opacity: 0; }
+          }
+          @keyframes uno-intro-shuffle-a {
+            0%, 100% { transform: translate(0, 0) rotate(0deg); }
+            25% { transform: translate(-46px, -10px) rotate(-12deg); }
+            50% { transform: translate(38px, -8px) rotate(10deg); }
+            75% { transform: translate(-22px, 6px) rotate(-6deg); }
+          }
+          @keyframes uno-intro-shuffle-b {
+            0%, 100% { transform: translate(0, 0) rotate(0deg); }
+            25% { transform: translate(48px, -6px) rotate(14deg); }
+            50% { transform: translate(-44px, 8px) rotate(-11deg); }
+            75% { transform: translate(20px, -4px) rotate(7deg); }
+          }
+          @keyframes uno-intro-deal {
+            0% { opacity: 0; transform: translate(-50%, -50%) scale(0.65) rotate(-12deg); }
+            12% { opacity: 1; }
+            70% { opacity: 1; }
+            100% { opacity: 0; transform: translate(calc(-50% + var(--uno-dx)), calc(-50% + var(--uno-dy))) scale(0.9) rotate(8deg); }
+          }
+        `}
+      </style>
+
+      {phase === "lights" && (
+        <div
+          className="absolute inset-0 bg-black"
+          style={{ animation: "uno-intro-lights 520ms ease-out forwards" }}
+        />
+      )}
+
+      {phase === "shuffle" && (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="relative h-[180px] w-[130px]">
+            <div
+              className="absolute inset-0 rounded-xl border border-black/45 bg-neutral-950 shadow-[0_18px_42px_rgba(0,0,0,0.55)]"
+              style={{ animation: "uno-intro-shuffle-a 720ms ease-in-out" }}
+            />
+            <div
+              className="absolute inset-0 rounded-xl border border-black/45 bg-neutral-900 shadow-[0_18px_42px_rgba(0,0,0,0.55)]"
+              style={{
+                animation: "uno-intro-shuffle-b 720ms ease-in-out",
+                animationDelay: "80ms",
+              }}
+            />
+            <div
+              className="absolute inset-0 rounded-xl border border-black/45 bg-neutral-950 shadow-[0_18px_42px_rgba(0,0,0,0.55)]"
+              style={{
+                animation: "uno-intro-shuffle-a 720ms ease-in-out",
+                animationDelay: "140ms",
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {phase === "deal" && (
+        <>
+          {dealtTokens.map((token) => {
+            const dx = ((token.left - 50) * viewport.width) / 100
+            const dy = ((token.top - 50) * viewport.height) / 100
+            return (
+              <div
+                key={token.id}
+                className="absolute left-1/2 top-1/2"
+                style={{
+                  width: compact ? 56 : 76,
+                  height: compact ? 80 : 108,
+                  marginLeft: compact ? -28 : -38,
+                  marginTop: compact ? -40 : -54,
+                  borderRadius: 10,
+                  background:
+                    "linear-gradient(140deg, #1a1a1a, #2a2a2a 40%, #0a0a0a)",
+                  boxShadow:
+                    "0 14px 28px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.06)",
+                  ["--uno-dx" as string]: `${dx}px`,
+                  ["--uno-dy" as string]: `${dy}px`,
+                  animation: `uno-intro-deal 520ms cubic-bezier(0.22, 0.9, 0.18, 1) ${token.delay}ms forwards`,
+                  opacity: 0,
+                  zIndex: 30 + token.id,
+                }}
+              />
+            )
+          })}
+        </>
+      )}
+    </div>
+  )
+}
+
+function RouletteFlyToHand({
+  cards,
+  targetPlayerId,
+  isSelfTarget,
+  onDone,
+}: {
+  cards: Card[]
+  targetPlayerId: string
+  isSelfTarget: boolean
+  onDone: () => void
+}) {
+  const [layout, setLayout] = useState<{
+    source: { left: number; top: number; width: number; height: number }
+    dest: { left: number; top: number }
+  } | null>(null)
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    if (cards.length === 0) {
+      onDone()
+      return
+    }
+
+    const sourceEl = document.querySelector<HTMLElement>(
+      "[data-roulette-source='true']",
+    )
+    const handEl = isSelfTarget
+      ? document.querySelector<HTMLElement>("[data-self-hand='true']")
+      : null
+    const destEl =
+      handEl ??
+      document.querySelector<HTMLElement>(
+        `[data-seat-player-id="${CSS.escape(targetPlayerId)}"]`,
+      )
+
+    const sourceRect = sourceEl?.getBoundingClientRect()
+    const destRect = destEl?.getBoundingClientRect()
+
+    const fallbackSource = {
+      left: window.innerWidth / 2 - 160,
+      top: window.innerHeight / 2 - 60,
+      width: 320,
+      height: 120,
+    }
+    const fallbackDest = isSelfTarget
+      ? { left: window.innerWidth / 2, top: window.innerHeight - 120 }
+      : { left: window.innerWidth / 2, top: window.innerHeight * 0.18 }
+
+    setLayout({
+      source: sourceRect
+        ? {
+            left: sourceRect.left,
+            top: sourceRect.top,
+            width: sourceRect.width,
+            height: sourceRect.height,
+          }
+        : fallbackSource,
+      dest: destRect
+        ? {
+            left: destRect.left + destRect.width / 2,
+            top: isSelfTarget
+              ? destRect.bottom - Math.min(destRect.height * 0.32, 72)
+              : destRect.top + destRect.height / 2,
+          }
+        : fallbackDest,
+    })
+  }, [cards, targetPlayerId, isSelfTarget, onDone])
+
+  useEffect(() => {
+    if (!layout) return
+    if (cards.length === 0) return
+
+    const stagger = 90
+    const flightDuration = 620
+    const totalMs = (cards.length - 1) * stagger + flightDuration + 60
+
+    for (let index = 0; index < Math.min(cards.length, 5); index += 1) {
+      window.setTimeout(() => playCardSound("draw", 1), index * stagger)
+    }
+
+    const timer = window.setTimeout(onDone, totalMs)
+    return () => window.clearTimeout(timer)
+  }, [layout, cards, onDone])
+
+  if (!layout) return null
+
+  const half = (cards.length - 1) / 2
+  const cardWidth = 84
+  const cardHeight = 118
+  const gap = Math.min(38, Math.max(22, layout.source.width / Math.max(cards.length, 1)))
+  const stagger = 90
+
+  return (
+    <div
+      className="pointer-events-none fixed inset-0 z-[60]"
+      aria-hidden="true"
+    >
+      <style>
+        {`
+          @keyframes uno-roulette-fly {
+            0% {
+              opacity: 1;
+              transform: translate(-50%, -50%) translate(var(--uno-roulette-from-x), var(--uno-roulette-from-y)) rotate(var(--uno-roulette-from-rot)) scale(1);
+            }
+            18% {
+              transform: translate(-50%, -50%) translate(var(--uno-roulette-from-x), calc(var(--uno-roulette-from-y) - 22px)) rotate(var(--uno-roulette-from-rot)) scale(1.04);
+            }
+            65% {
+              opacity: 1;
+            }
+            100% {
+              opacity: 0.05;
+              transform: translate(-50%, -50%) translate(var(--uno-roulette-to-x), var(--uno-roulette-to-y)) rotate(var(--uno-roulette-to-rot)) scale(0.42);
+            }
+          }
+        `}
+      </style>
+
+      {cards.map((card, index) => {
+        const offset = index - half
+        const fromX =
+          layout.source.left + layout.source.width / 2 + offset * gap
+        const fromY = layout.source.top + layout.source.height / 2
+        const fromRot = offset * 4
+        const toX = layout.dest.left
+        const toY = layout.dest.top
+        const toRot = (offset > 0 ? 12 : -12) + offset * 2
+        const delay = index * stagger
+
+        return (
+          <div
+            key={card.id}
+            className="absolute left-0 top-0"
+            style={{
+              width: cardWidth,
+              height: cardHeight,
+              ["--uno-roulette-from-x" as string]: `${fromX}px`,
+              ["--uno-roulette-from-y" as string]: `${fromY}px`,
+              ["--uno-roulette-from-rot" as string]: `${fromRot}deg`,
+              ["--uno-roulette-to-x" as string]: `${toX}px`,
+              ["--uno-roulette-to-y" as string]: `${toY}px`,
+              ["--uno-roulette-to-rot" as string]: `${toRot}deg`,
+              animation: `uno-roulette-fly 620ms cubic-bezier(0.32, 0.72, 0.24, 1) ${delay}ms forwards`,
+              opacity: 0,
+              zIndex: 60 + index,
+              willChange: "transform, opacity",
+            }}
+          >
+            <UnoCard card={card} size="sm" static />
+          </div>
+        )
+      })}
     </div>
   )
 }
