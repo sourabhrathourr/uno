@@ -2,6 +2,9 @@ import { randomBytes, randomUUID } from "node:crypto"
 
 import {
   ROOM_CODE_LENGTH,
+  CHAT_EMOJIS,
+  CHAT_GIFS,
+  CHAT_PRESETS,
   catchUno,
   createDefaultHouseRules,
   createGame,
@@ -15,6 +18,7 @@ import {
   stageCards,
   takeDrawPenalty,
   type CatchUnoInput,
+  type ChatMessage,
   type CommandResult,
   type CreateRoomRequest,
   type CreateRoomResponse,
@@ -25,6 +29,7 @@ import {
   type PlayerGameSnapshot,
   type PlayCardsInput,
   type RoomSnapshot,
+  type SendChatMessageInput,
   type StageCardsInput,
 } from "@workspace/game"
 
@@ -32,6 +37,7 @@ type ManagedRoom = RoomSnapshot & {
   gameState: GameState | null
   sessionToPlayerId: Map<string, string>
   connectionIdsByPlayerId: Map<string, Set<string>>
+  lastChatAtByPlayerId: Map<string, number>
 }
 
 type JoinRoomResult = {
@@ -41,6 +47,8 @@ type JoinRoomResult = {
 }
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+const CHAT_HISTORY_LIMIT = 50
+const CHAT_RATE_LIMIT_MS = 650
 
 export class RoomManager {
   private readonly rooms = new Map<string, ManagedRoom>()
@@ -71,6 +79,7 @@ export class RoomManager {
       status: "lobby",
       hostPlayerId: host.id,
       players: [host],
+      chatMessages: [],
       houseRules,
       game: null,
       gameState: null,
@@ -79,6 +88,7 @@ export class RoomManager {
       updatedAt: now,
       sessionToPlayerId: new Map([[sessionId, host.id]]),
       connectionIdsByPlayerId: new Map(),
+      lastChatAtByPlayerId: new Map(),
     }
 
     this.rooms.set(code, room)
@@ -216,6 +226,48 @@ export class RoomManager {
     room.status = "playing"
     room.gameState = createGame({ players: room.players, houseRules: room.houseRules })
     touch(room)
+
+    return ok(snapshot(room))
+  }
+
+  sendChatMessage(
+    code: string,
+    playerId: string,
+    input: SendChatMessageInput,
+  ): CommandResult<RoomSnapshot> {
+    const room = this.rooms.get(normalizeRoomCode(code))
+    if (!room) {
+      return fail("room-not-found", "That room code does not exist.")
+    }
+
+    const player = findPlayer(room, playerId)
+    if (!player) {
+      return fail("player-not-found", "You are not seated in this room.")
+    }
+
+    const nowMs = Date.now()
+    const lastSentAt = room.lastChatAtByPlayerId.get(playerId) ?? 0
+    if (nowMs - lastSentAt < CHAT_RATE_LIMIT_MS) {
+      return fail("chat-too-fast", "Give the table a beat before sending again.")
+    }
+
+    const prepared = prepareChatMessage(input)
+    if (!prepared.ok) return prepared
+
+    const now = new Date(nowMs).toISOString()
+    const message: ChatMessage = {
+      id: randomUUID(),
+      playerId,
+      playerName: player.name,
+      kind: input.kind,
+      body: prepared.data.body,
+      label: prepared.data.label,
+      createdAt: now,
+    }
+
+    room.chatMessages = [...room.chatMessages, message].slice(-CHAT_HISTORY_LIMIT)
+    room.lastChatAtByPlayerId.set(playerId, nowMs)
+    touch(room, now)
 
     return ok(snapshot(room))
   }
@@ -446,6 +498,39 @@ function nextSeat(room: ManagedRoom): number {
   return room.players.length + 1
 }
 
+function prepareChatMessage(
+  input: SendChatMessageInput,
+): CommandResult<{ body: string; label?: string }> {
+  if (!input || typeof input.body !== "string") {
+    return fail("invalid-chat-message", "Send a valid chat message.")
+  }
+
+  const body = input.body.trim().replace(/\s+/g, " ")
+
+  switch (input.kind) {
+    case "text":
+      if (!body) return fail("empty-chat-message", "Write a message first.")
+      return ok({ body: body.slice(0, 240) })
+    case "preset":
+      if (!CHAT_PRESETS.includes(body as (typeof CHAT_PRESETS)[number])) {
+        return fail("invalid-chat-preset", "Choose one of the preset messages.")
+      }
+      return ok({ body })
+    case "emoji":
+      if (!CHAT_EMOJIS.includes(body as (typeof CHAT_EMOJIS)[number])) {
+        return fail("invalid-chat-emoji", "Choose one of the room emojis.")
+      }
+      return ok({ body })
+    case "gif": {
+      const gif = CHAT_GIFS.find((candidate) => candidate.url === body)
+      if (!gif) return fail("invalid-chat-gif", "Choose one of the room GIFs.")
+      return ok({ body: gif.url, label: gif.label })
+    }
+    default:
+      return fail("invalid-chat-kind", "That chat message type is not supported.")
+  }
+}
+
 function findPlayer(room: ManagedRoom, playerId: string): Player | undefined {
   return room.players.find((player) => player.id === playerId)
 }
@@ -461,6 +546,7 @@ function snapshot(room: ManagedRoom): RoomSnapshot {
     status: room.status,
     hostPlayerId: room.hostPlayerId,
     players: room.players.map((player) => ({ ...player })),
+    chatMessages: room.chatMessages.map((message) => ({ ...message })),
     houseRules: { ...room.houseRules },
     game: room.gameState ? projectPublicGame(room.gameState, gameContext(room)) : null,
     version: room.version,

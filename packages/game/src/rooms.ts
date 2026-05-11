@@ -30,6 +30,7 @@ export type RoomSnapshot = {
   status: RoomStatus
   hostPlayerId: string | null
   players: Player[]
+  chatMessages: ChatMessage[]
   houseRules: HouseRules
   game: PublicGameSnapshot | null
   version: number
@@ -59,3 +60,4 @@ export function isRoomCode(value: string): boolean {
   return ROOM_CODE_PATTERN.test(normalizeRoomCode(value))
 }
 import type { PublicGameSnapshot } from "./game"
+import type { ChatMessage } from "./chat"

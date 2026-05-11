@@ -1,4 +1,15 @@
 export type { Card, CardColor, CardFace, NumberValue } from "./cards"
+export {
+  CHAT_EMOJIS,
+  CHAT_GIFS,
+  CHAT_PRESETS,
+} from "./chat"
+export type {
+  ChatGifPreset,
+  ChatMessage,
+  ChatMessageKind,
+  SendChatMessageInput,
+} from "./chat"
 export { createNoMercyDeck, shuffleCards } from "./deck"
 export {
   catchUno,

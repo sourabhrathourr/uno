@@ -141,3 +141,31 @@
     cursor: pointer;
   }
 }
+
+@layer utilities {
+  .uno-scrollbar {
+    scrollbar-color: rgba(255, 255, 255, 0.24) transparent;
+    scrollbar-width: thin;
+  }
+
+  .uno-scrollbar::-webkit-scrollbar {
+    height: 6px;
+    width: 6px;
+  }
+
+  .uno-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .uno-scrollbar::-webkit-scrollbar-thumb {
+    border: 1px solid transparent;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.2);
+    background-clip: padding-box;
+  }
+
+  .uno-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.34);
+    background-clip: padding-box;
+  }
+}

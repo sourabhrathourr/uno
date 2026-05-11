@@ -9,8 +9,13 @@ import {
   Check,
   Clipboard,
   Circle,
+  ImageIcon,
+  MessageCircle,
   Play,
   RotateCw,
+  SendHorizontal,
+  Smile,
+  Sparkles,
   Trophy,
   UserRound,
   UsersRound,
@@ -27,17 +32,30 @@ import {
 } from "react"
 import { createPortal } from "react-dom"
 
-import type {
-  Card,
-  GameError,
-  Player,
-  PlayerGameSnapshot,
-  PlayCardsInput,
-  PlayColor,
-  RoomSnapshot,
+import {
+  CHAT_EMOJIS,
+  CHAT_GIFS,
+  CHAT_PRESETS,
+  type ChatMessage,
+  type Card,
+  type GameError,
+  type Player,
+  type PlayerGameSnapshot,
+  type PlayCardsInput,
+  type PlayColor,
+  type RoomSnapshot,
+  type SendChatMessageInput,
 } from "@workspace/game"
 import { Button } from "@workspace/ui/components/button"
 import { Checkbox } from "@workspace/ui/components/checkbox"
+import {
+  Drawer,
+  DrawerContent,
+  DrawerDescription,
+  DrawerHeader,
+  DrawerTitle,
+  DrawerTrigger,
+} from "@workspace/ui/components/drawer"
 import { UnoCard } from "@workspace/ui/components/uno-card"
 
 import { getGameSocket, getRoomPreview, type GameSocket } from "@/lib/realtime"
@@ -343,6 +361,19 @@ function RoomPage() {
     })
   }
 
+  function sendChatMessage(input: SendChatMessageInput) {
+    if (!socket) return
+    setError(null)
+    socket.emit("room:sendChatMessage", input, (result) => {
+      if (!result.ok) {
+        applyCommandError(result.error)
+        return
+      }
+
+      applyRoomSnapshot(result.data)
+    })
+  }
+
   function playCards(input: PlayCardsInput) {
     if (!socket || !isActiveTurnPlayer()) return
     setError(null)
@@ -483,6 +514,7 @@ function RoomPage() {
           onTakePenalty={takePenalty}
           onDrawRouletteCard={drawRouletteCard}
           onCatchUno={catchUno}
+          onSendChatMessage={sendChatMessage}
         />
         {showIntro && (
           <GameStartIntro
@@ -527,6 +559,7 @@ function GameTable({
   onTakePenalty,
   onDrawRouletteCard,
   onCatchUno,
+  onSendChatMessage,
 }: {
   room: RoomSnapshot
   player: Player
@@ -541,6 +574,7 @@ function GameTable({
   onTakePenalty: () => void
   onDrawRouletteCard: () => void
   onCatchUno: (targetPlayerId: string) => void
+  onSendChatMessage: (input: SendChatMessageInput) => void
 }) {
   const game = room.game
   const tableDropRef = useRef<HTMLDivElement | null>(null)
@@ -566,6 +600,7 @@ function GameTable({
   const prevRouletteActiveRef = useRef<{ playerId: string; cardCount: number } | null>(null)
   const narrowViewport = useMediaQuery("(max-width: 680px)")
   const shortViewport = useMediaQuery("(max-height: 760px)")
+  const mobileChatEnabled = useMediaQuery("(max-width: 1023px)")
   const compactSurface = narrowViewport || shortViewport
   const tableCardSize: ResponsiveCardSize = compactSurface ? "sm" : "md"
   const handCardSize: ResponsiveCardSize = compactSurface ? "sm" : "md"
@@ -932,7 +967,7 @@ function GameTable({
           </div>
         </header>
 
-        <section className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] gap-2 overflow-hidden lg:grid-rows-[minmax(0,1fr)_132px] xl:grid-cols-[minmax(0,1fr)_310px] xl:grid-rows-none">
+        <section className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] gap-2 overflow-hidden lg:grid-rows-[minmax(0,1fr)_220px] xl:grid-cols-[minmax(0,1fr)_310px] xl:grid-rows-none">
           <div className="relative grid min-h-0 grid-rows-[minmax(0,1fr)_clamp(188px,30dvh,300px)] gap-2 overflow-hidden sm:grid-rows-[minmax(0,1fr)_clamp(220px,30dvh,330px)] lg:gap-3">
             <div
               ref={tableDropRef}
@@ -1156,31 +1191,460 @@ function GameTable({
             </div>
           </div>
 
-          <aside className="hidden min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035] p-3 lg:flex xl:p-4">
-            <h2 className="text-sm font-medium text-white/82">Trace</h2>
-            <div className="mt-3 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
-              {game?.events
-                .slice()
-                .reverse()
-                .map((event) => (
-                  <div
-                    key={event.id}
-                    className="rounded-md border border-white/8 bg-black/20 px-3 py-2"
-                  >
-                    <p className="text-sm text-white/72">{event.message}</p>
-                  </div>
-                ))}
-            </div>
-            {error && (
-              <p className="mt-3 rounded-md border border-red-400/20 bg-red-500/10 px-3 py-2 text-sm text-red-100">
-                {error}
-              </p>
-            )}
-          </aside>
+          <TableChatPanel
+            messages={room.chatMessages}
+            selfPlayerId={player.id}
+            error={error}
+            onSendMessage={onSendChatMessage}
+          />
         </section>
+
+        {mobileChatEnabled && (
+          <MobileChatDrawer
+            messages={room.chatMessages}
+            selfPlayerId={player.id}
+            error={error}
+            onSendMessage={onSendChatMessage}
+          />
+        )}
       </div>
     </main>
   )
+}
+
+type ChatTray = "presets" | "emoji" | "gifs"
+
+function TableChatPanel({
+  messages,
+  selfPlayerId,
+  error,
+  onSendMessage,
+}: {
+  messages: ChatMessage[]
+  selfPlayerId: string
+  error: string | null
+  onSendMessage: (input: SendChatMessageInput) => void
+}) {
+  const [text, setText] = useState("")
+  const [tray, setTray] = useState<ChatTray | null>(null)
+
+  function send(input: SendChatMessageInput) {
+    playFx("buttonSoft", { volume: 0.36 })
+    onSendMessage(input)
+  }
+
+  function sendText() {
+    const body = text.trim()
+    if (!body) return
+    send({ kind: "text", body })
+    setText("")
+  }
+
+  return (
+    <aside className="hidden min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035] p-2 shadow-[0_18px_56px_rgba(0,0,0,0.28)] lg:flex xl:p-3">
+      <div className="flex shrink-0 items-center justify-between gap-3 px-1">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="grid size-8 shrink-0 place-items-center rounded-full border border-white/10 bg-black/28 text-white/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+            <MessageCircle className="size-4" strokeWidth={1.9} />
+          </span>
+          <div className="min-w-0">
+            <h2 className="text-sm font-semibold text-white/86">Table chat</h2>
+            <p className="text-[11px] text-white/42">Emoji, GIFs, and quick roasts</p>
+          </div>
+        </div>
+        <span className="rounded-full border border-white/10 bg-black/26 px-2 py-1 text-[11px] tabular-nums text-white/52">
+          {messages.length}
+        </span>
+      </div>
+
+      <ChatMessageList
+        messages={messages}
+        selfPlayerId={selfPlayerId}
+        className="mt-3 flex-1 pr-1"
+      />
+
+      {error && (
+        <p className="mt-2 rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-2 text-xs text-red-100 shadow-[0_12px_26px_rgba(0,0,0,0.22)]">
+          {error}
+        </p>
+      )}
+
+      <ChatComposer
+        text={text}
+        tray={tray}
+        onTextChange={setText}
+        onTrayChange={setTray}
+        onSend={send}
+        onSendText={sendText}
+      />
+    </aside>
+  )
+}
+
+function MobileChatDrawer({
+  messages,
+  selfPlayerId,
+  error,
+  onSendMessage,
+}: {
+  messages: ChatMessage[]
+  selfPlayerId: string
+  error: string | null
+  onSendMessage: (input: SendChatMessageInput) => void
+}) {
+  const [text, setText] = useState("")
+  const [tray, setTray] = useState<ChatTray | null>(null)
+
+  function send(input: SendChatMessageInput) {
+    playFx("buttonSoft", { volume: 0.36 })
+    onSendMessage(input)
+  }
+
+  function sendText() {
+    const body = text.trim()
+    if (!body) return
+    send({ kind: "text", body })
+    setText("")
+  }
+
+  return (
+    <Drawer>
+      <DrawerTrigger asChild>
+        <button
+          type="button"
+          className="fixed bottom-[calc(env(safe-area-inset-bottom)+1rem)] right-4 z-50 grid size-12 place-items-center rounded-full border border-white/14 bg-white text-neutral-950 shadow-[0_18px_46px_rgba(0,0,0,0.42)] transition-[scale,box-shadow] duration-200 ease-[cubic-bezier(0.2,0,0,1)] active:scale-[0.96] lg:hidden"
+          aria-label="Open table chat"
+        >
+          <MessageCircle className="size-5" strokeWidth={2} />
+          {messages.length > 0 && (
+            <span className="absolute -right-1 -top-1 grid min-w-5 place-items-center rounded-full bg-neutral-950 px-1 text-[10px] font-semibold tabular-nums text-white shadow-[0_8px_20px_rgba(0,0,0,0.36)]">
+              {Math.min(messages.length, 99)}
+            </span>
+          )}
+        </button>
+      </DrawerTrigger>
+      <DrawerContent className="border-white/10 bg-[#090806] text-white lg:hidden">
+        <DrawerHeader className="px-4 pb-2 pt-3 text-left">
+          <DrawerTitle className="text-base text-white">Table chat</DrawerTitle>
+          <DrawerDescription className="text-xs text-white/45">
+            Send a quick reaction without leaving the table.
+          </DrawerDescription>
+        </DrawerHeader>
+
+        <ChatMessageList
+          messages={messages}
+          selfPlayerId={selfPlayerId}
+          className="max-h-[46dvh] px-4 pb-3"
+        />
+
+        {error && (
+          <p className="mx-4 mb-2 rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-2 text-xs text-red-100">
+            {error}
+          </p>
+        )}
+
+        <div className="border-t border-white/10 p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]">
+          <ChatComposer
+            text={text}
+            tray={tray}
+            onTextChange={setText}
+            onTrayChange={setTray}
+            onSend={send}
+            onSendText={sendText}
+          />
+        </div>
+      </DrawerContent>
+    </Drawer>
+  )
+}
+
+function ChatMessageList({
+  messages,
+  selfPlayerId,
+  className,
+}: {
+  messages: ChatMessage[]
+  selfPlayerId: string
+  className?: string
+}) {
+  const listRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    const list = listRef.current
+    if (!list) return
+    list.scrollTo({ top: list.scrollHeight, behavior: "smooth" })
+  }, [messages.length])
+
+  return (
+    <div
+      ref={listRef}
+      className={
+        "uno-scrollbar flex min-h-0 flex-col gap-2 overflow-y-auto " +
+        (className ?? "")
+      }
+    >
+      {messages.length === 0 ? (
+        <div className="grid min-h-[116px] place-items-center rounded-xl bg-black/18 px-4 text-center shadow-[inset_0_0_0_1px_rgba(255,255,255,0.045)]">
+          <div>
+            <Sparkles className="mx-auto size-4 text-yellow-200/75" strokeWidth={1.9} />
+            <p className="mt-2 text-sm font-medium text-white/76">No chatter yet</p>
+            <p className="mt-1 text-xs leading-relaxed text-white/42">
+              Type a message or open quick actions.
+            </p>
+          </div>
+        </div>
+      ) : (
+        messages.map((message) => (
+          <ChatMessageBubble
+            key={message.id}
+            message={message}
+            isSelf={message.playerId === selfPlayerId}
+          />
+        ))
+      )}
+    </div>
+  )
+}
+
+function ChatComposer({
+  text,
+  tray,
+  onTextChange,
+  onTrayChange,
+  onSend,
+  onSendText,
+}: {
+  text: string
+  tray: ChatTray | null
+  onTextChange: (value: string) => void
+  onTrayChange: (tray: ChatTray | null) => void
+  onSend: (input: SendChatMessageInput) => void
+  onSendText: () => void
+}) {
+  function toggleTray(nextTray: ChatTray) {
+    onTrayChange(tray === nextTray ? null : nextTray)
+  }
+
+  function sendQuick(input: SendChatMessageInput) {
+    onSend(input)
+    onTrayChange(null)
+  }
+
+  return (
+    <div className="shrink-0 rounded-xl bg-black/24 p-1.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.055)]">
+      {tray && (
+        <ChatQuickTray
+          tray={tray}
+          onSend={sendQuick}
+        />
+      )}
+
+      <div className={tray ? "mt-2" : ""}>
+        <div className="mb-1.5 flex items-center gap-1">
+          <ChatToolButton
+            active={tray === "presets"}
+            label="Presets"
+            icon={<Sparkles className="size-3" strokeWidth={1.9} />}
+            onClick={() => toggleTray("presets")}
+          />
+          <ChatToolButton
+            active={tray === "emoji"}
+            label="Emoji"
+            icon={<Smile className="size-3" strokeWidth={1.9} />}
+            onClick={() => toggleTray("emoji")}
+          />
+          <ChatToolButton
+            active={tray === "gifs"}
+            label="GIFs"
+            icon={<ImageIcon className="size-3" strokeWidth={1.9} />}
+            onClick={() => toggleTray("gifs")}
+          />
+        </div>
+
+        <div className="flex items-end gap-1.5">
+        <textarea
+          value={text}
+          onChange={(event) => onTextChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" || event.shiftKey) return
+            event.preventDefault()
+            onSendText()
+          }}
+          rows={1}
+          maxLength={240}
+          placeholder="Talk..."
+          className="min-h-9 min-w-0 flex-1 resize-none rounded-lg border border-white/10 bg-neutral-950/74 px-2.5 py-2 text-sm leading-5 text-white/84 outline-none transition-[border-color,background-color,box-shadow] duration-200 ease-[cubic-bezier(0.2,0,0,1)] placeholder:text-white/32 focus:border-white/24 focus:bg-neutral-950 focus:shadow-[0_0_0_3px_rgba(255,255,255,0.055)]"
+        />
+        <button
+          type="button"
+          onClick={onSendText}
+          disabled={!text.trim()}
+          className="grid size-9 shrink-0 place-items-center rounded-lg bg-white text-neutral-950 shadow-[0_10px_24px_rgba(0,0,0,0.24)] transition-[background-color,opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] hover:bg-white/86 active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40"
+          aria-label="Send message"
+        >
+          <SendHorizontal className="size-3.5" strokeWidth={2.2} />
+        </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ChatQuickTray({
+  tray,
+  onSend,
+}: {
+  tray: ChatTray
+  onSend: (input: SendChatMessageInput) => void
+}) {
+  if (tray === "presets") {
+    return (
+      <div className="uno-scrollbar grid max-h-[118px] grid-cols-2 gap-1.5 overflow-y-auto pr-1">
+        {CHAT_PRESETS.map((preset) => (
+          <button
+            key={preset}
+            type="button"
+            onClick={() => onSend({ kind: "preset", body: preset })}
+            className="min-h-9 rounded-lg border border-white/10 bg-white/[0.055] px-2.5 py-1.5 text-left text-[11px] leading-snug text-white/72 shadow-[0_8px_18px_rgba(0,0,0,0.16)] transition-[background-color,border-color,color,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] hover:border-white/18 hover:bg-white/[0.085] hover:text-white active:scale-[0.96]"
+          >
+            {preset}
+          </button>
+        ))}
+      </div>
+    )
+  }
+
+  if (tray === "emoji") {
+    return (
+      <div className="grid grid-cols-6 gap-1.5">
+        {CHAT_EMOJIS.map((emoji) => (
+          <button
+            key={emoji}
+            type="button"
+            onClick={() => onSend({ kind: "emoji", body: emoji })}
+            className="grid size-10 place-items-center rounded-xl border border-white/10 bg-white/[0.055] text-lg shadow-[0_8px_18px_rgba(0,0,0,0.16)] transition-[background-color,border-color,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] hover:border-white/18 hover:bg-white/[0.085] active:scale-[0.96]"
+            aria-label={`Send ${emoji}`}
+          >
+            {emoji}
+          </button>
+        ))}
+      </div>
+    )
+  }
+
+  return (
+    <div className="uno-scrollbar grid max-h-40 grid-cols-2 gap-2 overflow-y-auto pr-1">
+      {CHAT_GIFS.map((gif) => (
+        <button
+          key={gif.url}
+          type="button"
+          onClick={() => onSend({ kind: "gif", body: gif.url })}
+          className="group min-h-20 overflow-hidden rounded-xl bg-black/36 text-left shadow-[0_10px_24px_rgba(0,0,0,0.22),inset_0_0_0_1px_rgba(255,255,255,0.075)] transition-[scale,filter] duration-200 ease-[cubic-bezier(0.2,0,0,1)] hover:brightness-110 active:scale-[0.96]"
+        >
+          <img
+            src={gif.url}
+            alt=""
+            className="h-16 w-full object-cover outline outline-1 outline-white/10"
+            loading="lazy"
+          />
+          <span className="block truncate px-2 py-1.5 text-[11px] font-medium text-white/64 group-hover:text-white/84">
+            {gif.label}
+          </span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function ChatToolButton({
+  active,
+  icon,
+  label,
+  onClick,
+}: {
+  active: boolean
+  icon: ReactNode
+  label: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-label={active ? `Hide ${label}` : `Show ${label}`}
+      aria-pressed={active}
+      className={
+        "grid size-7 shrink-0 place-items-center rounded-md border transition-[background-color,border-color,color,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] active:scale-[0.96] " +
+        (active
+          ? "border-white/24 bg-white text-neutral-950 shadow-[0_10px_22px_rgba(0,0,0,0.22)]"
+          : "border-white/8 bg-white/[0.045] text-white/54 hover:border-white/16 hover:bg-white/[0.075] hover:text-white/78")
+      }
+    >
+      {icon}
+    </button>
+  )
+}
+
+function ChatMessageBubble({
+  message,
+  isSelf,
+}: {
+  message: ChatMessage
+  isSelf: boolean
+}) {
+  return (
+    <div className={"flex " + (isSelf ? "justify-end" : "justify-start")}>
+      <div className={"max-w-[88%] " + (isSelf ? "items-end" : "items-start")}>
+        <div
+          className={
+            "mb-1 flex items-center gap-1.5 px-1 text-[10px] font-medium text-white/36 " +
+            (isSelf ? "justify-end" : "justify-start")
+          }
+        >
+          <span className="max-w-[9rem] truncate">{isSelf ? "You" : message.playerName}</span>
+          <span className="tabular-nums">{formatChatTime(message.createdAt)}</span>
+        </div>
+        <div
+          className={
+            "overflow-hidden rounded-2xl px-3 py-2 shadow-[0_10px_24px_rgba(0,0,0,0.22)] " +
+            (isSelf
+              ? "rounded-br-md bg-white text-neutral-950"
+              : "rounded-bl-md bg-white/[0.085] text-white/82 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.07),0_10px_24px_rgba(0,0,0,0.22)]")
+          }
+        >
+          {message.kind === "gif" ? (
+            <div className="-m-1 w-[min(180px,100%)]">
+              <img
+                src={message.body}
+                alt={message.label ?? "GIF reaction"}
+                className="h-28 w-full rounded-xl object-cover outline outline-1 outline-white/10"
+                loading="lazy"
+              />
+              {message.label && (
+                <p className={"px-1 pt-1 text-[11px] " + (isSelf ? "text-neutral-600" : "text-white/52")}>
+                  {message.label}
+                </p>
+              )}
+            </div>
+          ) : message.kind === "emoji" ? (
+            <p className="text-3xl leading-none">{message.body}</p>
+          ) : (
+            <p className="text-sm leading-relaxed text-pretty">{message.body}</p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function formatChatTime(value: string) {
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return "--:--"
+  return `${date.getHours().toString().padStart(2, "0")}:${date
+    .getMinutes()
+    .toString()
+    .padStart(2, "0")}`
 }
 
 function FirstPlaceCelebration({ playerName }: { playerName: string }) {
@@ -2393,6 +2857,7 @@ function CopyInviteButton({
   onCopy: () => Promise<void>
 }) {
   const [copied, setCopied] = useState(false)
+  const [copyFailed, setCopyFailed] = useState(false)
 
   useEffect(() => {
     if (!copied) return
@@ -2400,9 +2865,22 @@ function CopyInviteButton({
     return () => window.clearTimeout(t)
   }, [copied])
 
+  useEffect(() => {
+    if (!copyFailed) return
+    const t = window.setTimeout(() => setCopyFailed(false), 1800)
+    return () => window.clearTimeout(t)
+  }, [copyFailed])
+
   async function handleCopy() {
-    await onCopy()
-    setCopied(true)
+    setCopyFailed(false)
+    try {
+      await onCopy()
+      setCopied(true)
+    } catch (error) {
+      setCopied(false)
+      setCopyFailed(true)
+      console.error("Failed to copy invite link", error)
+    }
   }
 
   // Both icons sit absolutely on top of each other and cross-fade.
@@ -2415,10 +2893,23 @@ function CopyInviteButton({
     <Button
       type="button"
       size={iconOnly ? "icon-sm" : "sm"}
-      aria-label={iconOnly ? (copied ? "Invite link copied" : "Copy invite link") : "Copy invite link"}
+      aria-label={
+        iconOnly
+          ? copied
+            ? "Invite link copied"
+            : copyFailed
+              ? "Invite link copy failed"
+              : "Copy invite link"
+          : copyFailed
+            ? "Invite link copy failed"
+            : "Copy invite link"
+      }
       aria-live="polite"
       onClick={handleCopy}
-      className="bg-white text-neutral-950 hover:bg-white/85"
+      className={
+        "relative z-50 bg-white text-neutral-950 transition-[background-color,color,scale,transform] hover:bg-white/85 active:scale-[0.96] " +
+        (copyFailed ? "bg-red-100 text-red-950 hover:bg-red-100" : "")
+      }
     >
       <span
         data-icon={iconOnly ? undefined : "inline-start"}
@@ -2433,7 +2924,7 @@ function CopyInviteButton({
           className={`${layer} size-3.5 text-emerald-600 ${copied ? shown : hidden}`}
         />
       </span>
-      {!iconOnly && <span>Copy invite</span>}
+      {!iconOnly && <span>{copyFailed ? "Try again" : "Copy invite"}</span>}
     </Button>
   )
 }
@@ -2693,24 +3184,8 @@ function LobbyWaitingRoom({
 
   return (
     <main className="relative h-dvh overflow-hidden bg-[#070604] text-white antialiased">
-      <style>
-        {`
-          @keyframes uno-lobby-flicker {
-            0%, 84%, 100% { opacity: 1; }
-            86% { opacity: 0.68; }
-            88% { opacity: 1; }
-            92% { opacity: 0.82; }
-            94% { opacity: 1; }
-          }
-          @keyframes uno-lobby-pulse {
-            0%, 100% { box-shadow: 0 0 0 0 rgba(252, 211, 77, 0.45); }
-            50% { box-shadow: 0 0 0 12px rgba(252, 211, 77, 0); }
-          }
-        `}
-      </style>
-
       <div
-        className="absolute inset-0"
+        className="pointer-events-none absolute inset-0"
         style={{
           backgroundImage:
             "radial-gradient(circle at 50% 38%, rgba(255,210,150,0.10) 0%, rgba(0,0,0,0) 48%), radial-gradient(circle at 50% 78%, rgba(0,0,0,0.55) 0%, rgba(0,0,0,0) 60%)",
@@ -2718,8 +3193,8 @@ function LobbyWaitingRoom({
         aria-hidden="true"
       />
 
-      <div className="mx-auto flex h-full w-full max-w-[1500px] flex-col gap-3 px-3 py-3 sm:px-5 sm:py-4 lg:px-8">
-        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 pb-2 sm:pb-3">
+      <div className="relative z-10 mx-auto flex h-full w-full max-w-[1500px] flex-col gap-3 px-3 py-3 sm:px-5 sm:py-4 lg:px-8">
+        <header className="relative z-40 flex shrink-0 items-center justify-between gap-3 border-b border-white/10 pb-2 sm:pb-3">
           <div>
             <p className="text-[10px] font-medium tracking-[0.18em] text-white/45 uppercase sm:text-xs">
               UNO No Mercy
@@ -2735,7 +3210,7 @@ function LobbyWaitingRoom({
           </div>
         </header>
 
-        <section className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] gap-3 overflow-hidden lg:grid-cols-[minmax(0,1fr)_320px] lg:grid-rows-none">
+        <section className="relative z-10 grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] gap-3 overflow-hidden lg:grid-cols-[minmax(0,1fr)_320px] lg:grid-rows-none">
           <DimmedTablePreview
             room={room}
             player={player}
@@ -2856,11 +3331,6 @@ function DimmedTablePreview({
 
         <div
           className="pointer-events-auto relative z-10 flex w-full max-w-md flex-col items-center gap-4 rounded-2xl border border-white/14 bg-neutral-950/72 px-6 py-5 text-center shadow-[0_24px_60px_rgba(0,0,0,0.45)] backdrop-blur-md sm:px-8 sm:py-6"
-          style={{
-            animation: everyoneReady
-              ? "uno-lobby-flicker 2.4s ease-in-out infinite"
-              : undefined,
-          }}
         >
           <span
             className={
@@ -2874,11 +3344,6 @@ function DimmedTablePreview({
               className={
                 "size-1.5 rounded-full " +
                 (everyoneReady ? "bg-amber-200" : "bg-white/55")
-              }
-              style={
-                everyoneReady
-                  ? { animation: "uno-lobby-pulse 1.6s ease-out infinite" }
-                  : undefined
               }
             />
             {everyoneReady ? "Lights are about to come on" : "Lights off · Waiting"}

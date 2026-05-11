@@ -176,6 +176,14 @@ io.on("connection", (socket) => {
     }
   })
 
+  socket.on("room:sendChatMessage", (input, ack) => {
+    const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
+      rooms.sendChatMessage(roomCode, playerId, input),
+    )
+    ack(result)
+    if (result.ok) void emitRoomState(result.data.code, result.data)
+  })
+
   socket.on("game:playCards", (input, ack) => {
     const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
       rooms.playCards(roomCode, playerId, input),

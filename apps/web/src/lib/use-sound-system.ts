@@ -1,14 +1,19 @@
-import { useEffect } from "react"
-import { useSoundEnabled } from "react-sounds"
+import { useEffect, useState } from "react"
 
-import { startSoundSystem } from "./sound"
+import { isSfxEnabled, setSfxEnabled, startSoundSystem } from "./sound"
 
 export function useSoundSystem() {
-  const [enabled, setEnabled] = useSoundEnabled()
+  const [enabled, setEnabledState] = useState(() => isSfxEnabled())
 
   useEffect(() => {
     startSoundSystem()
+    setEnabledState(isSfxEnabled())
   }, [])
+
+  function setEnabled(nextEnabled: boolean) {
+    setSfxEnabled(nextEnabled)
+    setEnabledState(nextEnabled)
+  }
 
   return { enabled, setEnabled }
 }

@@ -1,19 +1,54 @@
-import {
-  isSoundEnabled,
-  playSound as playLibrarySound,
-  preloadSounds,
-  setSoundEnabled,
-  type SoundOptions,
-} from "react-sounds"
+type SoundOptions = {
+  volume?: number
+  playbackRate?: number
+  loop?: boolean
+}
+
+type ReactSoundsModule = {
+  playSound: (name: string, options?: SoundOptions) => Promise<void>
+  preloadSounds: (names: string[]) => Promise<void>
+  setSoundEnabled: (enabled: boolean) => void
+}
 
 const LOCAL_SOUNDS = {
   cardDrop: "/card-drop.mp3",
   cardTake: "/card-take.mp3",
 } as const
 
+const SOUND_ENABLED_KEY = "uno:sfx-enabled"
+
 export type LocalSoundName = keyof typeof LOCAL_SOUNDS
 
 const localCache = new Map<LocalSoundName, HTMLAudioElement>()
+let soundModulePromise: Promise<ReactSoundsModule | null> | null = null
+let soundEnabled = true
+
+function loadSoundModule() {
+  if (typeof window === "undefined") return Promise.resolve(null)
+  soundModulePromise ??= import("react-sounds")
+    .then((module) => module as unknown as ReactSoundsModule)
+    .catch(() => null)
+  return soundModulePromise
+}
+
+function readStoredSoundEnabled() {
+  if (typeof window === "undefined") return true
+  try {
+    const stored = window.localStorage.getItem(SOUND_ENABLED_KEY)
+    return stored === null ? true : stored === "true"
+  } catch {
+    return true
+  }
+}
+
+function writeStoredSoundEnabled(enabled: boolean) {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.setItem(SOUND_ENABLED_KEY, String(enabled))
+  } catch {
+    // Storage can fail in private or constrained contexts; sound still works in memory.
+  }
+}
 
 function getLocalAudio(name: LocalSoundName): HTMLAudioElement | null {
   if (typeof window === "undefined") return null
@@ -28,7 +63,7 @@ function getLocalAudio(name: LocalSoundName): HTMLAudioElement | null {
 
 export function playLocalSound(name: LocalSoundName, volume = 0.7) {
   if (typeof window === "undefined") return
-  if (!isSoundEnabled()) return
+  if (!isSfxEnabled()) return
   const base = getLocalAudio(name)
   if (!base) return
   const clone = base.cloneNode(true) as HTMLAudioElement
@@ -36,12 +71,10 @@ export function playLocalSound(name: LocalSoundName, volume = 0.7) {
   void clone.play().catch(() => {})
 }
 
-export function playLibrary(
-  name: Parameters<typeof playLibrarySound>[0],
-  options?: SoundOptions,
-) {
+export function playLibrary(name: string, options?: SoundOptions) {
   if (typeof window === "undefined") return
-  void playLibrarySound(name, options).catch(() => {})
+  if (!isSfxEnabled()) return
+  void loadSoundModule().then((module) => module?.playSound(name, options))
 }
 
 const SOUNDS = {
@@ -72,14 +105,20 @@ export function playFx(name: LibrarySound, options?: SoundOptions) {
   playLibrary(SOUNDS[name], options)
 }
 
-const PRELOAD_LIST: Parameters<typeof preloadSounds>[0] = Object.values(SOUNDS)
+const PRELOAD_LIST = Object.values(SOUNDS)
 
 let preloadStarted = false
 export function startSoundSystem() {
   if (typeof window === "undefined") return
+  soundEnabled = readStoredSoundEnabled()
   if (preloadStarted) return
   preloadStarted = true
-  void preloadSounds(PRELOAD_LIST).catch(() => {})
+
+  void loadSoundModule().then((module) => {
+    module?.setSoundEnabled(soundEnabled)
+    return module?.preloadSounds(PRELOAD_LIST)
+  })
+
   Object.keys(LOCAL_SOUNDS).forEach((name) => {
     getLocalAudio(name as LocalSoundName)
   })
@@ -87,17 +126,20 @@ export function startSoundSystem() {
 
 export function isSfxEnabled() {
   if (typeof window === "undefined") return true
-  return isSoundEnabled()
+  soundEnabled = readStoredSoundEnabled()
+  return soundEnabled
 }
 
 export function setSfxEnabled(enabled: boolean) {
-  if (typeof window === "undefined") return
-  setSoundEnabled(enabled)
+  soundEnabled = enabled
+  writeStoredSoundEnabled(enabled)
+  void loadSoundModule().then((module) => module?.setSoundEnabled(enabled))
 }
 
 export type CardSoundKind = "play" | "draw"
 
 export function playCardSound(kind: CardSoundKind, count = 1) {
+  if (typeof window === "undefined") return
   if (kind === "play") {
     playLocalSound("cardDrop", 0.75)
     if (count > 1) {
@@ -116,6 +158,7 @@ export function playCardSound(kind: CardSoundKind, count = 1) {
 }
 
 export function playShuffleSound() {
+  if (typeof window === "undefined") return
   for (let index = 0; index < 4; index += 1) {
     window.setTimeout(
       () => playLocalSound("cardTake", 0.32 + Math.random() * 0.18),

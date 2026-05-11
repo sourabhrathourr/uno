@@ -4,6 +4,7 @@ import type {
   PlayCardsInput,
   StageCardsInput,
 } from "./game"
+import type { SendChatMessageInput } from "./chat"
 import type { HouseRules, Player, RoomSnapshot } from "./rooms"
 
 export type GameError = {
@@ -74,6 +75,10 @@ export type ClientToServerEvents = {
     ack: (result: CommandResult<RoomSnapshot>) => void,
   ) => void
   "room:start": (ack: (result: CommandResult<RoomSnapshot>) => void) => void
+  "room:sendChatMessage": (
+    input: SendChatMessageInput,
+    ack: (result: CommandResult<RoomSnapshot>) => void,
+  ) => void
   "game:playCards": (
     input: PlayCardsInput,
     ack: (result: CommandResult<RoomSnapshot>) => void,
