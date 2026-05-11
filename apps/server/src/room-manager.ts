@@ -47,7 +47,7 @@ type JoinRoomResult = {
 }
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-const CHAT_HISTORY_LIMIT = 50
+const CHAT_HISTORY_LIMIT = 250
 const CHAT_RATE_LIMIT_MS = 650
 
 export class RoomManager {
