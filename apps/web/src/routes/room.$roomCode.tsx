@@ -278,10 +278,14 @@ function RoomPage() {
 
         setError(null)
         applyRoomSnapshot(result.data)
-      } catch {
+      } catch (cause) {
         if (cancelled) return
         setLoadingPreview(false)
-        setError("Could not reach the game server on localhost:4001.")
+        setError(
+          cause instanceof Error
+            ? cause.message
+            : "Could not reach the game server.",
+        )
       }
     }
 

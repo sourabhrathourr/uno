@@ -46,8 +46,12 @@ function App() {
         to: "/room/$roomCode",
         params: { roomCode: result.data.room.code },
       })
-    } catch {
-      setError("Could not reach the game server on localhost:4001.")
+    } catch (cause) {
+      setError(
+        cause instanceof Error
+          ? cause.message
+          : "Could not reach the game server.",
+      )
     } finally {
       setCreating(false)
     }

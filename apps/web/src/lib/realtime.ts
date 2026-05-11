@@ -14,7 +14,10 @@ export type GameSocket = Socket<ServerToClientEvents, ClientToServerEvents>
 let socket: GameSocket | null = null
 
 export function getRealtimeUrl(): string {
-  return import.meta.env.VITE_SOCKET_URL ?? "http://localhost:4001"
+  const configuredUrl = import.meta.env.VITE_SOCKET_URL?.trim()
+  if (configuredUrl) return configuredUrl.replace(/\/$/, "")
+  if (import.meta.env.DEV) return "http://localhost:4001"
+  throw new Error("Missing VITE_SOCKET_URL for the deployed web app.")
 }
 
 export function getGameSocket(): GameSocket {
