@@ -21,6 +21,7 @@ import {
   UsersRound,
   Volume2,
   VolumeX,
+  X,
 } from "lucide-react"
 import {
   useEffect,
@@ -48,14 +49,6 @@ import {
 } from "@workspace/game"
 import { Button } from "@workspace/ui/components/button"
 import { Checkbox } from "@workspace/ui/components/checkbox"
-import {
-  Drawer,
-  DrawerContent,
-  DrawerDescription,
-  DrawerHeader,
-  DrawerTitle,
-  DrawerTrigger,
-} from "@workspace/ui/components/drawer"
 import { UnoCard } from "@workspace/ui/components/uno-card"
 
 import { getGameSocket, getRoomPreview, type GameSocket } from "@/lib/realtime"
@@ -604,7 +597,6 @@ function GameTable({
   const prevRouletteActiveRef = useRef<{ playerId: string; cardCount: number } | null>(null)
   const narrowViewport = useMediaQuery("(max-width: 680px)")
   const shortViewport = useMediaQuery("(max-height: 760px)")
-  const mobileChatEnabled = useMediaQuery("(max-width: 1023px)")
   const compactSurface = narrowViewport || shortViewport
   const tableCardSize: ResponsiveCardSize = compactSurface ? "sm" : "md"
   const handCardSize: ResponsiveCardSize = compactSurface ? "sm" : "md"
@@ -940,6 +932,294 @@ function GameTable({
     }
   }
 
+  const tableStatusTitle =
+    gameFinished && firstWinner
+      ? `${firstWinner.name} won this hand`
+      : isMyTurn
+        ? "Your turn"
+        : `${playerName(room, game?.turnPlayerId)} is playing`
+  const tableStatusDetail = game?.drawStack
+    ? `Draw stack is +${game.drawStack.amount}. Stack +${game.drawStack.minimum} or higher.`
+    : `${game?.discardPileCount ?? 0} cards discarded`
+
+  if (narrowViewport) {
+    return (
+      <main className="h-dvh overflow-hidden bg-[#070604] text-white antialiased">
+        {celebratingWinner && (
+          <FirstPlaceCelebration playerName={celebratingWinner.name} />
+        )}
+        {rouletteFly && (
+          <RouletteFlyToHand
+            key={rouletteFly.sessionId}
+            cards={rouletteFly.cards}
+            targetPlayerId={rouletteFly.targetPlayerId}
+            isSelfTarget={rouletteFly.targetPlayerId === player.id}
+            onDone={() => setRouletteFly(null)}
+          />
+        )}
+
+        <div className="mx-auto flex h-full min-h-0 w-full max-w-[680px] flex-col gap-2 px-2 py-2">
+          <header className="flex shrink-0 items-center justify-between gap-2 rounded-2xl border border-white/10 bg-white/[0.035] px-3 py-2 shadow-[0_14px_42px_rgba(0,0,0,0.28)]">
+            <div className="min-w-0">
+              <p className="text-[9px] font-medium tracking-[0.18em] text-white/42 uppercase">
+                UNO No Mercy
+              </p>
+              <h1 className="truncate text-base font-semibold tracking-tight">
+                Room {room.code}
+              </h1>
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              <SoundToggle />
+              <StatusDot connected={connected} />
+              <CopyInviteButton iconOnly onCopy={onCopyInvite} />
+              <MobileChatSheet
+                messages={room.chatMessages}
+                selfPlayerId={player.id}
+                error={error}
+                onSendMessage={onSendChatMessage}
+              />
+            </div>
+          </header>
+
+          <MobilePlayerStrip
+            room={room}
+            game={game}
+            selfPlayerId={player.id}
+            canTakeDrawPenalty={Boolean(playerGame?.canTakeDrawPenalty)}
+            onTakeDrawPenalty={onTakePenalty}
+          />
+
+          <section
+            ref={tableDropRef}
+            style={{
+              backgroundImage:
+                "linear-gradient(135deg, rgba(255,255,255,0.09), rgba(255,255,255,0) 18%, rgba(0,0,0,0.18) 62%), repeating-linear-gradient(92deg, rgba(255,255,255,0.035) 0 10px, rgba(0,0,0,0.05) 10px 22px), linear-gradient(90deg, #5a341d, #7a4829 38%, #4b2917)",
+            }}
+            className={
+              "relative isolate min-h-0 flex-1 overflow-hidden rounded-[1.35rem] border p-2 shadow-[0_26px_70px_rgba(0,0,0,0.46)] transition-[border-color,box-shadow] " +
+              (tableDragActive
+                ? "border-white/35 shadow-[0_26px_70px_rgba(0,0,0,0.46),inset_0_0_0_2px_rgba(255,255,255,0.16)]"
+                : draggingCardId
+                  ? "border-white/22"
+                  : "border-white/12")
+            }
+          >
+            <div className="pointer-events-none absolute inset-0 rounded-[1.35rem] bg-black/[0.08] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.32),inset_0_0_0_2px_rgba(255,255,255,0.045),inset_0_24px_80px_rgba(0,0,0,0.32)]" />
+
+            <div className="relative z-10 flex h-full min-h-0 flex-col">
+              <div className="flex shrink-0 items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-white">
+                    {tableStatusTitle}
+                  </p>
+                  <p className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-white/64">
+                    {tableStatusDetail}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-1">
+                  <DirectionPill direction={game?.direction ?? 1} compact />
+                  <ColorPill color={game?.currentColor ?? "red"} />
+                </div>
+              </div>
+
+              {(drawStack || rouletteChoice) && (
+                <div className="mt-2 flex shrink-0 flex-wrap items-center gap-1.5">
+                  {drawStack && (
+                    <div className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-black/48 px-2.5 py-1 text-[11px] text-white/68 shadow-[0_10px_24px_rgba(0,0,0,0.22)] backdrop-blur-md">
+                      <span className="font-semibold text-red-100">
+                        Draw +{drawStack.amount}
+                      </span>
+                      <span className="text-white/42">stack +{drawStack.minimum}+</span>
+                      {playerGame?.canTakeDrawPenalty && (
+                        <Button
+                          type="button"
+                          size="xs"
+                          onClick={onTakePenalty}
+                          className="h-6 rounded-full bg-white px-2 text-[11px] text-neutral-950 hover:bg-white/85"
+                        >
+                          Take
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                  {rouletteChoice && (
+                    <div className="inline-flex items-center gap-1.5 rounded-full border border-amber-200/20 bg-amber-300/12 px-2.5 py-1 text-[11px] text-amber-50 shadow-[0_10px_24px_rgba(0,0,0,0.22)] backdrop-blur-md">
+                      <span className="truncate">
+                        {rouletteTargetName} draws until {rouletteChoice.color}
+                      </span>
+                      {canDrawRoulette && (
+                        <Button
+                          type="button"
+                          size="xs"
+                          onClick={onDrawRouletteCard}
+                          className="h-6 rounded-full bg-amber-100 px-2 text-[11px] text-amber-950 hover:bg-amber-50"
+                        >
+                          Draw
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="grid min-h-0 flex-1 place-items-center py-2">
+                <div className="flex w-full max-w-[360px] flex-col items-center justify-center gap-2">
+                  <div className="flex items-start justify-center gap-4">
+                    <DeckStack
+                      canDraw={Boolean(playerGame?.canDraw)}
+                      alreadyDrawn={Boolean(playerGame?.canEndTurn)}
+                      drawPileCount={game?.drawPileCount ?? 0}
+                      size="sm"
+                      onDraw={onDrawCard}
+                    />
+                    <DiscardStack card={game?.topDiscard ?? null} size="sm" />
+                  </div>
+                  <TableStagedPlay
+                    cards={tableStagedCards}
+                    playerName={tableStagedPlayerName}
+                    mode={tableStagedMode}
+                    targetColor={
+                      rouletteChoice?.color ??
+                      (game?.stagedPlay?.kind === "roulette"
+                        ? game.currentColor
+                        : null)
+                    }
+                    canEdit={canEditTableStaged}
+                    onCardClick={toggleSelected}
+                  />
+                </div>
+              </div>
+            </div>
+          </section>
+
+          {(error || playerGame?.catchablePlayerIds.length) && (
+            <div className="shrink-0 space-y-1">
+              {error && (
+                <p className="rounded-xl border border-red-400/20 bg-red-500/12 px-3 py-2 text-xs text-red-100 shadow-[0_14px_34px_rgba(0,0,0,0.26)] backdrop-blur-md">
+                  {error}
+                </p>
+              )}
+              {playerGame?.catchablePlayerIds.length ? (
+                <div className="flex gap-2 overflow-x-auto rounded-xl border border-yellow-300/20 bg-yellow-300/10 p-2 backdrop-blur-md">
+                  {playerGame.catchablePlayerIds.map((targetPlayerId) => (
+                    <Button
+                      key={targetPlayerId}
+                      type="button"
+                      size="xs"
+                      onClick={() => onCatchUno(targetPlayerId)}
+                      className="shrink-0 bg-yellow-100 text-yellow-950 hover:bg-yellow-50"
+                    >
+                      Catch {playerName(room, targetPlayerId)}
+                    </Button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          )}
+
+          <section
+            data-self-hand="true"
+            className="flex h-[clamp(174px,30dvh,230px)] shrink-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-black/40 p-2 shadow-[0_18px_54px_rgba(0,0,0,0.28)]"
+          >
+            <div className="flex shrink-0 items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-white/84">Your hand</p>
+                <p className="mt-0.5 truncate text-[11px] text-white/42">
+                  Drag cards to the table.
+                </p>
+              </div>
+              <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+                {needsColor && (
+                  <ColorPicker value={chosenColor} onChange={setChosenColor} />
+                )}
+                {canChooseRotate && (
+                  <GameOptionCheckbox
+                    checked={wantsRotate}
+                    onCheckedChange={setWantsRotate}
+                  >
+                    Cycle
+                  </GameOptionCheckbox>
+                )}
+                {canChooseSwap && (
+                  <GameOptionCheckbox
+                    checked={wantsSwap}
+                    onCheckedChange={(checked) => {
+                      setWantsSwap(checked)
+                      if (!checked) setSwapWithPlayerId("")
+                    }}
+                  >
+                    Swap
+                  </GameOptionCheckbox>
+                )}
+                <GameOptionCheckbox
+                  checked={declaredUno && canDeclareUno}
+                  disabled={!canDeclareUno}
+                  onCheckedChange={setDeclaredUno}
+                >
+                  UNO
+                </GameOptionCheckbox>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={!canUseEndTurnButton}
+                  onClick={handleEndTurnButton}
+                  className="h-8 bg-white px-3 text-neutral-950 hover:bg-white/85"
+                >
+                  {canPassTurn ? "Pass" : "End"}
+                </Button>
+              </div>
+            </div>
+
+            {needsSwap && (
+              <select
+                value={swapWithPlayerId}
+                onChange={(event) => setSwapWithPlayerId(event.target.value)}
+                className="mt-2 h-8 rounded-lg border border-white/10 bg-neutral-950 px-2 text-sm text-white outline-none"
+              >
+                <option value="">Swap with...</option>
+                {activeOpponents.map((candidate) => (
+                  <option key={candidate.id} value={candidate.id}>
+                    {candidate.name}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            {discardActionCard && (
+              <div className="uno-scrollbar mt-2 max-h-24 overflow-y-auto">
+                <DiscardOptionsPanel
+                  candidates={discardCandidates}
+                  selectedCardIds={discardCardIds}
+                  topChoices={discardTopChoices}
+                  topCardId={discardTopCardId || discardActionCard.id}
+                  onToggleCard={toggleDiscardCard}
+                  onTopCard={setDiscardTopCardId}
+                />
+              </div>
+            )}
+
+            <FannedGameHand
+              cards={playerGame?.hand ?? []}
+              playableCardIds={playerGame?.playableCardIds ?? []}
+              selectedCardIds={selectedCardIds}
+              isMyTurn={Boolean(isMyTurn)}
+              drawStack={drawStack}
+              onToggleCard={toggleSelected}
+              onDragStart={setDraggingCardId}
+              onDragMove={updatePointerDragTarget}
+              onDragEnd={finishPointerDrag}
+              onCancelDrag={() => {
+                setDraggingCardId(null)
+                setTableDragActive(false)
+              }}
+              cardSize="sm"
+            />
+          </section>
+        </div>
+      </main>
+    )
+  }
+
   return (
     <main className="h-dvh overflow-hidden bg-[#070604] text-white antialiased">
       {celebratingWinner && (
@@ -1001,16 +1281,10 @@ function GameTable({
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <p className="text-sm font-semibold text-white">
-                      {gameFinished && firstWinner
-                        ? `${firstWinner.name} won this hand`
-                        : isMyTurn
-                          ? "Your turn"
-                          : `${playerName(room, game?.turnPlayerId)} is playing`}
+                      {tableStatusTitle}
                     </p>
                     <p className="mt-1 text-xs text-white/65">
-                      {game?.drawStack
-                        ? `Draw stack is +${game.drawStack.amount}. Stack +${game.drawStack.minimum} or higher.`
-                        : `${game?.discardPileCount ?? 0} cards discarded`}
+                      {tableStatusDetail}
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center justify-end gap-1.5 sm:gap-2">
@@ -1202,15 +1476,6 @@ function GameTable({
             onSendMessage={onSendChatMessage}
           />
         </section>
-
-        {mobileChatEnabled && (
-          <MobileChatDrawer
-            messages={room.chatMessages}
-            selfPlayerId={player.id}
-            error={error}
-            onSendMessage={onSendChatMessage}
-          />
-        )}
       </div>
     </main>
   )
@@ -1285,7 +1550,7 @@ function TableChatPanel({
   )
 }
 
-function MobileChatDrawer({
+function MobileChatSheet({
   messages,
   selfPlayerId,
   error,
@@ -1298,6 +1563,7 @@ function MobileChatDrawer({
 }) {
   const [text, setText] = useState("")
   const [tray, setTray] = useState<ChatTray | null>(null)
+  const [open, setOpen] = useState(false)
 
   function send(input: SendChatMessageInput) {
     playFx("buttonSoft", { volume: 0.36 })
@@ -1311,54 +1577,219 @@ function MobileChatDrawer({
     setText("")
   }
 
+  useEffect(() => {
+    if (!open) return
+    if (typeof document === "undefined") return
+
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = "hidden"
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false)
+    }
+
+    window.addEventListener("keydown", handleKeyDown)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener("keydown", handleKeyDown)
+    }
+  }, [open])
+
   return (
-    <Drawer>
-      <DrawerTrigger asChild>
-        <button
-          type="button"
-          className="fixed bottom-[calc(env(safe-area-inset-bottom)+1rem)] right-4 z-50 grid size-12 place-items-center rounded-full border border-white/14 bg-white text-neutral-950 shadow-[0_18px_46px_rgba(0,0,0,0.42)] transition-[scale,box-shadow] duration-200 ease-[cubic-bezier(0.2,0,0,1)] active:scale-[0.96] lg:hidden"
-          aria-label="Open table chat"
-        >
-          <MessageCircle className="size-5" strokeWidth={2} />
-          {messages.length > 0 && (
-            <span className="absolute -right-1 -top-1 grid min-w-5 place-items-center rounded-full bg-neutral-950 px-1 text-[10px] font-semibold tabular-nums text-white shadow-[0_8px_20px_rgba(0,0,0,0.36)]">
-              {Math.min(messages.length, 99)}
-            </span>
-          )}
-        </button>
-      </DrawerTrigger>
-      <DrawerContent className="border-white/10 bg-[#090806] text-white lg:hidden">
-        <DrawerHeader className="px-4 pb-2 pt-3 text-left">
-          <DrawerTitle className="text-base text-white">Table chat</DrawerTitle>
-          <DrawerDescription className="text-xs text-white/45">
-            Send a quick reaction without leaving the table.
-          </DrawerDescription>
-        </DrawerHeader>
-
-        <ChatMessageList
-          messages={messages}
-          selfPlayerId={selfPlayerId}
-          className="max-h-[46dvh] px-4 pb-3"
-        />
-
-        {error && (
-          <p className="mx-4 mb-2 rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-2 text-xs text-red-100">
-            {error}
-          </p>
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        className="relative grid size-8 place-items-center rounded-full border border-white/10 bg-white/[0.06] text-white/74 transition-[background-color,border-color,color,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] hover:border-white/20 hover:bg-white/[0.1] hover:text-white active:scale-[0.96]"
+        aria-label="Open table chat"
+      >
+        <MessageCircle className="size-4" strokeWidth={1.9} />
+        {messages.length > 0 && (
+          <span className="absolute -right-1 -top-1 grid min-w-4 place-items-center rounded-full bg-white px-1 text-[9px] font-semibold tabular-nums text-neutral-950 shadow-[0_8px_20px_rgba(0,0,0,0.32)]">
+            {Math.min(messages.length, 99)}
+          </span>
         )}
+      </button>
 
-        <div className="border-t border-white/10 p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]">
-          <ChatComposer
-            text={text}
-            tray={tray}
-            onTextChange={setText}
-            onTrayChange={setTray}
-            onSend={send}
-            onSendText={sendText}
-          />
-        </div>
-      </DrawerContent>
-    </Drawer>
+      {open &&
+        typeof document !== "undefined" &&
+        createPortal(
+          <div className="fixed inset-0 z-[80] lg:hidden">
+            <button
+              type="button"
+              className="absolute inset-0 bg-black/62 backdrop-blur-[2px]"
+              aria-label="Close table chat"
+              onClick={() => setOpen(false)}
+            />
+            <section
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="mobile-chat-title"
+              className="absolute inset-x-0 bottom-0 flex max-h-[88dvh] min-h-[58dvh] flex-col rounded-t-[1.35rem] border border-white/10 bg-[#090806] text-white shadow-[0_-28px_80px_rgba(0,0,0,0.58)]"
+            >
+              <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
+                <div className="min-w-0">
+                  <h2 id="mobile-chat-title" className="text-base font-semibold text-white">
+                    Table chat
+                  </h2>
+                  <p className="mt-0.5 text-xs text-white/45">
+                    Text, emoji, GIFs, and quick lines.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  className="grid size-9 shrink-0 place-items-center rounded-full border border-white/10 bg-white/[0.055] text-white/66 transition-[background-color,border-color,color,scale] duration-200 active:scale-[0.96]"
+                  aria-label="Close table chat"
+                >
+                  <X className="size-4" strokeWidth={1.9} />
+                </button>
+              </div>
+
+              <ChatMessageList
+                messages={messages}
+                selfPlayerId={selfPlayerId}
+                className="flex-1 px-4 py-3"
+              />
+
+              {error && (
+                <p className="mx-4 mb-2 rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-2 text-xs text-red-100">
+                  {error}
+                </p>
+              )}
+
+              <div className="shrink-0 border-t border-white/10 p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]">
+                <ChatComposer
+                  text={text}
+                  tray={tray}
+                  comfortable
+                  onTextChange={setText}
+                  onTrayChange={setTray}
+                  onSend={send}
+                  onSendText={sendText}
+                />
+              </div>
+            </section>
+          </div>,
+          document.body,
+        )}
+    </>
+  )
+}
+
+function MobilePlayerStrip({
+  room,
+  game,
+  selfPlayerId,
+  canTakeDrawPenalty,
+  onTakeDrawPenalty,
+}: {
+  room: RoomSnapshot
+  game: RoomSnapshot["game"]
+  selfPlayerId: string
+  canTakeDrawPenalty: boolean
+  onTakeDrawPenalty: () => void
+}) {
+  const players = orderPlayersAroundSelf(room.players, selfPlayerId)
+
+  return (
+    <div className="uno-scrollbar flex shrink-0 gap-1.5 overflow-x-auto rounded-2xl border border-white/10 bg-white/[0.035] p-1.5 shadow-[0_12px_34px_rgba(0,0,0,0.24)]">
+      {players.map((candidate) => {
+        const state = game?.players.find(
+          (gamePlayer) => gamePlayer.playerId === candidate.id,
+        )
+        const active = game?.turnPlayerId === candidate.id
+        const winnerPlacement = state?.winnerPlacement ?? null
+        const eliminated = Boolean(state?.eliminated)
+        const declaredUno = Boolean(state?.declaredUno)
+        const isYou = candidate.id === selfPlayerId
+        const drawStack =
+          game?.drawStack?.targetPlayerId === candidate.id ? game.drawStack : null
+        const status = winnerPlacement
+          ? winnerPlacement.position === 1
+            ? "Winner"
+            : ordinalLabel(winnerPlacement.position)
+          : eliminated
+            ? "Out"
+            : declaredUno
+              ? "On UNO"
+              : active
+                ? "Turn"
+                : candidate.connected
+                  ? "At table"
+                  : "Away"
+
+        return (
+          <div
+            key={candidate.id}
+            data-seat-player-id={candidate.id}
+            className={
+              "relative flex min-w-[138px] items-center gap-2 rounded-xl border px-2 py-1.5 transition-[background-color,border-color,box-shadow,opacity] duration-300 " +
+              (winnerPlacement?.position === 1
+                ? "border-amber-200/70 bg-amber-200/18 shadow-[0_0_28px_rgba(252,211,77,0.22)]"
+                : declaredUno && !eliminated && !winnerPlacement
+                  ? "border-yellow-200/55 bg-red-500/[0.12] shadow-[0_0_28px_rgba(250,204,21,0.16)]"
+                  : active
+                    ? "border-amber-200/65 bg-amber-200/14 shadow-[0_0_28px_rgba(252,211,77,0.22)]"
+                    : "border-white/10 bg-black/28") +
+              (eliminated || !candidate.connected ? " opacity-55" : "")
+            }
+          >
+            <div
+              className={
+                "grid size-9 shrink-0 place-items-center rounded-full border " +
+                (active
+                  ? "border-amber-100/60 bg-amber-100/20 text-amber-50"
+                  : "border-white/12 bg-white/[0.07] text-white/72")
+              }
+            >
+              {winnerPlacement ? (
+                <Trophy className="size-4" strokeWidth={2.1} />
+              ) : (
+                <UserRound className="size-5" strokeWidth={1.8} />
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-xs font-semibold text-white/88">
+                {candidate.name}
+                {isYou ? " · You" : ""}
+              </p>
+              <p className="mt-0.5 truncate text-[10px] text-white/45">
+                {status}
+              </p>
+            </div>
+            <span
+              className={
+                "rounded-full border px-1.5 py-0.5 text-[10px] font-semibold tabular-nums " +
+                (declaredUno && !winnerPlacement && !eliminated
+                  ? "border-yellow-100/45 bg-yellow-300/20 text-yellow-50"
+                  : "border-white/10 bg-black/34 text-white/64")
+              }
+            >
+              {winnerPlacement
+                ? `#${winnerPlacement.position}`
+                : declaredUno
+                  ? "UNO"
+                  : state?.handCount ?? 0}
+            </span>
+            {drawStack && (
+              <div className="absolute -bottom-2 left-10 flex items-center gap-1 rounded-full border border-white/12 bg-neutral-950 px-1.5 py-0.5 text-[10px] text-red-100 shadow-[0_8px_20px_rgba(0,0,0,0.3)]">
+                +{drawStack.amount}
+                {canTakeDrawPenalty && (
+                  <button
+                    type="button"
+                    onClick={onTakeDrawPenalty}
+                    className="rounded-full bg-white px-1.5 py-0.5 text-[9px] font-semibold text-neutral-950"
+                  >
+                    Take
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
   )
 }
 
@@ -1413,6 +1844,7 @@ function ChatMessageList({
 function ChatComposer({
   text,
   tray,
+  comfortable = false,
   onTextChange,
   onTrayChange,
   onSend,
@@ -1420,6 +1852,7 @@ function ChatComposer({
 }: {
   text: string
   tray: ChatTray | null
+  comfortable?: boolean
   onTextChange: (value: string) => void
   onTrayChange: (tray: ChatTray | null) => void
   onSend: (input: SendChatMessageInput) => void
@@ -1435,16 +1868,22 @@ function ChatComposer({
   }
 
   return (
-    <div className="shrink-0 rounded-xl bg-black/24 p-1.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.055)]">
+    <div
+      className={
+        "shrink-0 bg-black/24 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.055)] " +
+        (comfortable ? "rounded-2xl p-2" : "rounded-xl p-1.5")
+      }
+    >
       {tray && (
         <ChatQuickTray
           tray={tray}
+          comfortable={comfortable}
           onSend={sendQuick}
         />
       )}
 
       <div className={tray ? "mt-2" : ""}>
-        <div className="mb-1.5 flex items-center gap-1">
+        <div className={(comfortable ? "mb-2" : "mb-1.5") + " flex items-center gap-1"}>
           <ChatToolButton
             active={tray === "presets"}
             label="Presets"
@@ -1474,19 +1913,25 @@ function ChatComposer({
             event.preventDefault()
             onSendText()
           }}
-          rows={1}
-          maxLength={240}
-          placeholder="Talk..."
-          className="min-h-9 min-w-0 flex-1 resize-none rounded-lg border border-white/10 bg-neutral-950/74 px-2.5 py-2 text-sm leading-5 text-white/84 outline-none transition-[border-color,background-color,box-shadow] duration-200 ease-[cubic-bezier(0.2,0,0,1)] placeholder:text-white/32 focus:border-white/24 focus:bg-neutral-950 focus:shadow-[0_0_0_3px_rgba(255,255,255,0.055)]"
+          rows={comfortable ? 2 : 1}
+          maxLength={250}
+          placeholder={comfortable ? "Talk your trash..." : "Talk..."}
+          className={
+            "min-w-0 flex-1 resize-none rounded-lg border border-white/10 bg-neutral-950/74 text-sm leading-5 text-white/84 outline-none transition-[border-color,background-color,box-shadow] duration-200 ease-[cubic-bezier(0.2,0,0,1)] placeholder:text-white/32 focus:border-white/24 focus:bg-neutral-950 focus:shadow-[0_0_0_3px_rgba(255,255,255,0.055)] " +
+            (comfortable ? "min-h-12 px-3 py-2.5" : "min-h-9 px-2.5 py-2")
+          }
         />
         <button
           type="button"
           onClick={onSendText}
           disabled={!text.trim()}
-          className="grid size-9 shrink-0 place-items-center rounded-lg bg-white text-neutral-950 shadow-[0_10px_24px_rgba(0,0,0,0.24)] transition-[background-color,opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] hover:bg-white/86 active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40"
+          className={
+            "grid shrink-0 place-items-center rounded-lg bg-white text-neutral-950 shadow-[0_10px_24px_rgba(0,0,0,0.24)] transition-[background-color,opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] hover:bg-white/86 active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 " +
+            (comfortable ? "size-12" : "size-9")
+          }
           aria-label="Send message"
         >
-          <SendHorizontal className="size-3.5" strokeWidth={2.2} />
+          <SendHorizontal className={comfortable ? "size-4" : "size-3.5"} strokeWidth={2.2} />
         </button>
         </div>
       </div>
@@ -1496,14 +1941,23 @@ function ChatComposer({
 
 function ChatQuickTray({
   tray,
+  comfortable = false,
   onSend,
 }: {
   tray: ChatTray
+  comfortable?: boolean
   onSend: (input: SendChatMessageInput) => void
 }) {
   if (tray === "presets") {
     return (
-      <div className="uno-scrollbar grid max-h-[118px] grid-cols-2 gap-1.5 overflow-y-auto pr-1">
+      <div
+        className={
+          "uno-scrollbar grid gap-1.5 overflow-y-auto pr-1 " +
+          (comfortable
+            ? "max-h-[28dvh] grid-cols-1"
+            : "max-h-[118px] grid-cols-2")
+        }
+      >
         {CHAT_PRESETS.map((preset) => (
           <button
             key={preset}
@@ -1520,7 +1974,7 @@ function ChatQuickTray({
 
   if (tray === "emoji") {
     return (
-      <div className="grid grid-cols-6 gap-1.5">
+      <div className={"grid gap-1.5 " + (comfortable ? "grid-cols-7" : "grid-cols-6")}>
         {CHAT_EMOJIS.map((emoji) => (
           <button
             key={emoji}
@@ -1537,7 +1991,12 @@ function ChatQuickTray({
   }
 
   return (
-    <div className="uno-scrollbar grid max-h-40 grid-cols-2 gap-2 overflow-y-auto pr-1">
+    <div
+      className={
+        "uno-scrollbar grid grid-cols-2 gap-2 overflow-y-auto pr-1 " +
+        (comfortable ? "max-h-[30dvh]" : "max-h-40")
+      }
+    >
       {CHAT_GIFS.map((gif) => (
         <button
           key={gif.url}
@@ -1658,35 +2117,37 @@ function FirstPlaceCelebration({ playerName }: { playerName: string }) {
       <style>
         {`
           @keyframes uno-trophy-pop {
-            0% { opacity: 0; transform: translate(-50%, -8px) scale(0.78); }
-            16% { opacity: 1; transform: translate(-50%, 0) scale(1.08); }
-            28% { transform: translate(-50%, 0) scale(1); }
-            82% { opacity: 1; transform: translate(-50%, 0) scale(1); }
-            100% { opacity: 0; transform: translate(-50%, -8px) scale(0.94); }
+            0% { opacity: 0; transform: translateY(-8px) scale(0.78); }
+            16% { opacity: 1; transform: translateY(0) scale(1.08); }
+            28% { transform: translateY(0) scale(1); }
+            82% { opacity: 1; transform: translateY(0) scale(1); }
+            100% { opacity: 0; transform: translateY(-8px) scale(0.94); }
           }
         `}
       </style>
 
-      <div
-        className="absolute left-1/2 top-[18%] flex min-w-[280px] -translate-x-1/2 items-center gap-4 rounded-2xl border border-amber-100/38 bg-neutral-950/86 px-5 py-4 shadow-[0_24px_80px_rgba(0,0,0,0.48),0_0_70px_rgba(251,191,36,0.22)] backdrop-blur-md"
-        style={{
-          animation:
-            "uno-trophy-pop 3.4s cubic-bezier(0.16, 1, 0.3, 1) forwards",
-        }}
-      >
-        <div className="relative grid size-16 shrink-0 place-items-center rounded-full border border-amber-100/50 bg-amber-300 text-amber-950 shadow-[0_0_34px_rgba(251,191,36,0.36)]">
-          <Trophy className="size-8" strokeWidth={2.2} />
-          <span className="absolute -bottom-1 rounded-full border border-amber-100/50 bg-neutral-950 px-2 py-0.5 text-[11px] font-bold text-amber-100">
-            #1
-          </span>
-        </div>
-        <div className="min-w-0">
-          <p className="text-xs font-semibold tracking-[0.16em] text-amber-100/70 uppercase">
-            First place
-          </p>
-          <p className="mt-1 truncate text-xl font-semibold text-white">
-            {playerName}
-          </p>
+      <div className="absolute inset-0 flex items-center justify-center p-4 sm:items-start sm:pt-[18dvh]">
+        <div
+          className="flex min-w-[280px] max-w-[calc(100vw-2rem)] items-center gap-4 rounded-2xl border border-amber-100/38 bg-neutral-950/86 px-5 py-4 shadow-[0_24px_80px_rgba(0,0,0,0.48),0_0_70px_rgba(251,191,36,0.22)] backdrop-blur-md"
+          style={{
+            animation:
+              "uno-trophy-pop 3.4s cubic-bezier(0.16, 1, 0.3, 1) forwards",
+          }}
+        >
+          <div className="relative grid size-16 shrink-0 place-items-center rounded-full border border-amber-100/50 bg-amber-300 text-amber-950 shadow-[0_0_34px_rgba(251,191,36,0.36)]">
+            <Trophy className="size-8" strokeWidth={2.2} />
+            <span className="absolute -bottom-1 rounded-full border border-amber-100/50 bg-neutral-950 px-2 py-0.5 text-[11px] font-bold text-amber-100">
+              #1
+            </span>
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs font-semibold tracking-[0.16em] text-amber-100/70 uppercase">
+              First place
+            </p>
+            <p className="mt-1 truncate text-xl font-semibold text-white">
+              {playerName}
+            </p>
+          </div>
         </div>
       </div>
     </div>
@@ -2325,7 +2786,7 @@ function DirectionPill({
 }) {
   const clockwise = direction === 1
   return (
-    <div className="flex items-center gap-2 rounded-full border border-white/10 bg-black/28 px-3 py-2 text-xs font-medium text-white/70">
+    <div className="flex items-center gap-1.5 rounded-full border border-white/10 bg-black/28 px-2 py-1.5 text-[11px] font-medium text-white/70 sm:gap-2 sm:px-3 sm:py-2 sm:text-xs">
       <RotateCw
         className={"size-3.5 " + (clockwise ? "" : "-scale-x-100")}
         aria-hidden="true"
@@ -2943,9 +3404,9 @@ const cardBackPlaceholder: Card = {
 
 function ColorPill({ color }: { color: PlayColor }) {
   return (
-    <div className="flex items-center gap-2 rounded-full border border-white/10 bg-black/20 px-3 py-2 text-xs font-medium text-white/70">
+    <div className="flex items-center gap-1.5 rounded-full border border-white/10 bg-black/20 px-2 py-1.5 text-[11px] font-medium text-white/70 sm:gap-2 sm:px-3 sm:py-2 sm:text-xs">
       <span
-        className="size-3 rounded-full shadow-[0_0_0_1px_rgba(255,255,255,0.22)]"
+        className="size-2.5 rounded-full shadow-[0_0_0_1px_rgba(255,255,255,0.22)] sm:size-3"
         style={{ background: colorValue(color) }}
       />
       {color}
@@ -3107,13 +3568,13 @@ function useMediaQuery(query: string) {
 
 function StatusDot({ connected }: { connected: boolean }) {
   return (
-    <div className="flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-xs text-white/60">
+    <div className="flex h-8 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-2.5 text-xs text-white/60 sm:px-3">
       <Circle
         className={
           "size-2 fill-current " + (connected ? "text-emerald-400" : "text-white/25")
         }
       />
-      {connected ? "Connected" : "Offline"}
+      <span className="hidden sm:inline">{connected ? "Connected" : "Offline"}</span>
     </div>
   )
 }
