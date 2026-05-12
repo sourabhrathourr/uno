@@ -66,4 +66,9 @@ export type {
   RoomEvent,
   ServerToClientEvents,
   SocketData,
+  VoiceSignal,
+  VoiceSignalEvent,
+  VoiceSignalInput,
+  VoiceStateEvent,
+  VoiceStateInput,
 } from "./realtime"

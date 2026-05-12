@@ -1,6 +1,6 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 
-import { Server } from "socket.io"
+import { Server, type Socket } from "socket.io"
 
 import type {
   ClientToServerEvents,
@@ -20,6 +20,10 @@ const allowedOrigins = (process.env.CORS_ORIGIN ?? "http://localhost:3000")
   .filter(Boolean)
 
 const rooms = new RoomManager()
+const voiceStatesByRoomCode = new Map<
+  string,
+  Map<string, { enabled: boolean; speaking: boolean }>
+>()
 
 const httpServer = createServer(async (req, res) => {
   setCorsHeaders(req, res)
@@ -116,6 +120,7 @@ io.on("connection", (socket) => {
 
     const room = snapshot ?? result.data.room
     const playerGame = rooms.getPlayerGame(room.code, result.data.player.id)
+    emitVoiceStates(socket, room.code)
     ack({
       ok: true,
       data: {
@@ -205,6 +210,30 @@ io.on("connection", (socket) => {
     if (result.ok) void emitRoomState(result.data.code, result.data)
   })
 
+  socket.on("voice:setState", (input) => {
+    const roomCode = socket.data.roomCode
+    const playerId = socket.data.playerId
+    if (!roomCode || !playerId) return
+
+    const enabled = Boolean(input.enabled)
+    const speaking = Boolean(enabled && input.speaking)
+    writeVoiceState(roomCode, playerId, { enabled, speaking })
+    io.to(roomCode).emit("voice:state", { playerId, enabled, speaking })
+  })
+
+  socket.on("voice:signal", (input) => {
+    const roomCode = socket.data.roomCode
+    const playerId = socket.data.playerId
+    if (!roomCode || !playerId) return
+    if (!input.targetPlayerId || input.targetPlayerId === playerId) return
+
+    io.to(roomCode).emit("voice:signal", {
+      fromPlayerId: playerId,
+      targetPlayerId: input.targetPlayerId,
+      signal: input.signal,
+    })
+  })
+
   socket.on("game:playCards", (input, ack) => {
     const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
       rooms.playCards(roomCode, playerId, input),
@@ -268,6 +297,17 @@ io.on("connection", (socket) => {
 
     const snapshot = rooms.unregisterConnection(roomCode, playerId, socket.id)
     if (snapshot) {
+      const playerSnapshot = snapshot.players.find(
+        (candidate) => candidate.id === playerId,
+      )
+      if (!playerSnapshot?.connected) {
+        writeVoiceState(roomCode, playerId, { enabled: false, speaking: false })
+        io.to(roomCode).emit("voice:state", {
+          playerId,
+          enabled: false,
+          speaking: false,
+        })
+      }
       void emitRoomState(roomCode, snapshot)
     }
   })
@@ -338,6 +378,43 @@ async function emitRoomState(roomCode: string, room?: RoomSnapshot) {
 
     const playerGame = rooms.getPlayerGame(roomCode, playerId)
     if (playerGame) client.emit("game:playerState", playerGame)
+  }
+}
+
+function emitVoiceStates(
+  socket: Socket<
+    ClientToServerEvents,
+    ServerToClientEvents,
+    InterServerEvents,
+    SocketData
+  >,
+  roomCode: string,
+) {
+  const roomVoiceStates = voiceStatesByRoomCode.get(roomCode)
+  if (!roomVoiceStates) return
+
+  for (const [playerId, state] of roomVoiceStates) {
+    socket.emit("voice:state", { playerId, ...state })
+  }
+}
+
+function writeVoiceState(
+  roomCode: string,
+  playerId: string,
+  state: { enabled: boolean; speaking: boolean },
+) {
+  const roomVoiceStates = voiceStatesByRoomCode.get(roomCode) ?? new Map()
+
+  if (!state.enabled) {
+    roomVoiceStates.delete(playerId)
+  } else {
+    roomVoiceStates.set(playerId, state)
+  }
+
+  if (roomVoiceStates.size === 0) {
+    voiceStatesByRoomCode.delete(roomCode)
+  } else {
+    voiceStatesByRoomCode.set(roomCode, roomVoiceStates)
   }
 }
 

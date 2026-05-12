@@ -44,6 +44,41 @@ export type ReadyInput = {
   ready: boolean
 }
 
+export type VoiceSignal =
+  | {
+      type: "offer"
+      sdp: string
+    }
+  | {
+      type: "answer"
+      sdp: string
+    }
+  | {
+      type: "ice-candidate"
+      candidate: unknown
+    }
+  | {
+      type: "leave"
+    }
+
+export type VoiceSignalInput = {
+  targetPlayerId: string
+  signal: VoiceSignal
+}
+
+export type VoiceSignalEvent = VoiceSignalInput & {
+  fromPlayerId: string
+}
+
+export type VoiceStateInput = {
+  enabled: boolean
+  speaking: boolean
+}
+
+export type VoiceStateEvent = VoiceStateInput & {
+  playerId: string
+}
+
 export type RoomEvent =
   | {
       type: "player-joined"
@@ -84,6 +119,8 @@ export type ClientToServerEvents = {
     input: SendChatMessageInput,
     ack: (result: CommandResult<RoomSnapshot>) => void,
   ) => void
+  "voice:setState": (input: VoiceStateInput) => void
+  "voice:signal": (input: VoiceSignalInput) => void
   "game:playCards": (
     input: PlayCardsInput,
     ack: (result: CommandResult<RoomSnapshot>) => void,
@@ -108,6 +145,8 @@ export type ServerToClientEvents = {
   "room:snapshot": (snapshot: RoomSnapshot) => void
   "game:playerState": (snapshot: PlayerGameSnapshot) => void
   "room:event": (event: RoomEvent) => void
+  "voice:state": (event: VoiceStateEvent) => void
+  "voice:signal": (event: VoiceSignalEvent) => void
   "room:error": (error: GameError) => void
 }
 

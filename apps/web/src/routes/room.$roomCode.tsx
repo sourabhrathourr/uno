@@ -11,6 +11,8 @@ import {
   Circle,
   ImageIcon,
   MessageCircle,
+  Mic,
+  MicOff,
   Play,
   RotateCw,
   SendHorizontal,
@@ -68,6 +70,10 @@ import {
   playWinnerSound,
 } from "@/lib/sound"
 import { useSoundSystem } from "@/lib/use-sound-system"
+import {
+  useRoomVoice,
+  type RoomVoiceController,
+} from "@/lib/use-room-voice"
 
 type ResponsiveCardSize = "sm" | "md"
 type DeckDrawFlightState = {
@@ -108,6 +114,12 @@ function RoomPage() {
   const normalizedRoomCode = roomCode.toUpperCase()
   const isHost = room?.hostPlayerId === player?.id
   const currentPlayer = room?.players.find((candidate) => candidate.id === player?.id)
+  const voice = useRoomVoice({
+    socket,
+    roomCode: normalizedRoomCode,
+    selfPlayerId: player?.id ?? null,
+    players: room?.players ?? [],
+  })
 
   function applyRoomSnapshot(nextRoom: RoomSnapshot | null) {
     const currentRoom = roomRef.current
@@ -617,6 +629,7 @@ function RoomPage() {
           onCatchUno={catchUno}
           onSendChatMessage={sendChatMessage}
           onRestartGame={restartGame}
+          voice={voice}
         />
         {showIntro && (
           <GameStartIntro
@@ -663,6 +676,7 @@ function GameTable({
   onCatchUno,
   onSendChatMessage,
   onRestartGame,
+  voice,
 }: {
   room: RoomSnapshot
   player: Player
@@ -679,6 +693,7 @@ function GameTable({
   onCatchUno: (targetPlayerId: string) => void
   onSendChatMessage: (input: SendChatMessageInput) => void
   onRestartGame: () => void
+  voice: RoomVoiceController
 }) {
   const game = room.game
   const tableDropRef = useRef<HTMLDivElement | null>(null)
@@ -825,6 +840,7 @@ function GameTable({
     tableStagedPlayerId === player.id &&
     Boolean(isMyTurn) &&
     pendingPlayedCardIds.length === 0
+  const visibleError = error ?? voice.error
 
   useEffect(() => {
     const hand = playerGame?.hand ?? []
@@ -1081,6 +1097,7 @@ function GameTable({
   if (narrowViewport) {
     return (
       <main className="h-dvh overflow-hidden bg-[#070604] text-white antialiased">
+        <VoiceAudioOutputs streamsByPlayerId={voice.remoteStreamsByPlayerId} />
         {celebratingWinner && (
           <FirstPlaceCelebration playerName={celebratingWinner.name} />
         )}
@@ -1131,6 +1148,7 @@ function GameTable({
               </h1>
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
+              <VoiceToggleButton voice={voice} compact />
               <SoundToggle />
               <StatusDot connected={connected} />
               <CopyInviteButton iconOnly onCopy={onCopyInvite} />
@@ -1148,6 +1166,7 @@ function GameTable({
             game={game}
             selfPlayerId={player.id}
             dense={phoneViewport}
+            voiceStates={voice.voiceStates}
             canTakeDrawPenalty={Boolean(playerGame?.canTakeDrawPenalty)}
             onTakeDrawPenalty={onTakePenalty}
           />
@@ -1291,11 +1310,11 @@ function GameTable({
             </div>
           </section>
 
-          {(error || Boolean(playerGame?.catchablePlayerIds.length)) && (
+          {(visibleError || Boolean(playerGame?.catchablePlayerIds.length)) && (
             <div className="shrink-0 space-y-1">
-              {error && (
+              {visibleError && (
                 <p className="rounded-xl border border-red-400/20 bg-red-500/12 px-3 py-2 text-xs text-red-100 shadow-[0_14px_34px_rgba(0,0,0,0.26)] backdrop-blur-md">
-                  {error}
+                  {visibleError}
                 </p>
               )}
               {playerGame?.catchablePlayerIds.length ? (
@@ -1413,6 +1432,7 @@ function GameTable({
 
   return (
     <main className="h-dvh overflow-hidden bg-[#070604] text-white antialiased">
+      <VoiceAudioOutputs streamsByPlayerId={voice.remoteStreamsByPlayerId} />
       {celebratingWinner && (
         <FirstPlaceCelebration playerName={celebratingWinner.name} />
       )}
@@ -1452,6 +1472,7 @@ function GameTable({
             </h1>
           </div>
           <div className="flex items-center gap-2">
+            <VoiceToggleButton voice={voice} />
             <SoundToggle />
             <StatusDot connected={connected} />
             <CopyInviteButton onCopy={onCopyInvite} />
@@ -1483,6 +1504,7 @@ function GameTable({
                 canTakeDrawPenalty={Boolean(playerGame?.canTakeDrawPenalty)}
                 onTakeDrawPenalty={onTakePenalty}
                 compact={compactSurface}
+                voiceStates={voice.voiceStates}
               />
               <div className="relative z-10 flex h-full min-h-0 flex-col">
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1567,9 +1589,9 @@ function GameTable({
             </div>
 
             <div className="pointer-events-none absolute inset-x-2 top-[3.4rem] z-30 flex max-h-[34%] flex-col gap-2 overflow-y-auto sm:inset-x-3 sm:top-[4.25rem]">
-              {error && (
+              {visibleError && (
                 <p className="pointer-events-auto rounded-md border border-red-400/20 bg-red-500/12 px-3 py-2 text-sm text-red-100 shadow-[0_18px_44px_rgba(0,0,0,0.26)] backdrop-blur-md xl:hidden">
-                  {error}
+                  {visibleError}
                 </p>
               )}
 
@@ -1918,6 +1940,7 @@ function MobilePlayerStrip({
   game,
   selfPlayerId,
   dense = false,
+  voiceStates,
   canTakeDrawPenalty,
   onTakeDrawPenalty,
 }: {
@@ -1925,6 +1948,7 @@ function MobilePlayerStrip({
   game: RoomSnapshot["game"]
   selfPlayerId: string
   dense?: boolean
+  voiceStates: RoomVoiceController["voiceStates"]
   canTakeDrawPenalty: boolean
   onTakeDrawPenalty: () => void
 }) {
@@ -1946,6 +1970,9 @@ function MobilePlayerStrip({
         const eliminated = Boolean(state?.eliminated)
         const declaredUno = Boolean(state?.declaredUno)
         const isYou = candidate.id === selfPlayerId
+        const voiceState = voiceStates[candidate.id]
+        const hasVoiceOn = Boolean(voiceState?.enabled)
+        const isSpeaking = Boolean(voiceState?.speaking)
         const drawStack =
           game?.drawStack?.targetPlayerId === candidate.id ? game.drawStack : null
         const status = winnerPlacement
@@ -1956,6 +1983,10 @@ function MobilePlayerStrip({
             ? "Out"
             : declaredUno
               ? "On UNO"
+              : isSpeaking
+                ? "Speaking"
+              : hasVoiceOn
+                ? "Voice on"
               : active
                 ? "Turn"
                 : candidate.connected
@@ -1982,7 +2013,7 @@ function MobilePlayerStrip({
           >
             <div
               className={
-                "grid shrink-0 place-items-center rounded-full border " +
+                "relative grid shrink-0 place-items-center rounded-full border " +
                 (dense ? "size-8" : "size-9") +
                 " " +
                 (active
@@ -1995,6 +2026,25 @@ function MobilePlayerStrip({
               ) : (
                 <UserRound className={dense ? "size-4" : "size-5"} strokeWidth={1.8} />
               )}
+              <span
+                className={
+                  "absolute -right-1 -bottom-1 grid rounded-full border bg-neutral-950/95 shadow-[0_4px_10px_rgba(0,0,0,0.28)] transition-[border-color,color] " +
+                  (dense ? "size-4" : "size-[18px]") +
+                  " " +
+                  (isSpeaking
+                    ? "border-emerald-300 text-white"
+                    : hasVoiceOn
+                      ? "border-white/20 text-white/70"
+                      : "border-red-300/45 text-red-300")
+                }
+                aria-label={isSpeaking ? "Speaking" : hasVoiceOn ? "Voice on" : "Mic off"}
+              >
+                {hasVoiceOn ? (
+                  <Mic className={dense ? "size-2.5" : "size-3"} strokeWidth={2.2} />
+                ) : (
+                  <MicOff className={dense ? "size-2.5" : "size-3"} strokeWidth={2.2} />
+                )}
+              </span>
             </div>
             <div className="min-w-0 flex-1">
               <p className={(dense ? "text-[11px]" : "text-xs") + " truncate font-semibold text-white/88"}>
@@ -2529,6 +2579,7 @@ function TableSeatRing({
   canTakeDrawPenalty,
   onTakeDrawPenalty,
   compact,
+  voiceStates,
 }: {
   room: RoomSnapshot
   game: RoomSnapshot["game"]
@@ -2536,6 +2587,7 @@ function TableSeatRing({
   canTakeDrawPenalty: boolean
   onTakeDrawPenalty: () => void
   compact: boolean
+  voiceStates: RoomVoiceController["voiceStates"]
 }) {
   const players = orderPlayersAroundSelf(room.players, selfPlayerId)
 
@@ -2559,6 +2611,7 @@ function TableSeatRing({
             connected={candidate.connected}
             isYou={candidate.id === selfPlayerId}
             isStaging={game?.stagedPlay?.playerId === candidate.id}
+            voiceState={voiceStates[candidate.id]}
             drawStack={
               game?.drawStack?.targetPlayerId === candidate.id ? game.drawStack : null
             }
@@ -2585,6 +2638,7 @@ function TableAvatarSeat({
   connected,
   isYou,
   isStaging,
+  voiceState,
   drawStack,
   canTakeDrawPenalty,
   onTakeDrawPenalty,
@@ -2602,6 +2656,7 @@ function TableAvatarSeat({
   connected: boolean
   isYou: boolean
   isStaging: boolean
+  voiceState?: RoomVoiceController["voiceStates"][string]
   drawStack: NonNullable<RoomSnapshot["game"]>["drawStack"] | null
   canTakeDrawPenalty: boolean
   onTakeDrawPenalty: () => void
@@ -2613,6 +2668,8 @@ function TableAvatarSeat({
     : null
   const isFirstPlace = winnerPlacement?.position === 1
   const isUno = declaredUno && !winnerPlacement && !eliminated
+  const hasVoiceOn = Boolean(voiceState?.enabled)
+  const isSpeaking = Boolean(voiceState?.speaking)
 
   return (
     <div
@@ -2725,6 +2782,23 @@ function TableAvatarSeat({
             onTake={onTakeDrawPenalty}
           />
         )}
+        <div
+          className={
+            "absolute -bottom-2 -left-2 grid size-6 place-items-center rounded-full border bg-neutral-950/95 text-white/72 shadow-[0_8px_18px_rgba(0,0,0,0.28)] transition-[border-color,color,box-shadow] " +
+            (isSpeaking
+              ? "border-emerald-300 text-white shadow-[0_0_0_1px_rgba(52,211,153,0.22),0_8px_18px_rgba(0,0,0,0.28)]"
+              : hasVoiceOn
+                ? "border-white/18"
+                : "border-red-300/45 text-red-300")
+          }
+          aria-label={isSpeaking ? "Speaking" : hasVoiceOn ? "Voice on" : "Mic off"}
+        >
+          {hasVoiceOn ? (
+            <Mic className="size-3.5" strokeWidth={2.1} />
+          ) : (
+            <MicOff className="size-3.5" strokeWidth={2.1} />
+          )}
+        </div>
       </div>
     </div>
   )
@@ -3877,6 +3951,82 @@ function StatusDot({ connected }: { connected: boolean }) {
       <span className="hidden sm:inline">{connected ? "Connected" : "Offline"}</span>
     </div>
   )
+}
+
+function VoiceToggleButton({
+  voice,
+}: {
+  voice: RoomVoiceController
+  compact?: boolean
+}) {
+  const active = voice.enabled
+  const title = voice.error
+    ? voice.error
+    : active
+      ? "Turn voice off"
+      : "Turn voice on"
+
+  return (
+    <button
+      type="button"
+      onClick={voice.toggle}
+      disabled={voice.connecting}
+      title={title}
+      aria-label={title}
+      className={
+        "inline-flex size-9 shrink-0 items-center justify-center rounded-full border transition-[background-color,border-color,color,opacity,scale] active:scale-[0.96] disabled:opacity-70 " +
+        " " +
+        (active
+          ? "border-white/10 bg-white/[0.045] text-white/74 hover:border-white/18 hover:bg-white/[0.075] hover:text-white/88"
+          : voice.error
+            ? "border-red-300/35 bg-red-500/12 text-red-100"
+            : "border-red-300/28 bg-red-500/10 text-red-300 hover:border-red-300/40 hover:bg-red-500/14 hover:text-red-200")
+      }
+    >
+      {active ? (
+        <Mic className="size-4" strokeWidth={2} />
+      ) : (
+        <MicOff className="size-4" strokeWidth={2} />
+      )}
+    </button>
+  )
+}
+
+function VoiceAudioOutputs({
+  streamsByPlayerId,
+}: {
+  streamsByPlayerId: Record<string, MediaStream>
+}) {
+  return (
+    <>
+      {Object.entries(streamsByPlayerId).map(([playerId, stream]) => (
+        <RemoteVoiceAudio key={playerId} stream={stream} />
+      ))}
+    </>
+  )
+}
+
+function RemoteVoiceAudio({ stream }: { stream: MediaStream }) {
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+
+  useEffect(() => {
+    const audio = audioRef.current
+    if (!audio) return
+
+    audio.srcObject = stream
+    const playPromise = audio.play()
+    if (playPromise) {
+      playPromise.catch(() => {
+        // Browser autoplay rules can block remote audio until the next user gesture.
+      })
+    }
+
+    return () => {
+      audio.srcObject = null
+    }
+  }, [stream])
+
+  return <audio ref={audioRef} autoPlay playsInline className="hidden" />
 }
 
 function PlayerRow({
