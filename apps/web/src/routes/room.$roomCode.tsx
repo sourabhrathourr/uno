@@ -41,6 +41,7 @@ import {
   type Card,
   type GameEvent,
   type GameError,
+  type JoinRoomResponse,
   type Player,
   type PlayerGameSnapshot,
   type PlayCardsInput,
@@ -96,6 +97,8 @@ function RoomPage() {
   >("idle")
   const roomRef = useRef<RoomSnapshot | null>(null)
   const playerRef = useRef<Player | null>(null)
+  const playerGameRoomVersionRef = useRef(0)
+  const joinInFlightRef = useRef(false)
   const lastEventIdRef = useRef<string | null>(null)
   const lastTurnPlayerIdRef = useRef<string | null>(null)
   const lastStatusRef = useRef<RoomSnapshot["status"] | null>(null)
@@ -107,13 +110,81 @@ function RoomPage() {
   const currentPlayer = room?.players.find((candidate) => candidate.id === player?.id)
 
   function applyRoomSnapshot(nextRoom: RoomSnapshot | null) {
+    const currentRoom = roomRef.current
+
+    if (
+      nextRoom &&
+      currentRoom &&
+      nextRoom.code === currentRoom.code &&
+      nextRoom.version < currentRoom.version
+    ) {
+      return false
+    }
+
     roomRef.current = nextRoom
     setRoom(nextRoom)
+    return true
   }
 
   function applyPlayer(nextPlayer: Player | null) {
     playerRef.current = nextPlayer
     setPlayer(nextPlayer)
+  }
+
+  function applyPlayerGameSnapshot(nextPlayerGame: PlayerGameSnapshot | null) {
+    if (!nextPlayerGame) {
+      playerGameRoomVersionRef.current = 0
+      setPlayerGame(null)
+      return
+    }
+
+    if (nextPlayerGame.playerId !== playerRef.current?.id) return
+
+    const incomingVersion = nextPlayerGame.roomVersion ?? roomRef.current?.version ?? 0
+    const currentRoomVersion = roomRef.current?.version ?? 0
+    if (incomingVersion < currentRoomVersion) return
+    if (incomingVersion < playerGameRoomVersionRef.current) return
+
+    playerGameRoomVersionRef.current = incomingVersion
+    setPlayerGame(nextPlayerGame)
+  }
+
+  function applyJoinSuccess(result: JoinRoomResponse) {
+    saveActiveRoomCode(result.room.code)
+    applyPlayer(result.player)
+    applyRoomSnapshot(result.room)
+    applyPlayerGameSnapshot(result.playerGame ?? null)
+  }
+
+  function restoreSocketSeat(activeSocket: GameSocket) {
+    if (joinInFlightRef.current) return
+
+    const activePlayer = playerRef.current
+    const cleanName = (activePlayer?.name || getSavedPlayerName()).trim()
+    const shouldRestore =
+      Boolean(activePlayer) || getActiveRoomCode() === normalizedRoomCode
+
+    if (!cleanName || !shouldRestore) return
+
+    joinInFlightRef.current = true
+    activeSocket.emit(
+      "room:join",
+      {
+        code: normalizedRoomCode,
+        playerName: cleanName,
+        sessionId: getPlayerSessionId(),
+      },
+      (result) => {
+        joinInFlightRef.current = false
+        if (!result.ok) {
+          if (!playerRef.current) setError(result.error.message)
+          return
+        }
+
+        setError(null)
+        applyJoinSuccess(result.data)
+      },
+    )
   }
 
   function applyCommandError(nextError: GameError) {
@@ -143,8 +214,7 @@ function RoomPage() {
     }
 
     function handlePlayerState(snapshot: PlayerGameSnapshot) {
-      if (snapshot.playerId !== playerRef.current?.id) return
-      setPlayerGame(snapshot)
+      applyPlayerGameSnapshot(snapshot)
     }
 
     function handleError(nextError: GameError) {
@@ -153,9 +223,11 @@ function RoomPage() {
 
     function handleConnect() {
       setConnected(true)
+      restoreSocketSeat(activeSocket)
     }
 
     function handleDisconnect() {
+      joinInFlightRef.current = false
       setConnected(false)
     }
 
@@ -166,6 +238,7 @@ function RoomPage() {
     activeSocket.on("disconnect", handleDisconnect)
 
     setConnected(activeSocket.connected)
+    if (activeSocket.connected) restoreSocketSeat(activeSocket)
 
     return () => {
       activeSocket.off("room:snapshot", handleSnapshot)
@@ -267,7 +340,7 @@ function RoomPage() {
     let cancelled = false
     applyRoomSnapshot(null)
     applyPlayer(null)
-    setPlayerGame(null)
+    applyPlayerGameSnapshot(null)
     setError(null)
 
     async function loadPreview() {
@@ -309,6 +382,8 @@ function RoomPage() {
   }, [roomCode])
 
   async function joinRoom(nextName = playerName) {
+    if (joinInFlightRef.current) return
+
     const cleanName = nextName.trim()
     if (!cleanName) {
       setError("Enter a name to join this room.")
@@ -316,6 +391,7 @@ function RoomPage() {
     }
 
     setJoining(true)
+    joinInFlightRef.current = true
     setError(null)
     savePlayerName(cleanName)
 
@@ -331,15 +407,14 @@ function RoomPage() {
         sessionId: getPlayerSessionId(),
       },
       (result) => {
+        joinInFlightRef.current = false
         setJoining(false)
         if (!result.ok) {
           setError(result.error.message)
           return
         }
 
-        saveActiveRoomCode(result.data.room.code)
-        applyRoomSnapshot(result.data.room)
-        applyPlayer(result.data.player)
+        applyJoinSuccess(result.data)
       },
     )
   }
@@ -590,6 +665,7 @@ function GameTable({
   const game = room.game
   const tableDropRef = useRef<HTMLDivElement | null>(null)
   const [selectedCardIds, setSelectedCardIds] = useState<string[]>([])
+  const [pendingPlayedCardIds, setPendingPlayedCardIds] = useState<string[]>([])
   const [declaredUno, setDeclaredUno] = useState(false)
   const [chosenColor, setChosenColor] = useState<PlayColor | null>(null)
   const [wantsSwap, setWantsSwap] = useState(false)
@@ -623,6 +699,10 @@ function GameTable({
   const selectedCards = useMemo(
     () => cardsInIdOrder(playerGame?.hand ?? [], selectedCardIds),
     [playerGame?.hand, selectedCardIds],
+  )
+  const pendingPlayedCards = useMemo(
+    () => cardsInIdOrder(playerGame?.hand ?? [], pendingPlayedCardIds),
+    [playerGame?.hand, pendingPlayedCardIds],
   )
   const playableCardIds = playerGame?.playableCardIds ?? []
   const activeOpponents =
@@ -708,14 +788,19 @@ function GameTable({
     remainingAfterPlay === 1
   const canSubmitPlay =
     Boolean(isMyTurn) &&
+    pendingPlayedCardIds.length === 0 &&
     selectedCardsCanPlay &&
     !finishesWithForbiddenPower &&
     (!needsColor || Boolean(chosenColor)) &&
     (!needsSwap || Boolean(swapWithPlayerId))
   const canPassTurn =
-    Boolean(isMyTurn) && Boolean(playerGame?.canEndTurn) && selectedCardIds.length === 0
+    Boolean(isMyTurn) &&
+    pendingPlayedCardIds.length === 0 &&
+    Boolean(playerGame?.canEndTurn) &&
+    selectedCardIds.length === 0
   const canUseEndTurnButton = selectedCardIds.length > 0 ? canSubmitPlay : canPassTurn
-  const localStagedPlayActive = Boolean(isMyTurn && selectedCards.length > 0)
+  const localStagedCards = pendingPlayedCards.length > 0 ? pendingPlayedCards : selectedCards
+  const localStagedPlayActive = Boolean(isMyTurn && localStagedCards.length > 0)
   const stagedPlayKey = game?.stagedPlay
     ? `${game.stagedPlay.playerId}:${game.stagedPlay.cards.map((card) => card.id).join("-")}`
     : null
@@ -723,7 +808,7 @@ function GameTable({
     stagedPlayKey && rouletteConsumedKey === stagedPlayKey,
   )
   const tableStagedCards = localStagedPlayActive
-    ? selectedCards
+    ? localStagedCards
     : stagedPlayConsumed
       ? []
       : game?.stagedPlay?.cards ?? []
@@ -742,17 +827,31 @@ function GameTable({
       ? "roulette"
       : "stage"
   const canEditTableStaged =
-    tableStagedMode === "stage" && tableStagedPlayerId === player.id && Boolean(isMyTurn)
+    tableStagedMode === "stage" &&
+    tableStagedPlayerId === player.id &&
+    Boolean(isMyTurn) &&
+    pendingPlayedCardIds.length === 0
 
   useEffect(() => {
+    const hand = playerGame?.hand ?? []
     setSelectedCardIds((current) =>
-      current.filter((cardId) => playerGame?.hand.some((card) => card.id === cardId)),
+      current.filter((cardId) => hand.some((card) => card.id === cardId)),
+    )
+    setPendingPlayedCardIds((current) =>
+      current.filter((cardId) => hand.some((card) => card.id === cardId)),
     )
   }, [playerGame?.hand])
 
   useEffect(() => {
-    if (!isMyTurn) setSelectedCardIds([])
+    if (!isMyTurn) {
+      setSelectedCardIds([])
+      setPendingPlayedCardIds([])
+    }
   }, [isMyTurn])
+
+  useEffect(() => {
+    if (error) setPendingPlayedCardIds([])
+  }, [error])
 
   useEffect(() => {
     setChosenColor(null)
@@ -960,6 +1059,7 @@ function GameTable({
 
   function submitPlay() {
     if (!canSubmitPlay) return
+    setPendingPlayedCardIds(selectedCardIds)
     onPlayCards({
       cardIds: selectedCardIds,
       declaredUno: canDeclareUno && declaredUno,
@@ -971,7 +1071,6 @@ function GameTable({
       swapWithPlayerId: needsSwap ? swapWithPlayerId : undefined,
       rotateHands: canChooseRotate && wantsRotate ? true : undefined,
     })
-    setSelectedCardIds([])
   }
 
   function handleEndTurnButton() {
@@ -1308,6 +1407,7 @@ function GameTable({
               cards={playerGame?.hand ?? []}
               playableCardIds={playerGame?.playableCardIds ?? []}
               selectedCardIds={selectedCardIds}
+              hiddenCardIds={pendingPlayedCardIds}
               isMyTurn={Boolean(isMyTurn)}
               drawStack={drawStack}
               onToggleCard={toggleSelected}
@@ -1576,6 +1676,7 @@ function GameTable({
                 cards={playerGame?.hand ?? []}
                 playableCardIds={playerGame?.playableCardIds ?? []}
                 selectedCardIds={selectedCardIds}
+                hiddenCardIds={pendingPlayedCardIds}
                 isMyTurn={Boolean(isMyTurn)}
                 drawStack={drawStack}
                 onToggleCard={toggleSelected}
@@ -3140,6 +3241,7 @@ function FannedGameHand({
   cards,
   playableCardIds,
   selectedCardIds,
+  hiddenCardIds,
   isMyTurn,
   drawStack,
   cardSize,
@@ -3152,6 +3254,7 @@ function FannedGameHand({
   cards: Card[]
   playableCardIds: string[]
   selectedCardIds: string[]
+  hiddenCardIds?: string[]
   isMyTurn: boolean
   drawStack: NonNullable<RoomSnapshot["game"]>["drawStack"]
   cardSize: ResponsiveCardSize
@@ -3191,8 +3294,11 @@ function FannedGameHand({
     }, 0)
   }
 
+  const hiddenCardIdSet = new Set(hiddenCardIds ?? [])
   const selectedCards = cardsInIdOrder(cards, selectedCardIds)
-  const visibleCards = cards.filter((card) => !selectedCardIds.includes(card.id))
+  const visibleCards = cards.filter(
+    (card) => !selectedCardIds.includes(card.id) && !hiddenCardIdSet.has(card.id),
+  )
   const activeDragCard = activeDrag
     ? cards.find((card) => card.id === activeDrag.cardId)
     : null

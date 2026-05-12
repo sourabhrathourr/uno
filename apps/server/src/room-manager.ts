@@ -364,7 +364,10 @@ export class RoomManager {
     const room = this.rooms.get(normalizeRoomCode(code))
     if (!room?.gameState) return null
     if (!findPlayer(room, playerId)) return null
-    return projectPlayerGame(room.gameState, gameContext(room), playerId)
+    return {
+      ...projectPlayerGame(room.gameState, gameContext(room), playerId),
+      roomVersion: room.version,
+    }
   }
 
   registerConnection(code: string, playerId: string, socketId: string): RoomSnapshot | null {

@@ -94,6 +94,7 @@ export type PublicGameSnapshot = {
 
 export type PlayerGameSnapshot = {
   playerId: string
+  roomVersion?: number
   hand: Card[]
   playableCardIds: string[]
   catchablePlayerIds: string[]

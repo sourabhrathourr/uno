@@ -37,6 +37,7 @@ export type JoinRoomResponse = {
   room: RoomSnapshot
   player: Player
   isNewPlayer: boolean
+  playerGame?: PlayerGameSnapshot | null
 }
 
 export type ReadyInput = {

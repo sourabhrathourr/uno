@@ -115,12 +115,14 @@ io.on("connection", (socket) => {
     )
 
     const room = snapshot ?? result.data.room
+    const playerGame = rooms.getPlayerGame(room.code, result.data.player.id)
     ack({
       ok: true,
       data: {
         room,
         player: result.data.player,
         isNewPlayer: result.data.isNewPlayer,
+        playerGame,
       },
     })
     void emitRoomState(room.code, room)
