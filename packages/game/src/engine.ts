@@ -715,15 +715,16 @@ function validateStage(
   cards: Card[],
 ): CommandResult<GameState> {
   if (cards.length === 0) return fail("no-cards", "Select at least one card.")
-  if (cards.length > 1 && cards.some((card) => card.face.kind === "discard-color")) {
-    return fail("multiple-discard-cards", "You can only play one discard card at a time.")
-  }
 
   if (game.drawStack) {
     const drawStackValidation = validateDrawStackPlay(game, cards)
     if (!drawStackValidation.ok) return drawStackValidation
     return ok(game)
   }
+
+  const discardStageValidation = validateDiscardStage(game, playerId, cards)
+  if (!discardStageValidation.ok) return discardStageValidation
+  if (cards.some((card) => card.face.kind === "discard-color")) return ok(game)
 
   if (cards.length > 1) {
     if (!sameNumberGroup(cards) && !sameDrawGroup(cards) && !sameActionGroup(cards)) {
@@ -740,6 +741,40 @@ function validateStage(
 
   if (!canPlaySingleCard(game, playerId, cards[0] as Card)) {
     return fail("not-playable", "That card does not match the pile.")
+  }
+
+  return ok(game)
+}
+
+function validateDiscardStage(
+  game: GameState,
+  playerId: string,
+  cards: Card[],
+): CommandResult<GameState> {
+  const discardCards = cards.filter((card) => card.face.kind === "discard-color")
+  if (discardCards.length === 0) return ok(game)
+
+  const firstCard = cards[0] as Card
+  if (firstCard.face.kind !== "discard-color") {
+    return fail("discard-card-first", "Play the discard card first.")
+  }
+
+  if (discardCards.length > 1) {
+    return fail("multiple-discard-cards", "You can only play one discard card at a time.")
+  }
+
+  if (!canPlaySingleCard(game, playerId, firstCard)) {
+    return fail("not-playable", "That discard card does not match the pile.")
+  }
+
+  const invalidExtra = cards
+    .slice(1)
+    .find(
+      (card) =>
+        card.face.kind === "discard-color" || card.color !== firstCard.color,
+    )
+  if (invalidExtra) {
+    return fail("invalid-discard-card", "Discarded cards must match the discard card color.")
   }
 
   return ok(game)

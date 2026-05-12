@@ -671,8 +671,6 @@ function GameTable({
   const [wantsSwap, setWantsSwap] = useState(false)
   const [wantsRotate, setWantsRotate] = useState(false)
   const [swapWithPlayerId, setSwapWithPlayerId] = useState<string>("")
-  const [discardCardIds, setDiscardCardIds] = useState<string[]>([])
-  const [discardTopCardId, setDiscardTopCardId] = useState<string>("")
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null)
   const [tableDragActive, setTableDragActive] = useState(false)
   const [celebratingWinnerId, setCelebratingWinnerId] = useState<string | null>(null)
@@ -745,40 +743,15 @@ function GameTable({
     selectedCards[0].face.value === 0 &&
     remainingAfterSelectedCards > 0
   const discardActionCard =
-    selectedCards.length === 1 && selectedCards[0]?.face.kind === "discard-color"
-      ? selectedCards[0]
-      : null
-  const discardCandidates = useMemo(
-    () =>
-      discardActionCard
-        ? (playerGame?.hand ?? []).filter(
-            (card) =>
-              card.id !== discardActionCard.id &&
-              card.color === discardActionCard.color,
-          )
-        : [],
-    [discardActionCard?.id, discardActionCard?.color, playerGame?.hand],
-  )
-  const discardTopChoices = useMemo(
-    () =>
-      discardActionCard
-        ? cardsInIdOrder([discardActionCard, ...discardCandidates], [
-            discardActionCard.id,
-            ...discardCardIds,
-          ])
-        : [],
-    [discardActionCard, discardCandidates, discardCardIds],
-  )
+    selectedCards[0]?.face.kind === "discard-color" ? selectedCards[0] : null
+  const discardExtraCards = discardActionCard ? selectedCards.slice(1) : []
   const needsSwap = canChooseSwap && wantsSwap
   const selectedCardsCanPlay = canPlayStagedCards(
     selectedCards,
     playableCardIds,
     drawStack,
   )
-  const remainingAfterPlay =
-    (playerGame?.hand.length ?? 0) -
-    selectedCards.length -
-    (discardActionCard ? discardCardIds.length : 0)
+  const remainingAfterPlay = (playerGame?.hand.length ?? 0) - selectedCards.length
   const finishesWithForbiddenPower =
     remainingAfterPlay === 0 && selectedCards.some((card) => isForbiddenFinalCard(card))
   const canDeclareUno =
@@ -859,35 +832,11 @@ function GameTable({
     setWantsSwap(false)
     setWantsRotate(false)
     setDeclaredUno(false)
-    setDiscardCardIds([])
-    setDiscardTopCardId("")
   }, [selectedCardIds.join(":")])
 
   useEffect(() => {
     if (!canDeclareUno && declaredUno) setDeclaredUno(false)
   }, [canDeclareUno, declaredUno])
-
-  useEffect(() => {
-    if (!discardActionCard) return
-    setDiscardCardIds((current) =>
-      keepSameStringArrayReference(
-        current,
-        current.filter((cardId) =>
-          discardCandidates.some((card) => card.id === cardId),
-        ),
-      ),
-    )
-  }, [discardActionCard?.id, discardCandidates])
-
-  useEffect(() => {
-    if (!discardActionCard) return
-    if (
-      discardTopCardId &&
-      !discardTopChoices.some((card) => card.id === discardTopCardId)
-    ) {
-      setDiscardTopCardId("")
-    }
-  }, [discardActionCard?.id, discardTopCardId, discardTopChoices])
 
   useEffect(() => {
     if (!isMyTurn) return
@@ -1003,27 +952,26 @@ function GameTable({
   }
 
   function toggleSelected(card: Card) {
-    setSelectedCardIds((current) =>
-      current.includes(card.id)
-        ? current.filter((cardId) => cardId !== card.id)
-        : canStageCard(card)
-          ? [...current, card.id]
-          : current,
-    )
+    setSelectedCardIds((current) => {
+      if (current.includes(card.id)) {
+        const currentCards = cardsInIdOrder(playerGame?.hand ?? [], current)
+        const removingFirstDiscard =
+          current[0] === card.id &&
+          currentCards[0]?.face.kind === "discard-color" &&
+          current.length > 1
+        return removingFirstDiscard
+          ? []
+          : current.filter((cardId) => cardId !== card.id)
+      }
+
+      return canStageCard(card) ? [...current, card.id] : current
+    })
   }
 
   function stageCard(card: Card) {
     if (!canStageCard(card)) return
     setSelectedCardIds((current) =>
       current.includes(card.id) ? current : [...current, card.id],
-    )
-  }
-
-  function toggleDiscardCard(card: Card) {
-    setDiscardCardIds((current) =>
-      current.includes(card.id)
-        ? current.filter((cardId) => cardId !== card.id)
-        : [...current, card.id],
     )
   }
 
@@ -1059,14 +1007,20 @@ function GameTable({
 
   function submitPlay() {
     if (!canSubmitPlay) return
+    const playedCardIds = discardActionCard
+      ? [discardActionCard.id]
+      : selectedCardIds
+    const discardExtraCardIds = discardExtraCards.map((card) => card.id)
     setPendingPlayedCardIds(selectedCardIds)
     onPlayCards({
-      cardIds: selectedCardIds,
+      cardIds: playedCardIds,
       declaredUno: canDeclareUno && declaredUno,
       chosenColor: chosenColor ?? undefined,
-      discardCardIds: discardActionCard ? discardCardIds : undefined,
+      discardCardIds: discardExtraCardIds.length
+        ? discardExtraCardIds
+        : undefined,
       topCardId: discardActionCard
-        ? discardTopCardId || discardActionCard.id
+        ? selectedCards[selectedCards.length - 1]?.id ?? discardActionCard.id
         : undefined,
       swapWithPlayerId: needsSwap ? swapWithPlayerId : undefined,
       rotateHands: canChooseRotate && wantsRotate ? true : undefined,
@@ -1335,7 +1289,11 @@ function GameTable({
               </div>
               <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
                 {needsColor && (
-                  <ColorPicker value={chosenColor} onChange={setChosenColor} />
+                  <ColorPicker
+                    value={chosenColor}
+                    required={!chosenColor}
+                    onChange={setChosenColor}
+                  />
                 )}
                 {canChooseRotate && (
                   <GameOptionCheckbox
@@ -1388,19 +1346,6 @@ function GameTable({
                   </option>
                 ))}
               </select>
-            )}
-
-            {discardActionCard && (
-              <div className="uno-scrollbar mt-2 max-h-24 overflow-y-auto">
-                <DiscardOptionsPanel
-                  candidates={discardCandidates}
-                  selectedCardIds={discardCardIds}
-                  topChoices={discardTopChoices}
-                  topCardId={discardTopCardId || discardActionCard.id}
-                  onToggleCard={toggleDiscardCard}
-                  onTopCard={setDiscardTopCardId}
-                />
-              </div>
             )}
 
             <FannedGameHand
@@ -1607,7 +1552,11 @@ function GameTable({
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   {needsColor && (
-                    <ColorPicker value={chosenColor} onChange={setChosenColor} />
+                    <ColorPicker
+                      value={chosenColor}
+                      required={!chosenColor}
+                      onChange={setChosenColor}
+                    />
                   )}
                   {canChooseRotate && (
                     <GameOptionCheckbox
@@ -1660,17 +1609,6 @@ function GameTable({
                   </Button>
                 </div>
               </div>
-
-              {discardActionCard && (
-                <DiscardOptionsPanel
-                  candidates={discardCandidates}
-                  selectedCardIds={discardCardIds}
-                  topChoices={discardTopChoices}
-                  topCardId={discardTopCardId || discardActionCard.id}
-                  onToggleCard={toggleDiscardCard}
-                  onTopCard={setDiscardTopCardId}
-                />
-              )}
 
               <FannedGameHand
                 cards={playerGame?.hand ?? []}
@@ -2825,10 +2763,25 @@ function canPlayStagedCards(
       cards.some((card) => playableCardIds.includes(card.id))
     )
   }
+  if (isDiscardFirstStage(cards, playableCardIds)) return true
   return (
     (sameNumberGroup(cards) || sameDrawGroup(cards) || sameActionGroup(cards)) &&
     cards.some((card) => playableCardIds.includes(card.id))
   )
+}
+
+function isDiscardFirstStage(cards: Card[], playableCardIds: string[]) {
+  const discardCard = cards[0]
+  if (!discardCard || discardCard.face.kind !== "discard-color") return false
+  if (!playableCardIds.includes(discardCard.id)) return false
+
+  return cards
+    .slice(1)
+    .every(
+      (card) =>
+        card.face.kind !== "discard-color" &&
+        card.color === discardCard.color,
+    )
 }
 
 function canStackDrawCards(
@@ -3167,76 +3120,6 @@ function DirectionPill({
   )
 }
 
-function DiscardOptionsPanel({
-  candidates,
-  selectedCardIds,
-  topChoices,
-  topCardId,
-  onToggleCard,
-  onTopCard,
-}: {
-  candidates: Card[]
-  selectedCardIds: string[]
-  topChoices: Card[]
-  topCardId: string
-  onToggleCard: (card: Card) => void
-  onTopCard: (cardId: string) => void
-}) {
-  return (
-    <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.045] p-3">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="text-sm font-medium text-white/78">Discard options</p>
-          <p className="mt-1 text-xs text-white/42">
-            Choose which matching-color cards to throw, and which card stays on top.
-          </p>
-        </div>
-        <label className="flex items-center gap-2 text-xs text-white/50">
-          Top card
-          <select
-            value={topCardId}
-            onChange={(event) => onTopCard(event.target.value)}
-            className="h-8 rounded-lg border border-white/10 bg-neutral-950 px-2 text-xs text-white outline-none"
-          >
-            {topChoices.map((card) => (
-              <option key={card.id} value={card.id}>
-                {shortCardLabel(card)}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-
-      {candidates.length > 0 ? (
-        <div className="mt-3 flex flex-wrap gap-2">
-          {candidates.map((card) => {
-            const selected = selectedCardIds.includes(card.id)
-            return (
-              <button
-                key={card.id}
-                type="button"
-                onClick={() => onToggleCard(card)}
-                className={
-                  "rounded-lg border px-2.5 py-1.5 text-xs font-medium transition-[background-color,border-color,color,transform] active:scale-[0.97] " +
-                  (selected
-                    ? "border-white/35 bg-white/18 text-white"
-                    : "border-white/10 bg-black/22 text-white/55 hover:border-white/22 hover:bg-white/8 hover:text-white/78")
-                }
-              >
-                {shortCardLabel(card)}
-              </button>
-            )
-          })}
-        </div>
-      ) : (
-        <p className="mt-3 text-xs text-white/38">
-          No other cards of this color are in your hand.
-        </p>
-      )}
-    </div>
-  )
-}
-
 function FannedGameHand({
   cards,
   playableCardIds,
@@ -3296,6 +3179,7 @@ function FannedGameHand({
 
   const hiddenCardIdSet = new Set(hiddenCardIds ?? [])
   const selectedCards = cardsInIdOrder(cards, selectedCardIds)
+  const discardSelectionActive = selectedCards[0]?.face.kind === "discard-color"
   const visibleCards = cards.filter(
     (card) => !selectedCardIds.includes(card.id) && !hiddenCardIdSet.has(card.id),
   )
@@ -3347,8 +3231,8 @@ function FannedGameHand({
     )
   }
 
-  function canDragCard() {
-    return isMyTurn
+  function canDragCard(card: Card) {
+    return isMyTurn && canSelectCard(card)
   }
 
   function startPointerDrag(
@@ -3357,7 +3241,7 @@ function FannedGameHand({
     cardRotation: number,
   ) {
     if (event.button !== 0) return
-    if (!canDragCard()) return
+    if (!canDragCard(card)) return
     const rect = event.currentTarget.getBoundingClientRect()
     event.currentTarget.setPointerCapture(event.pointerId)
     setActiveDrag({
@@ -3447,7 +3331,12 @@ function FannedGameHand({
           {visibleCards.map((card, index) => {
             const offset = index - half
             const playable = playableCardIds.includes(card.id)
-            const draggable = canDragCard()
+            const stageable = canSelectCard(card)
+            const draggable = canDragCard(card)
+            const highlighted = Boolean(
+              isMyTurn && stageable && (discardSelectionActive || playable),
+            )
+            const muted = Boolean(isMyTurn && discardSelectionActive && !stageable)
             const activeDragForCard =
               activeDrag?.cardId === card.id ? activeDrag : null
             const dragging = Boolean(activeDragForCard?.dragging)
@@ -3476,7 +3365,8 @@ function FannedGameHand({
                   transitionTimingFunction: "cubic-bezier(0.22, 0.9, 0.18, 1)",
                   zIndex: dragging ? 90 : 10 + index,
                   willChange: "transform",
-                  opacity: dragging ? 0 : 1,
+                  opacity: dragging ? 0 : muted ? 0.32 : 1,
+                  filter: muted ? "saturate(0.55)" : undefined,
                 }}
               >
                 <UnoCard
@@ -3494,11 +3384,13 @@ function FannedGameHand({
                       : "Card in your hand"
                   }
                   className={
-                    playable && isMyTurn
-                      ? "cursor-grab touch-none shadow-[0_0_0_1px_rgba(255,255,255,0.28)] active:cursor-grabbing"
+                    highlighted
+                      ? "cursor-grab touch-none shadow-[0_0_0_2px_rgba(255,255,255,0.34),0_14px_30px_rgba(255,255,255,0.12)] active:cursor-grabbing"
                       : draggable
                         ? "cursor-grab touch-none active:cursor-grabbing"
-                        : undefined
+                        : muted
+                          ? "cursor-not-allowed touch-none"
+                          : undefined
                   }
                 />
               </div>
@@ -3796,13 +3688,29 @@ function ColorPill({ color }: { color: PlayColor }) {
 
 function ColorPicker({
   value,
+  required = false,
   onChange,
 }: {
   value: PlayColor | null
+  required?: boolean
   onChange: (color: PlayColor) => void
 }) {
   return (
-    <div className="flex h-9 items-center gap-1 rounded-lg border border-white/10 bg-white/[0.055] px-1.5">
+    <div
+      role="group"
+      aria-label="Choose a color"
+      className={
+        "flex h-9 items-center gap-1 rounded-lg border px-1.5 transition-[background-color,border-color,box-shadow] " +
+        (required
+          ? "border-yellow-200/80 bg-yellow-300/12 shadow-[0_0_0_3px_rgba(250,204,21,0.14),0_0_26px_rgba(250,204,21,0.18)]"
+          : "border-white/10 bg-white/[0.055]")
+      }
+    >
+      {required && (
+        <span className="hidden pl-0.5 pr-1 text-[11px] font-semibold tracking-[0.08em] text-yellow-100 uppercase sm:inline">
+          Pick
+        </span>
+      )}
       {playColors.map((color) => (
         <button
           key={color}
@@ -3810,10 +3718,12 @@ function ColorPicker({
           aria-label={`Choose ${color}`}
           onClick={() => onChange(color)}
           className={
-            "size-6 rounded-full transition-[scale,box-shadow] active:scale-[0.96] " +
+            "size-6 rounded-full transition-[scale,box-shadow,filter] active:scale-[0.96] " +
             (value === color
               ? "shadow-[0_0_0_2px_white,0_0_0_4px_rgba(255,255,255,0.2)]"
-              : "shadow-[0_0_0_1px_rgba(255,255,255,0.22)]")
+              : required
+                ? "shadow-[0_0_0_1px_rgba(255,255,255,0.34),0_0_12px_rgba(250,204,21,0.2)]"
+                : "shadow-[0_0_0_1px_rgba(255,255,255,0.22)]")
           }
           style={{ background: colorValue(color) }}
         />
@@ -3870,47 +3780,6 @@ function ordinalLabel(value: number): string {
             : "th"
 
   return `${value}${suffix}`
-}
-
-function keepSameStringArrayReference(current: string[], next: string[]) {
-  if (
-    current.length === next.length &&
-    current.every((value, index) => value === next[index])
-  ) {
-    return current
-  }
-
-  return next
-}
-
-function shortCardLabel(card: Card): string {
-  const color = card.color === "wild" ? "Wild" : capitalize(card.color)
-  switch (card.face.kind) {
-    case "number":
-      return `${color} ${card.face.value}`
-    case "skip":
-      return `${color} Skip`
-    case "skip-everyone":
-      return `${color} Skip all`
-    case "reverse":
-      return `${color} Reverse`
-    case "draw":
-      return `${color} +${card.face.count}`
-    case "discard-color":
-      return `${color} Discard`
-    case "wild":
-      return "Wild"
-    case "wild-draw":
-      return `Wild +${card.face.count}`
-    case "wild-reverse-draw":
-      return "Wild Reverse +4"
-    case "wild-color-roulette":
-      return "Wild Roulette"
-  }
-}
-
-function capitalize(value: string) {
-  return value.charAt(0).toUpperCase() + value.slice(1)
 }
 
 function colorValue(color: PlayColor): string {
