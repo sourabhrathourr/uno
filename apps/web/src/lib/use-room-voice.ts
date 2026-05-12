@@ -26,8 +26,25 @@ export type RoomVoiceController = {
   toggle: () => void
 }
 
+const defaultIceServers: RTCIceServer[] = [{ urls: "stun:stun.l.google.com:19302" }]
+
+function getVoiceIceServers(): RTCIceServer[] {
+  const configuredServers = import.meta.env.VITE_RTC_ICE_SERVERS?.trim()
+  if (!configuredServers) return defaultIceServers
+
+  try {
+    const parsedServers = JSON.parse(configuredServers) as RTCIceServer[]
+    return Array.isArray(parsedServers) && parsedServers.length > 0
+      ? parsedServers
+      : defaultIceServers
+  } catch (cause) {
+    console.error("Invalid VITE_RTC_ICE_SERVERS value", cause)
+    return defaultIceServers
+  }
+}
+
 const voicePeerConfig: RTCConfiguration = {
-  iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+  iceServers: getVoiceIceServers(),
 }
 
 export function useRoomVoice({
@@ -178,6 +195,26 @@ export function useRoomVoice({
     return selfPlayerId < remotePlayerId
   }, [])
 
+  const setRemoteAudioTrack = useCallback((remotePlayerId: string, track: MediaStreamTrack) => {
+    if (track.kind !== "audio") return
+    setRemoteStreamsByPlayerId((current) => {
+      const existingTrack = current[remotePlayerId]?.getAudioTracks()[0]
+      if (existingTrack === track) return current
+      return { ...current, [remotePlayerId]: new MediaStream([track]) }
+    })
+  }, [])
+
+  const syncRemoteAudioFromPeer = useCallback(
+    (remotePlayerId: string, peer: RTCPeerConnection) => {
+      for (const receiver of peer.getReceivers()) {
+        if (receiver.track?.kind === "audio") {
+          setRemoteAudioTrack(remotePlayerId, receiver.track)
+        }
+      }
+    },
+    [setRemoteAudioTrack],
+  )
+
   const syncLocalAudioToPeer = useCallback(async (peer: RTCPeerConnection) => {
     const localStream = localStreamRef.current
     const localTrack = localStream?.getAudioTracks()[0] ?? null
@@ -189,6 +226,8 @@ export function useRoomVoice({
           transceiver.receiver.track?.kind === "audio",
       )
 
+    // Keep one stable audio m-line for the lifetime of the peer connection.
+    // The mic can be added later via replaceTrack without SDP renegotiation.
     if (localTrack && localStream) {
       if (audioTransceiver) {
         if (audioTransceiver.sender.track !== localTrack) {
@@ -204,19 +243,13 @@ export function useRoomVoice({
     }
 
     if (audioTransceiver) {
-      if (audioTransceiver.sender.track) {
-        await audioTransceiver.sender.replaceTrack(null)
-      }
-      if (
-        audioTransceiver.direction !== "recvonly" &&
-        audioTransceiver.direction !== "inactive"
-      ) {
-        audioTransceiver.direction = "recvonly"
+      if (audioTransceiver.direction !== "sendrecv") {
+        audioTransceiver.direction = "sendrecv"
       }
       return
     }
 
-    peer.addTransceiver("audio", { direction: "recvonly" })
+    peer.addTransceiver("audio", { direction: "sendrecv" })
   }, [])
 
   const ensurePeer = useCallback(
@@ -241,12 +274,7 @@ export function useRoomVoice({
       }
 
       peer.ontrack = (event) => {
-        const stream = event.streams[0] ?? new MediaStream([event.track])
-        setRemoteStreamsByPlayerId((current) =>
-          current[remotePlayerId] === stream
-            ? current
-            : { ...current, [remotePlayerId]: stream },
-        )
+        setRemoteAudioTrack(remotePlayerId, event.track)
       }
 
       peer.onconnectionstatechange = () => {
@@ -258,7 +286,7 @@ export function useRoomVoice({
       peersRef.current.set(remotePlayerId, peer)
       return peer
     },
-    [closePeer, emitSignal, syncLocalAudioToPeer],
+    [closePeer, emitSignal, setRemoteAudioTrack, syncLocalAudioToPeer],
   )
 
   const flushPendingIceCandidates = useCallback(
@@ -284,6 +312,7 @@ export function useRoomVoice({
       try {
         await syncLocalAudioToPeer(peer)
         const offer = await peer.createOffer()
+        if (peer.signalingState !== "stable") return
         await peer.setLocalDescription(offer)
         if (!peer.localDescription?.sdp) return
         emitSignal(remotePlayerId, {
@@ -318,18 +347,6 @@ export function useRoomVoice({
     }
     await Promise.all(tasks)
   }, [syncLocalAudioToPeer])
-
-  const negotiateWithOfferablePeers = useCallback(() => {
-    const selfPlayerId = selfPlayerIdRef.current
-    if (!selfPlayerId || !enabledRef.current) return
-
-    for (const player of playersRef.current) {
-      if (player.id === selfPlayerId) continue
-      if (!voiceStatesRef.current[player.id]?.enabled) continue
-      ensurePeer(player.id)
-      if (shouldCreateOffer(player.id)) void createOffer(player.id)
-    }
-  }, [createOffer, ensurePeer, shouldCreateOffer])
 
   const publishLocalVoiceState = useCallback(
     (state: VoicePeerState) => {
@@ -380,9 +397,8 @@ export function useRoomVoice({
       }
       publishLocalVoiceState(state)
       await syncAllPeers()
-      negotiateWithOfferablePeers()
     },
-    [negotiateWithOfferablePeers, publishLocalVoiceState, syncAllPeers],
+    [publishLocalVoiceState, syncAllPeers],
   )
 
   const stop = useCallback(() => {
@@ -515,7 +531,6 @@ export function useRoomVoice({
       startSpeakingMeter(stream)
       await syncAllPeers()
       connectToEnabledPeers()
-      negotiateWithOfferablePeers()
     } catch (cause) {
       stopLocalStream()
       setError(
@@ -529,7 +544,6 @@ export function useRoomVoice({
   }, [
     connectToEnabledPeers,
     connecting,
-    negotiateWithOfferablePeers,
     publishLocalVoiceState,
     setLocalMuted,
     startSpeakingMeter,
@@ -555,11 +569,19 @@ export function useRoomVoice({
       try {
         switch (event.signal.type) {
           case "offer": {
+            if (peer.signalingState !== "stable") {
+              try {
+                await peer.setLocalDescription({ type: "rollback" })
+              } catch (cause) {
+                console.error("Voice rollback failed", cause)
+              }
+            }
             await peer.setRemoteDescription({
               type: "offer",
               sdp: event.signal.sdp,
             })
             await syncLocalAudioToPeer(peer)
+            syncRemoteAudioFromPeer(event.fromPlayerId, peer)
             await flushPendingIceCandidates(event.fromPlayerId, peer)
             const answer = await peer.createAnswer()
             await peer.setLocalDescription(answer)
@@ -576,6 +598,7 @@ export function useRoomVoice({
                 type: "answer",
                 sdp: event.signal.sdp,
               })
+              syncRemoteAudioFromPeer(event.fromPlayerId, peer)
               await flushPendingIceCandidates(event.fromPlayerId, peer)
             }
             break
@@ -608,6 +631,7 @@ export function useRoomVoice({
       emitSignal,
       ensurePeer,
       flushPendingIceCandidates,
+      syncRemoteAudioFromPeer,
       syncLocalAudioToPeer,
     ],
   )
