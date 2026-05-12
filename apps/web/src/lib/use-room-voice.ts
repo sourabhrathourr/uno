@@ -7,7 +7,7 @@ import type {
   VoiceStateEvent,
 } from "@workspace/game"
 
-import type { GameSocket } from "@/lib/realtime"
+import { getRealtimeUrl, type GameSocket } from "@/lib/realtime"
 
 type VoicePeerState = {
   enabled: boolean
@@ -36,13 +36,18 @@ const defaultIceServers: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
 ]
 
-function getVoiceIceServers(): RTCIceServer[] {
+let voicePeerConfig: RTCConfiguration = {
+  iceServers: getBuildTimeVoiceIceServers(),
+}
+let voicePeerConfigPromise: Promise<RTCIceServer[]> | null = null
+
+function getBuildTimeVoiceIceServers(): RTCIceServer[] {
   const configuredServers = import.meta.env.VITE_RTC_ICE_SERVERS?.trim()
   if (!configuredServers) return defaultIceServers
 
   try {
-    const parsedServers = JSON.parse(configuredServers) as RTCIceServer[]
-    return Array.isArray(parsedServers) && parsedServers.length > 0
+    const parsedServers = normalizeVoiceIceServers(JSON.parse(configuredServers))
+    return parsedServers.length > 0
       ? parsedServers
       : defaultIceServers
   } catch (cause) {
@@ -51,8 +56,79 @@ function getVoiceIceServers(): RTCIceServer[] {
   }
 }
 
-const voicePeerConfig: RTCConfiguration = {
-  iceServers: getVoiceIceServers(),
+async function loadVoicePeerConfig(): Promise<RTCIceServer[]> {
+  if (voicePeerConfigPromise) return voicePeerConfigPromise
+
+  voicePeerConfigPromise = (async () => {
+    const fallbackServers = voicePeerConfig.iceServers ?? defaultIceServers
+
+    try {
+      const controller = new AbortController()
+      const timeoutId = window.setTimeout(() => controller.abort(), 3000)
+      const response = await fetch(`${getRealtimeUrl()}/voice/ice-servers`, {
+        cache: "no-store",
+        signal: controller.signal,
+      })
+      window.clearTimeout(timeoutId)
+
+      if (!response.ok) return fallbackServers
+
+      const payload = (await response.json()) as { iceServers?: unknown }
+      const runtimeServers = normalizeVoiceIceServers(payload.iceServers)
+      const nextServers =
+        runtimeServers.length > 1 || fallbackServers.length <= 1
+          ? runtimeServers
+          : fallbackServers
+
+      if (nextServers.length > 0) {
+        voicePeerConfig = { iceServers: nextServers }
+      }
+    } catch (cause) {
+      logRoomVoiceDebug("ice server config fetch failed", { cause })
+    }
+
+    logRoomVoiceDebug("ice server config loaded", {
+      iceServers: (voicePeerConfig.iceServers ?? []).map(
+        (server) => server.urls
+      ),
+    })
+    return voicePeerConfig.iceServers ?? defaultIceServers
+  })()
+
+  return voicePeerConfigPromise
+}
+
+function normalizeVoiceIceServers(value: unknown): RTCIceServer[] {
+  if (!Array.isArray(value)) return []
+
+  return value.flatMap((server) => {
+    if (!server || typeof server !== "object" || !("urls" in server)) return []
+
+    const urls = server.urls
+    const normalizedUrls =
+      typeof urls === "string"
+        ? urls
+        : Array.isArray(urls) && urls.every((url) => typeof url === "string")
+          ? urls
+          : null
+    if (!normalizedUrls) return []
+
+    const username =
+      "username" in server && typeof server.username === "string"
+        ? server.username
+        : undefined
+    const credential =
+      "credential" in server && typeof server.credential === "string"
+        ? server.credential
+        : undefined
+    const credentialType =
+      "credentialType" in server &&
+      (server.credentialType === "password" || server.credentialType === "oauth")
+        ? server.credentialType
+        : undefined
+
+    return [{ urls: normalizedUrls, username, credential, credentialType }]
+  })
 }
 
 export function isRoomVoiceDebugEnabled() {
@@ -643,9 +719,19 @@ export function useRoomVoice({
     [emitVoiceState, setVoiceStateForPlayer]
   )
 
-  const startListening = useCallback(() => {
+  const startListening = useCallback(async () => {
     const selfPlayerId = selfPlayerIdRef.current
     if (!selfPlayerId || enabledRef.current) return
+
+    setConnecting(true)
+    setError(null)
+    try {
+      await loadVoicePeerConfig()
+    } finally {
+      setConnecting(false)
+    }
+
+    if (!selfPlayerIdRef.current || enabledRef.current) return
 
     enabledRef.current = true
     mutedRef.current = true
@@ -801,6 +887,7 @@ export function useRoomVoice({
     setError(null)
 
     try {
+      await loadVoicePeerConfig()
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           autoGainControl: true,
@@ -1042,7 +1129,7 @@ export function useRoomVoice({
 
   useEffect(() => {
     if (!socket || !selfPlayerId) return
-    startListening()
+    void startListening()
     socket.emit("voice:requestStates")
   }, [selfPlayerId, socket, startListening])
 
@@ -1083,6 +1170,9 @@ export function useRoomVoice({
         speaking: speakingRef.current,
         localTrack: describeTrack(localStreamRef.current?.getAudioTracks()[0]),
         silentTrack: describeTrack(silentAudioSourceRef.current?.track),
+        iceServers: (voicePeerConfig.iceServers ?? []).map(
+          (server) => server.urls
+        ),
         voiceStates: voiceStatesRef.current,
         remoteStreams: Object.fromEntries(
           Object.entries(remoteStreamsByPlayerId).map(([playerId, stream]) => [

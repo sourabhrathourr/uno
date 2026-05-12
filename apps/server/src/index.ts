@@ -18,6 +18,13 @@ import type {
 
 import { RoomManager } from "./room-manager"
 
+type IceServerConfig = {
+  urls: string | string[]
+  username?: string
+  credential?: string
+  credentialType?: "password" | "oauth"
+}
+
 const port = Number.parseInt(process.env.PORT ?? "4001", 10)
 const allowedOrigins = (process.env.CORS_ORIGIN ?? "http://localhost:3000")
   .split(",")
@@ -25,6 +32,7 @@ const allowedOrigins = (process.env.CORS_ORIGIN ?? "http://localhost:3000")
   .filter(Boolean)
 const voiceDebugEnabled =
   process.env.VOICE_DEBUG === "1" || process.env.VOICE_DEBUG === "true"
+const voiceIceServers = getConfiguredIceServers()
 
 const rooms = new RoomManager()
 const voiceStatesByRoomCode = new Map<
@@ -48,6 +56,11 @@ const httpServer = createServer(async (req, res) => {
 
   if (req.method === "GET" && url.pathname === "/health") {
     sendJson(req, res, 200, { ok: true })
+    return
+  }
+
+  if (req.method === "GET" && url.pathname === "/voice/ice-servers") {
+    sendJson(req, res, 200, { iceServers: voiceIceServers })
     return
   }
 
@@ -505,6 +518,86 @@ function describeVoiceCandidate(candidate: unknown) {
     protocol:
       candidateValue.match(/ (udp|tcp) /i)?.[1]?.toLowerCase() ?? "unknown",
   }
+}
+
+function getConfiguredIceServers(): IceServerConfig[] {
+  const rawServers = (
+    process.env.RTC_ICE_SERVERS ?? process.env.VITE_RTC_ICE_SERVERS
+  )?.trim()
+  if (rawServers) {
+    try {
+      const parsedServers = normalizeIceServers(JSON.parse(rawServers))
+      if (parsedServers.length > 0) return parsedServers
+    } catch (cause) {
+      console.error("Invalid RTC_ICE_SERVERS value", cause)
+    }
+  }
+
+  const meteredUsername = process.env.METERED_TURN_USERNAME?.trim()
+  const meteredCredential = process.env.METERED_TURN_CREDENTIAL?.trim()
+  if (meteredUsername && meteredCredential) {
+    const host = (
+      process.env.METERED_TURN_HOST ?? "global.relay.metered.ca"
+    ).trim()
+    return [
+      { urls: "stun:stun.relay.metered.ca:80" },
+      {
+        urls: `turn:${host}:80`,
+        username: meteredUsername,
+        credential: meteredCredential,
+      },
+      {
+        urls: `turn:${host}:80?transport=tcp`,
+        username: meteredUsername,
+        credential: meteredCredential,
+      },
+      {
+        urls: `turn:${host}:443`,
+        username: meteredUsername,
+        credential: meteredCredential,
+      },
+      {
+        urls: `turns:${host}:443?transport=tcp`,
+        username: meteredUsername,
+        credential: meteredCredential,
+      },
+    ]
+  }
+
+  return [{ urls: "stun:stun.l.google.com:19302" }]
+}
+
+function normalizeIceServers(value: unknown): IceServerConfig[] {
+  if (!Array.isArray(value)) return []
+
+  return value.flatMap((server) => {
+    if (!server || typeof server !== "object" || !("urls" in server)) return []
+
+    const urls = server.urls
+    const normalizedUrls =
+      typeof urls === "string"
+        ? urls
+        : Array.isArray(urls) && urls.every((url) => typeof url === "string")
+          ? urls
+          : null
+    if (!normalizedUrls) return []
+
+    const username =
+      "username" in server && typeof server.username === "string"
+        ? server.username
+        : undefined
+    const credential =
+      "credential" in server && typeof server.credential === "string"
+        ? server.credential
+        : undefined
+    const credentialType =
+      "credentialType" in server &&
+      (server.credentialType === "password" || server.credentialType === "oauth")
+        ? server.credentialType
+        : undefined
+
+    return [{ urls: normalizedUrls, username, credential, credentialType }]
+  })
 }
 
 function withJoinedPlayer<T>(
