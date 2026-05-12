@@ -447,6 +447,21 @@ function RoomPage() {
     })
   }
 
+  function restartGame() {
+    if (!socket) return
+    setError(null)
+    playFx("buttonHard", { volume: 0.6 })
+    socket.emit("room:restart", (result) => {
+      if (!result.ok) {
+        applyCommandError(result.error)
+        return
+      }
+
+      setStartIntroPhase("lights")
+      applyRoomSnapshot(result.data)
+    })
+  }
+
   function sendChatMessage(input: SendChatMessageInput) {
     if (!socket) return
     setError(null)
@@ -601,6 +616,7 @@ function RoomPage() {
           onDrawRouletteCard={drawRouletteCard}
           onCatchUno={catchUno}
           onSendChatMessage={sendChatMessage}
+          onRestartGame={restartGame}
         />
         {showIntro && (
           <GameStartIntro
@@ -646,6 +662,7 @@ function GameTable({
   onDrawRouletteCard,
   onCatchUno,
   onSendChatMessage,
+  onRestartGame,
 }: {
   room: RoomSnapshot
   player: Player
@@ -661,6 +678,7 @@ function GameTable({
   onDrawRouletteCard: () => void
   onCatchUno: (targetPlayerId: string) => void
   onSendChatMessage: (input: SendChatMessageInput) => void
+  onRestartGame: () => void
 }) {
   const game = room.game
   const tableDropRef = useRef<HTMLDivElement | null>(null)
@@ -720,6 +738,9 @@ function GameTable({
     (candidate) => candidate.id === celebratingWinnerId,
   )
   const gameFinished = Boolean(game && game.turnPlayerId === null)
+  const canRestartGame = gameFinished && room.hostPlayerId === player.id
+  const gameStartEventId =
+    game?.events.find((event) => event.type === "game-started")?.id ?? null
   const drawStack = game?.drawStack ?? null
   const rouletteChoice =
     game?.pendingChoice?.type === "roulette-draw" ? game.pendingChoice : null
@@ -837,6 +858,12 @@ function GameTable({
   useEffect(() => {
     if (!canDeclareUno && declaredUno) setDeclaredUno(false)
   }, [canDeclareUno, declaredUno])
+
+  useEffect(() => {
+    celebratedWinnerIdsRef.current.clear()
+    acknowledgedWinnerIdsRef.current = null
+    setCelebratingWinnerId(null)
+  }, [gameStartEventId])
 
   useEffect(() => {
     if (!isMyTurn) return
@@ -1045,9 +1072,13 @@ function GameTable({
       : isMyTurn
         ? "Your turn"
         : `${playerName(room, game?.turnPlayerId)} is playing`
-  const tableStatusDetail = game?.drawStack
-    ? `Draw stack is +${game.drawStack.amount}. Stack +${game.drawStack.minimum} or higher.`
-    : `${game?.discardPileCount ?? 0} cards discarded`
+  const tableStatusDetail = gameFinished
+    ? canRestartGame
+      ? "Start another hand with the same room and players."
+      : "Waiting for the host to start another hand."
+    : game?.drawStack
+      ? `Draw stack is +${game.drawStack.amount}. Stack +${game.drawStack.minimum} or higher.`
+      : `${game?.discardPileCount ?? 0} cards discarded`
 
   if (narrowViewport) {
     return (
@@ -1155,6 +1186,17 @@ function GameTable({
                 <div className="flex shrink-0 items-center gap-1">
                   <DirectionPill direction={game?.direction ?? 1} compact />
                   <ColorPill color={game?.currentColor ?? "red"} />
+                  {canRestartGame && (
+                    <Button
+                      type="button"
+                      size="xs"
+                      onClick={onRestartGame}
+                      className="h-8 rounded-full bg-white px-2.5 text-[11px] font-semibold text-neutral-950 hover:bg-white/85"
+                    >
+                      <Play className="mr-1 size-3" strokeWidth={2.2} />
+                      New
+                    </Button>
+                  )}
                 </div>
               </div>
 
@@ -1460,6 +1502,17 @@ function GameTable({
                     </span>
                     <DirectionPill direction={game?.direction ?? 1} compact />
                     <ColorPill color={game?.currentColor ?? "red"} />
+                    {canRestartGame && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={onRestartGame}
+                        className="rounded-full bg-white px-3 text-neutral-950 hover:bg-white/85"
+                      >
+                        <Play className="mr-1.5 size-3.5" strokeWidth={2.2} />
+                        Next hand
+                      </Button>
+                    )}
                     {rouletteChoice && (
                       <div className="flex items-center gap-2 rounded-full border border-amber-200/20 bg-amber-300/12 py-1 pr-1 pl-3 text-xs text-amber-50 shadow-[0_10px_26px_rgba(0,0,0,0.22)] backdrop-blur-md">
                         <span className="flex items-center gap-1.5">

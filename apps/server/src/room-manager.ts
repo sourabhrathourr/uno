@@ -230,6 +230,31 @@ export class RoomManager {
     return ok(snapshot(room))
   }
 
+  restartRoom(code: string, playerId: string): CommandResult<RoomSnapshot> {
+    const room = this.rooms.get(normalizeRoomCode(code))
+    if (!room) {
+      return fail("room-not-found", "That room code does not exist.")
+    }
+
+    if (room.hostPlayerId !== playerId) {
+      return fail("host-only", "Only the host can restart the game.")
+    }
+
+    if (room.status !== "finished" || room.gameState?.turnPlayerId !== null) {
+      return fail("game-not-finished", "Finish this hand before starting another.")
+    }
+
+    if (room.players.length < 2) {
+      return fail("not-enough-players", "At least two players are needed to restart.")
+    }
+
+    room.status = "playing"
+    room.gameState = createGame({ players: room.players, houseRules: room.houseRules })
+    touch(room)
+
+    return ok(snapshot(room))
+  }
+
   sendChatMessage(
     code: string,
     playerId: string,

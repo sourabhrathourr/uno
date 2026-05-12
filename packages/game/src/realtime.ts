@@ -63,6 +63,9 @@ export type RoomEvent =
       type: "room-started"
     }
   | {
+      type: "room-restarted"
+    }
+  | {
       type: "game-updated"
     }
 
@@ -76,6 +79,7 @@ export type ClientToServerEvents = {
     ack: (result: CommandResult<RoomSnapshot>) => void,
   ) => void
   "room:start": (ack: (result: CommandResult<RoomSnapshot>) => void) => void
+  "room:restart": (ack: (result: CommandResult<RoomSnapshot>) => void) => void
   "room:sendChatMessage": (
     input: SendChatMessageInput,
     ack: (result: CommandResult<RoomSnapshot>) => void,

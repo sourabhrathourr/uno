@@ -178,6 +178,25 @@ io.on("connection", (socket) => {
     }
   })
 
+  socket.on("room:restart", (ack) => {
+    const roomCode = socket.data.roomCode
+    const playerId = socket.data.playerId
+    if (!roomCode || !playerId) {
+      ack({
+        ok: false,
+        error: { code: "not-joined", message: "Join a room before restarting." },
+      })
+      return
+    }
+
+    const result = rooms.restartRoom(roomCode, playerId)
+    ack(result)
+    if (result.ok) {
+      void emitRoomState(roomCode, result.data)
+      io.to(roomCode).emit("room:event", { type: "room-restarted" })
+    }
+  })
+
   socket.on("room:sendChatMessage", (input, ack) => {
     const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
       rooms.sendChatMessage(roomCode, playerId, input),
