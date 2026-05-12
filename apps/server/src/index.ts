@@ -22,7 +22,7 @@ const allowedOrigins = (process.env.CORS_ORIGIN ?? "http://localhost:3000")
 const rooms = new RoomManager()
 const voiceStatesByRoomCode = new Map<
   string,
-  Map<string, { enabled: boolean; speaking: boolean }>
+  Map<string, { enabled: boolean; muted: boolean; speaking: boolean }>
 >()
 
 const httpServer = createServer(async (req, res) => {
@@ -210,15 +210,22 @@ io.on("connection", (socket) => {
     if (result.ok) void emitRoomState(result.data.code, result.data)
   })
 
+  socket.on("voice:requestStates", () => {
+    const roomCode = socket.data.roomCode
+    if (!roomCode) return
+    emitVoiceStates(socket, roomCode)
+  })
+
   socket.on("voice:setState", (input) => {
     const roomCode = socket.data.roomCode
     const playerId = socket.data.playerId
     if (!roomCode || !playerId) return
 
     const enabled = Boolean(input.enabled)
-    const speaking = Boolean(enabled && input.speaking)
-    writeVoiceState(roomCode, playerId, { enabled, speaking })
-    io.to(roomCode).emit("voice:state", { playerId, enabled, speaking })
+    const muted = Boolean(input.muted)
+    const speaking = Boolean(enabled && !muted && input.speaking)
+    writeVoiceState(roomCode, playerId, { enabled, muted, speaking })
+    io.to(roomCode).emit("voice:state", { playerId, enabled, muted, speaking })
   })
 
   socket.on("voice:signal", (input) => {
@@ -301,10 +308,15 @@ io.on("connection", (socket) => {
         (candidate) => candidate.id === playerId,
       )
       if (!playerSnapshot?.connected) {
-        writeVoiceState(roomCode, playerId, { enabled: false, speaking: false })
+        writeVoiceState(roomCode, playerId, {
+          enabled: false,
+          muted: true,
+          speaking: false,
+        })
         io.to(roomCode).emit("voice:state", {
           playerId,
           enabled: false,
+          muted: true,
           speaking: false,
         })
       }
@@ -401,7 +413,7 @@ function emitVoiceStates(
 function writeVoiceState(
   roomCode: string,
   playerId: string,
-  state: { enabled: boolean; speaking: boolean },
+  state: { enabled: boolean; muted: boolean; speaking: boolean },
 ) {
   const roomVoiceStates = voiceStatesByRoomCode.get(roomCode) ?? new Map()
 

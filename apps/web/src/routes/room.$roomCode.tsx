@@ -656,6 +656,8 @@ function RoomPage() {
       onReady={setReady}
       onStart={startGame}
       onCopyInvite={copyInvite}
+      onSendChatMessage={sendChatMessage}
+      voice={voice}
     />
   )
 }
@@ -1972,7 +1974,8 @@ function MobilePlayerStrip({
         const isYou = candidate.id === selfPlayerId
         const voiceState = voiceStates[candidate.id]
         const hasVoiceOn = Boolean(voiceState?.enabled)
-        const isSpeaking = Boolean(voiceState?.speaking)
+        const isMuted = !hasVoiceOn || Boolean(voiceState?.muted)
+        const isSpeaking = Boolean(voiceState?.speaking && !isMuted)
         const drawStack =
           game?.drawStack?.targetPlayerId === candidate.id ? game.drawStack : null
         const status = winnerPlacement
@@ -1985,6 +1988,8 @@ function MobilePlayerStrip({
               ? "On UNO"
               : isSpeaking
                 ? "Speaking"
+              : hasVoiceOn && isMuted
+                ? "Mic off"
               : hasVoiceOn
                 ? "Voice on"
               : active
@@ -2033,13 +2038,15 @@ function MobilePlayerStrip({
                   " " +
                   (isSpeaking
                     ? "border-emerald-300 text-white"
-                    : hasVoiceOn
+                    : hasVoiceOn && !isMuted
                       ? "border-white/20 text-white/70"
-                      : "border-red-300/45 text-red-300")
+                      : "border-white/12 text-white/34")
                 }
-                aria-label={isSpeaking ? "Speaking" : hasVoiceOn ? "Voice on" : "Mic off"}
+                aria-label={
+                  isSpeaking ? "Speaking" : hasVoiceOn && !isMuted ? "Voice on" : "Mic off"
+                }
               >
-                {hasVoiceOn ? (
+                {hasVoiceOn && !isMuted ? (
                   <Mic className={dense ? "size-2.5" : "size-3"} strokeWidth={2.2} />
                 ) : (
                   <MicOff className={dense ? "size-2.5" : "size-3"} strokeWidth={2.2} />
@@ -2669,7 +2676,8 @@ function TableAvatarSeat({
   const isFirstPlace = winnerPlacement?.position === 1
   const isUno = declaredUno && !winnerPlacement && !eliminated
   const hasVoiceOn = Boolean(voiceState?.enabled)
-  const isSpeaking = Boolean(voiceState?.speaking)
+  const isMuted = !hasVoiceOn || Boolean(voiceState?.muted)
+  const isSpeaking = Boolean(voiceState?.speaking && !isMuted)
 
   return (
     <div
@@ -2787,13 +2795,15 @@ function TableAvatarSeat({
             "absolute -bottom-2 -left-2 grid size-6 place-items-center rounded-full border bg-neutral-950/95 text-white/72 shadow-[0_8px_18px_rgba(0,0,0,0.28)] transition-[border-color,color,box-shadow] " +
             (isSpeaking
               ? "border-emerald-300 text-white shadow-[0_0_0_1px_rgba(52,211,153,0.22),0_8px_18px_rgba(0,0,0,0.28)]"
-              : hasVoiceOn
+            : hasVoiceOn && !isMuted
                 ? "border-white/18"
-                : "border-red-300/45 text-red-300")
+                : "border-white/12 text-white/34")
           }
-          aria-label={isSpeaking ? "Speaking" : hasVoiceOn ? "Voice on" : "Mic off"}
+          aria-label={
+            isSpeaking ? "Speaking" : hasVoiceOn && !isMuted ? "Voice on" : "Mic off"
+          }
         >
-          {hasVoiceOn ? (
+          {hasVoiceOn && !isMuted ? (
             <Mic className="size-3.5" strokeWidth={2.1} />
           ) : (
             <MicOff className="size-3.5" strokeWidth={2.1} />
@@ -3959,12 +3969,14 @@ function VoiceToggleButton({
   voice: RoomVoiceController
   compact?: boolean
 }) {
-  const active = voice.enabled
+  const micOn = Boolean(voice.enabled && !voice.muted)
   const title = voice.error
     ? voice.error
-    : active
-      ? "Turn voice off"
-      : "Turn voice on"
+    : !voice.enabled
+      ? "Join voice"
+      : voice.muted
+        ? "Unmute mic"
+        : "Mute mic"
 
   return (
     <button
@@ -3976,14 +3988,14 @@ function VoiceToggleButton({
       className={
         "inline-flex size-9 shrink-0 items-center justify-center rounded-full border transition-[background-color,border-color,color,opacity,scale] active:scale-[0.96] disabled:opacity-70 " +
         " " +
-        (active
+        (micOn
           ? "border-white/10 bg-white/[0.045] text-white/74 hover:border-white/18 hover:bg-white/[0.075] hover:text-white/88"
           : voice.error
             ? "border-red-300/35 bg-red-500/12 text-red-100"
-            : "border-red-300/28 bg-red-500/10 text-red-300 hover:border-red-300/40 hover:bg-red-500/14 hover:text-red-200")
+            : "border-white/10 bg-white/[0.045] text-red-300 hover:border-white/18 hover:bg-white/[0.075] hover:text-red-200")
       }
     >
-      {active ? (
+      {micOn ? (
         <Mic className="size-4" strokeWidth={2} />
       ) : (
         <MicOff className="size-4" strokeWidth={2} />
@@ -4014,19 +4026,56 @@ function RemoteVoiceAudio({ stream }: { stream: MediaStream }) {
     if (!audio) return
 
     audio.srcObject = stream
-    const playPromise = audio.play()
-    if (playPromise) {
-      playPromise.catch(() => {
-        // Browser autoplay rules can block remote audio until the next user gesture.
-      })
+    let waitingForGesture = false
+    const unlockEvents: Array<keyof WindowEventMap> = [
+      "pointerdown",
+      "touchend",
+      "keydown",
+    ]
+
+    const removeUnlockListeners = () => {
+      if (!waitingForGesture) return
+      waitingForGesture = false
+      for (const eventName of unlockEvents) {
+        window.removeEventListener(eventName, playAudio)
+      }
     }
 
+    const addUnlockListeners = () => {
+      if (waitingForGesture) return
+      waitingForGesture = true
+      for (const eventName of unlockEvents) {
+        window.addEventListener(eventName, playAudio, { once: true })
+      }
+    }
+
+    const playAudio = () => {
+      const playPromise = audio.play()
+      if (playPromise) {
+        playPromise.then(removeUnlockListeners).catch(addUnlockListeners)
+      }
+    }
+
+    playAudio()
+    audio.addEventListener("loadedmetadata", playAudio)
+    audio.addEventListener("canplay", playAudio)
+
     return () => {
+      removeUnlockListeners()
+      audio.removeEventListener("loadedmetadata", playAudio)
+      audio.removeEventListener("canplay", playAudio)
       audio.srcObject = null
     }
   }, [stream])
 
-  return <audio ref={audioRef} autoPlay playsInline className="hidden" />
+  return (
+    <audio
+      ref={audioRef}
+      autoPlay
+      playsInline
+      className="pointer-events-none absolute size-px opacity-0"
+    />
+  )
 }
 
 function PlayerRow({
@@ -4077,6 +4126,8 @@ function LobbyWaitingRoom({
   onReady,
   onStart,
   onCopyInvite,
+  onSendChatMessage,
+  voice,
 }: {
   room: RoomSnapshot | null
   player: Player
@@ -4088,17 +4139,21 @@ function LobbyWaitingRoom({
   onReady: (ready: boolean) => void
   onStart: () => void
   onCopyInvite: () => Promise<void>
+  onSendChatMessage: (input: SendChatMessageInput) => void
+  voice: RoomVoiceController
 }) {
   const players = room?.players ?? []
   const seatCount = players.length
   const readyCount = players.filter(
     (candidate) => candidate.ready || candidate.id === room?.hostPlayerId,
   ).length
-  const maxPlayers = room?.houseRules.maxPlayers ?? 8
   const everyoneReady = seatCount >= 2 && readyCount === seatCount
+  const messages = room?.chatMessages ?? []
+  const visibleError = error ?? voice.error
 
   return (
     <main className="relative h-dvh overflow-hidden bg-[#070604] text-white antialiased">
+      <VoiceAudioOutputs streamsByPlayerId={voice.remoteStreamsByPlayerId} />
       <div
         className="pointer-events-none absolute inset-0"
         style={{
@@ -4119,9 +4174,18 @@ function LobbyWaitingRoom({
             </h1>
           </div>
           <div className="flex items-center gap-2">
+            <VoiceToggleButton voice={voice} />
             <SoundToggle />
             <StatusDot connected={connected} />
-            <CopyInviteButton onCopy={onCopyInvite} />
+            <div className="lg:hidden">
+              <MobileChatSheet
+                messages={messages}
+                selfPlayerId={player.id}
+                error={visibleError}
+                onSendMessage={onSendChatMessage}
+              />
+            </div>
+            <CopyInviteButton iconOnly onCopy={onCopyInvite} />
           </div>
         </header>
 
@@ -4134,53 +4198,19 @@ function LobbyWaitingRoom({
             everyoneReady={everyoneReady}
             isHost={isHost}
             currentPlayerReady={currentPlayerReady}
+            voiceStates={voice.voiceStates}
             onReady={onReady}
             onStart={onStart}
             onCopyInvite={onCopyInvite}
-            error={error}
+            error={visibleError}
           />
 
-          <aside className="hidden min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035] p-4 lg:flex">
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <UsersRound className="size-4 text-white/60" />
-                <h2 className="text-sm font-medium text-white/82">
-                  Players {seatCount}/{maxPlayers}
-                </h2>
-              </div>
-              <span
-                className={
-                  "rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-[0.14em] uppercase " +
-                  (everyoneReady
-                    ? "border-emerald-300/40 bg-emerald-400/10 text-emerald-200"
-                    : "border-white/12 bg-black/30 text-white/55")
-                }
-              >
-                {readyCount}/{seatCount || 0} ready
-              </span>
-            </div>
-
-            <div className="mt-4 flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto">
-              {players.length === 0 ? (
-                <p className="rounded-md border border-white/8 bg-black/20 px-3 py-2 text-sm text-white/45">
-                  Waiting for the first player...
-                </p>
-              ) : (
-                players.map((candidate) => (
-                  <PlayerRow
-                    key={candidate.id}
-                    player={candidate}
-                    isHost={candidate.id === room?.hostPlayerId}
-                    isYou={candidate.id === player.id}
-                  />
-                ))
-              )}
-            </div>
-
-            <div className="mt-3 rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-[11px] leading-relaxed text-white/45">
-              Tip — once everyone is in, the host hits start and the lights come on.
-            </div>
-          </aside>
+          <TableChatPanel
+            messages={messages}
+            selfPlayerId={player.id}
+            error={visibleError}
+            onSendMessage={onSendChatMessage}
+          />
         </section>
       </div>
     </main>
@@ -4195,6 +4225,7 @@ function DimmedTablePreview({
   everyoneReady,
   isHost,
   currentPlayerReady,
+  voiceStates,
   onReady,
   onStart,
   onCopyInvite,
@@ -4207,6 +4238,7 @@ function DimmedTablePreview({
   everyoneReady: boolean
   isHost: boolean
   currentPlayerReady: boolean
+  voiceStates: RoomVoiceController["voiceStates"]
   onReady: (ready: boolean) => void
   onStart: () => void
   onCopyInvite: () => Promise<void>
@@ -4233,6 +4265,7 @@ function DimmedTablePreview({
         players={players}
         hostPlayerId={room?.hostPlayerId ?? null}
         selfPlayerId={player.id}
+        voiceStates={voiceStates}
         compact={compactSurface}
       />
 
@@ -4334,11 +4367,13 @@ function DimmedSeatRing({
   players,
   hostPlayerId,
   selfPlayerId,
+  voiceStates,
   compact,
 }: {
   players: Player[]
   hostPlayerId: string | null
   selfPlayerId: string
+  voiceStates: RoomVoiceController["voiceStates"]
   compact: boolean
 }) {
   const ordered = orderPlayersAroundSelf(players, selfPlayerId)
@@ -4350,6 +4385,10 @@ function DimmedSeatRing({
         const isYou = candidate.id === selfPlayerId
         const isHost = candidate.id === hostPlayerId
         const readyOrHost = candidate.ready || isHost
+        const voiceState = voiceStates[candidate.id]
+        const hasVoiceOn = Boolean(voiceState?.enabled)
+        const isMuted = !hasVoiceOn || Boolean(voiceState?.muted)
+        const isSpeaking = Boolean(voiceState?.speaking && !isMuted)
 
         return (
           <div
@@ -4401,6 +4440,25 @@ function DimmedSeatRing({
                 }
               >
                 {readyOrHost ? "✓" : "..."}
+              </span>
+              <span
+                className={
+                  "absolute -bottom-2 -left-2 grid size-6 place-items-center rounded-full border bg-neutral-950/95 shadow-[0_8px_18px_rgba(0,0,0,0.28)] transition-[border-color,color] " +
+                  (isSpeaking
+                    ? "border-emerald-300 text-white"
+                    : hasVoiceOn && !isMuted
+                      ? "border-white/18 text-white/70"
+                      : "border-white/12 text-white/34")
+                }
+                aria-label={
+                  isSpeaking ? "Speaking" : hasVoiceOn && !isMuted ? "Voice on" : "Mic off"
+                }
+              >
+                {hasVoiceOn && !isMuted ? (
+                  <Mic className="size-3.5" strokeWidth={2.1} />
+                ) : (
+                  <MicOff className="size-3.5" strokeWidth={2.1} />
+                )}
               </span>
             </div>
           </div>

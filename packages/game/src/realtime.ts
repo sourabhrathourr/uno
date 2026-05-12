@@ -72,6 +72,7 @@ export type VoiceSignalEvent = VoiceSignalInput & {
 
 export type VoiceStateInput = {
   enabled: boolean
+  muted: boolean
   speaking: boolean
 }
 
@@ -119,6 +120,7 @@ export type ClientToServerEvents = {
     input: SendChatMessageInput,
     ack: (result: CommandResult<RoomSnapshot>) => void,
   ) => void
+  "voice:requestStates": () => void
   "voice:setState": (input: VoiceStateInput) => void
   "voice:signal": (input: VoiceSignalInput) => void
   "game:playCards": (
