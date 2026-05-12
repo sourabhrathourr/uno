@@ -236,8 +236,8 @@ export class RoomManager {
       return fail("room-not-found", "That room code does not exist.")
     }
 
-    if (room.hostPlayerId !== playerId) {
-      return fail("host-only", "Only the host can restart the game.")
+    if (!findPlayer(room, playerId)) {
+      return fail("player-not-found", "You are not seated in this room.")
     }
 
     if (room.status !== "finished" || room.gameState?.turnPlayerId !== null) {

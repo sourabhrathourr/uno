@@ -738,7 +738,7 @@ function GameTable({
     (candidate) => candidate.id === celebratingWinnerId,
   )
   const gameFinished = Boolean(game && game.turnPlayerId === null)
-  const canRestartGame = gameFinished && room.hostPlayerId === player.id
+  const canRestartGame = gameFinished
   const gameStartEventId =
     game?.events.find((event) => event.type === "game-started")?.id ?? null
   const drawStack = game?.drawStack ?? null
@@ -1073,9 +1073,7 @@ function GameTable({
         ? "Your turn"
         : `${playerName(room, game?.turnPlayerId)} is playing`
   const tableStatusDetail = gameFinished
-    ? canRestartGame
-      ? "Start another hand with the same room and players."
-      : "Waiting for the host to start another hand."
+    ? "Start another hand with the same room and players."
     : game?.drawStack
       ? `Draw stack is +${game.drawStack.amount}. Stack +${game.drawStack.minimum} or higher.`
       : `${game?.discardPileCount ?? 0} cards discarded`
