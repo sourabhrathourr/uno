@@ -376,6 +376,16 @@ export function useRoomVoice({
     return selfPlayerId < remotePlayerId
   }, [])
 
+  const shouldCreateInitialOffer = useCallback(
+    (remotePlayerId: string, peer: RTCPeerConnection) => {
+      if (!shouldCreateOffer(remotePlayerId)) return false
+      if (peer.signalingState !== "stable") return false
+      if (peer.localDescription || peer.remoteDescription) return false
+      return true
+    },
+    [shouldCreateOffer]
+  )
+
   const setRemoteAudioTrack = useCallback(
     (remotePlayerId: string, track: MediaStreamTrack) => {
       if (track.kind !== "audio") return
@@ -553,11 +563,32 @@ export function useRoomVoice({
     async (remotePlayerId: string) => {
       if (negotiatingPeersRef.current.has(remotePlayerId)) return
       const peer = ensurePeer(remotePlayerId)
-      if (!peer || peer.signalingState !== "stable") return
+      if (!peer) return
+
+      if (!shouldCreateInitialOffer(remotePlayerId, peer)) {
+        logRoomVoiceDebug("initial offer skipped", {
+          remotePlayerId,
+          signalingState: peer.signalingState,
+          connectionState: peer.connectionState,
+          localDescription: peer.localDescription?.type ?? null,
+          remoteDescription: peer.remoteDescription?.type ?? null,
+        })
+        return
+      }
 
       negotiatingPeersRef.current.add(remotePlayerId)
       try {
         await syncLocalAudioToPeer(peer, remotePlayerId)
+        if (!shouldCreateInitialOffer(remotePlayerId, peer)) {
+          logRoomVoiceDebug("initial offer skipped after sync", {
+            remotePlayerId,
+            signalingState: peer.signalingState,
+            connectionState: peer.connectionState,
+            localDescription: peer.localDescription?.type ?? null,
+            remoteDescription: peer.remoteDescription?.type ?? null,
+          })
+          return
+        }
         const offer = await peer.createOffer()
         if (peer.signalingState !== "stable") return
         await peer.setLocalDescription(offer)
@@ -577,7 +608,7 @@ export function useRoomVoice({
         negotiatingPeersRef.current.delete(remotePlayerId)
       }
     },
-    [emitSignal, ensurePeer, syncLocalAudioToPeer]
+    [emitSignal, ensurePeer, shouldCreateInitialOffer, syncLocalAudioToPeer]
   )
 
   const connectToEnabledPeers = useCallback(() => {
@@ -587,10 +618,12 @@ export function useRoomVoice({
     for (const player of playersRef.current) {
       if (player.id === selfPlayerId) continue
       if (!voiceStatesRef.current[player.id]?.enabled) continue
-      ensurePeer(player.id)
-      if (shouldCreateOffer(player.id)) void createOffer(player.id)
+      const peer = ensurePeer(player.id)
+      if (peer && shouldCreateInitialOffer(player.id, peer)) {
+        void createOffer(player.id)
+      }
     }
-  }, [createOffer, ensurePeer, shouldCreateOffer])
+  }, [createOffer, ensurePeer, shouldCreateInitialOffer])
 
   const syncAllPeers = useCallback(async () => {
     const tasks: Promise<void>[] = []
@@ -956,8 +989,10 @@ export function useRoomVoice({
       }
 
       if (enabledRef.current) {
-        ensurePeer(event.playerId)
-        if (shouldCreateOffer(event.playerId)) void createOffer(event.playerId)
+        const peer = ensurePeer(event.playerId)
+        if (peer && shouldCreateInitialOffer(event.playerId, peer)) {
+          void createOffer(event.playerId)
+        }
       }
     }
 
@@ -1001,7 +1036,7 @@ export function useRoomVoice({
     ensurePeer,
     handleIncomingSignal,
     setVoiceStateForPlayer,
-    shouldCreateOffer,
+    shouldCreateInitialOffer,
     socket,
   ])
 
