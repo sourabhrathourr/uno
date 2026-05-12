@@ -71,6 +71,7 @@ import {
 } from "@/lib/sound"
 import { useSoundSystem } from "@/lib/use-sound-system"
 import {
+  logRoomVoiceDebug,
   useRoomVoice,
   type RoomVoiceController,
 } from "@/lib/use-room-voice"
@@ -113,7 +114,9 @@ function RoomPage() {
 
   const normalizedRoomCode = roomCode.toUpperCase()
   const isHost = room?.hostPlayerId === player?.id
-  const currentPlayer = room?.players.find((candidate) => candidate.id === player?.id)
+  const currentPlayer = room?.players.find(
+    (candidate) => candidate.id === player?.id
+  )
   const voice = useRoomVoice({
     socket,
     roomCode: normalizedRoomCode,
@@ -152,7 +155,8 @@ function RoomPage() {
 
     if (nextPlayerGame.playerId !== playerRef.current?.id) return
 
-    const incomingVersion = nextPlayerGame.roomVersion ?? roomRef.current?.version ?? 0
+    const incomingVersion =
+      nextPlayerGame.roomVersion ?? roomRef.current?.version ?? 0
     const currentRoomVersion = roomRef.current?.version ?? 0
     if (incomingVersion < currentRoomVersion) return
     if (incomingVersion < playerGameRoomVersionRef.current) return
@@ -195,7 +199,7 @@ function RoomPage() {
 
         setError(null)
         applyJoinSuccess(result.data)
-      },
+      }
     )
   }
 
@@ -213,7 +217,9 @@ function RoomPage() {
   }
 
   function isActiveTurnPlayer() {
-    return Boolean(roomRef.current?.game?.turnPlayerId === playerRef.current?.id)
+    return Boolean(
+      roomRef.current?.game?.turnPlayerId === playerRef.current?.id
+    )
   }
 
   useEffect(() => {
@@ -338,8 +344,8 @@ function RoomPage() {
             room.game?.winnerPlacements.some(
               (placement) =>
                 placement.playerId === nextEvent.playerId &&
-                placement.position === 1,
-            ) ?? false,
+                placement.position === 1
+            ) ?? false
           )
           break
         default:
@@ -376,7 +382,7 @@ function RoomPage() {
         setError(
           cause instanceof Error
             ? cause.message
-            : "Could not reach the game server.",
+            : "Could not reach the game server."
         )
       }
     }
@@ -427,7 +433,7 @@ function RoomPage() {
         }
 
         applyJoinSuccess(result.data)
-      },
+      }
     )
   }
 
@@ -579,7 +585,10 @@ function RoomPage() {
   }
 
   async function copyInvite() {
-    const inviteUrl = new URL(`/room/${normalizedRoomCode}`, window.location.origin)
+    const inviteUrl = new URL(
+      `/room/${normalizedRoomCode}`,
+      window.location.origin
+    )
     await copyTextToClipboard(inviteUrl.toString())
   }
 
@@ -599,7 +608,10 @@ function RoomPage() {
     )
   }
 
-  if ((room?.status === "playing" || room?.status === "finished") && !room.game) {
+  if (
+    (room?.status === "playing" || room?.status === "finished") &&
+    !room.game
+  ) {
     return (
       <main className="grid min-h-svh place-items-center bg-neutral-950 px-6 text-white antialiased">
         <div className="rounded-lg border border-white/10 bg-white/[0.035] p-5 text-sm text-white/62">
@@ -609,7 +621,10 @@ function RoomPage() {
     )
   }
 
-  if ((room?.status === "playing" || room?.status === "finished") && room.game) {
+  if (
+    (room?.status === "playing" || room?.status === "finished") &&
+    room.game
+  ) {
     const showIntro = startIntroPhase !== "idle" && startIntroPhase !== "done"
     return (
       <>
@@ -708,7 +723,9 @@ function GameTable({
   const [swapWithPlayerId, setSwapWithPlayerId] = useState<string>("")
   const [draggingCardId, setDraggingCardId] = useState<string | null>(null)
   const [tableDragActive, setTableDragActive] = useState(false)
-  const [celebratingWinnerId, setCelebratingWinnerId] = useState<string | null>(null)
+  const [celebratingWinnerId, setCelebratingWinnerId] = useState<string | null>(
+    null
+  )
   const celebratedWinnerIdsRef = useRef(new Set<string>())
   const acknowledgedWinnerIdsRef = useRef<Set<string> | null>(null)
   const [rouletteFly, setRouletteFly] = useState<{
@@ -716,12 +733,19 @@ function GameTable({
     cards: Card[]
     targetPlayerId: string
   } | null>(null)
-  const [rouletteConsumedKey, setRouletteConsumedKey] = useState<string | null>(null)
-  const [deckDrawFlights, setDeckDrawFlights] = useState<DeckDrawFlightState[]>([])
+  const [rouletteConsumedKey, setRouletteConsumedKey] = useState<string | null>(
+    null
+  )
+  const [deckDrawFlights, setDeckDrawFlights] = useState<DeckDrawFlightState[]>(
+    []
+  )
   const rouletteAcceptedKeyRef = useRef<string | null>(null)
   const drawAnimationInitializedRef = useRef(false)
   const drawAnimationLastEventIdRef = useRef<string | null>(null)
-  const prevRouletteActiveRef = useRef<{ playerId: string; cardCount: number } | null>(null)
+  const prevRouletteActiveRef = useRef<{
+    playerId: string
+    cardCount: number
+  } | null>(null)
   const phoneViewport = useMediaQuery("(max-width: 520px)")
   const narrowViewport = useMediaQuery("(max-width: 680px)")
   const shortViewport = useMediaQuery("(max-height: 760px)")
@@ -731,28 +755,32 @@ function GameTable({
 
   const selectedCards = useMemo(
     () => cardsInIdOrder(playerGame?.hand ?? [], selectedCardIds),
-    [playerGame?.hand, selectedCardIds],
+    [playerGame?.hand, selectedCardIds]
   )
   const pendingPlayedCards = useMemo(
     () => cardsInIdOrder(playerGame?.hand ?? [], pendingPlayedCardIds),
-    [playerGame?.hand, pendingPlayedCardIds],
+    [playerGame?.hand, pendingPlayedCardIds]
   )
   const playableCardIds = playerGame?.playableCardIds ?? []
   const activeOpponents =
     room.players.filter((candidate) => {
       const state = game?.players.find(
-        (gamePlayer) => gamePlayer.playerId === candidate.id,
+        (gamePlayer) => gamePlayer.playerId === candidate.id
       )
-      return candidate.id !== player.id && !state?.eliminated && !state?.winnerPlacement
+      return (
+        candidate.id !== player.id &&
+        !state?.eliminated &&
+        !state?.winnerPlacement
+      )
     }) ?? []
   const isMyTurn = game?.turnPlayerId === player.id
   const firstWinnerPlacement =
     game?.winnerPlacements.find((placement) => placement.position === 1) ?? null
   const firstWinner = room.players.find(
-    (candidate) => candidate.id === firstWinnerPlacement?.playerId,
+    (candidate) => candidate.id === firstWinnerPlacement?.playerId
   )
   const celebratingWinner = room.players.find(
-    (candidate) => candidate.id === celebratingWinnerId,
+    (candidate) => candidate.id === celebratingWinnerId
   )
   const gameFinished = Boolean(game && game.turnPlayerId === null)
   const canRestartGame = gameFinished
@@ -787,11 +815,13 @@ function GameTable({
   const selectedCardsCanPlay = canPlayStagedCards(
     selectedCards,
     playableCardIds,
-    drawStack,
+    drawStack
   )
-  const remainingAfterPlay = (playerGame?.hand.length ?? 0) - selectedCards.length
+  const remainingAfterPlay =
+    (playerGame?.hand.length ?? 0) - selectedCards.length
   const finishesWithForbiddenPower =
-    remainingAfterPlay === 0 && selectedCards.some((card) => isForbiddenFinalCard(card))
+    remainingAfterPlay === 0 &&
+    selectedCards.some((card) => isForbiddenFinalCard(card))
   const canDeclareUno =
     Boolean(isMyTurn) &&
     selectedCards.length > 0 &&
@@ -809,25 +839,27 @@ function GameTable({
     pendingPlayedCardIds.length === 0 &&
     Boolean(playerGame?.canEndTurn) &&
     selectedCardIds.length === 0
-  const canUseEndTurnButton = selectedCardIds.length > 0 ? canSubmitPlay : canPassTurn
-  const localStagedCards = pendingPlayedCards.length > 0 ? pendingPlayedCards : selectedCards
+  const canUseEndTurnButton =
+    selectedCardIds.length > 0 ? canSubmitPlay : canPassTurn
+  const localStagedCards =
+    pendingPlayedCards.length > 0 ? pendingPlayedCards : selectedCards
   const localStagedPlayActive = Boolean(isMyTurn && localStagedCards.length > 0)
   const stagedPlayKey = game?.stagedPlay
     ? `${game.stagedPlay.playerId}:${game.stagedPlay.cards.map((card) => card.id).join("-")}`
     : null
   const stagedPlayConsumed = Boolean(
-    stagedPlayKey && rouletteConsumedKey === stagedPlayKey,
+    stagedPlayKey && rouletteConsumedKey === stagedPlayKey
   )
   const tableStagedCards = localStagedPlayActive
     ? localStagedCards
     : stagedPlayConsumed
       ? []
-      : game?.stagedPlay?.cards ?? []
+      : (game?.stagedPlay?.cards ?? [])
   const tableStagedPlayerId = localStagedPlayActive
     ? player.id
     : stagedPlayConsumed
       ? null
-      : game?.stagedPlay?.playerId ?? null
+      : (game?.stagedPlay?.playerId ?? null)
   const tableStagedPlayerName = tableStagedPlayerId
     ? playerName(room, tableStagedPlayerId)
     : null
@@ -847,10 +879,10 @@ function GameTable({
   useEffect(() => {
     const hand = playerGame?.hand ?? []
     setSelectedCardIds((current) =>
-      current.filter((cardId) => hand.some((card) => card.id === cardId)),
+      current.filter((cardId) => hand.some((card) => card.id === cardId))
     )
     setPendingPlayedCardIds((current) =>
-      current.filter((cardId) => hand.some((card) => card.id === cardId)),
+      current.filter((cardId) => hand.some((card) => card.id === cardId))
     )
   }, [playerGame?.hand])
 
@@ -973,8 +1005,10 @@ function GameTable({
 
   useEffect(() => {
     if (!firstWinnerPlacement) return
-    if (acknowledgedWinnerIdsRef.current?.has(firstWinnerPlacement.playerId)) return
-    if (celebratedWinnerIdsRef.current.has(firstWinnerPlacement.playerId)) return
+    if (acknowledgedWinnerIdsRef.current?.has(firstWinnerPlacement.playerId))
+      return
+    if (celebratedWinnerIdsRef.current.has(firstWinnerPlacement.playerId))
+      return
 
     celebratedWinnerIdsRef.current.add(firstWinnerPlacement.playerId)
     setCelebratingWinnerId(firstWinnerPlacement.playerId)
@@ -992,7 +1026,7 @@ function GameTable({
       selectedCards,
       playableCardIds,
       Boolean(isMyTurn),
-      drawStack,
+      drawStack
     )
   }
 
@@ -1016,7 +1050,7 @@ function GameTable({
   function stageCard(card: Card) {
     if (!canStageCard(card)) return
     setSelectedCardIds((current) =>
-      current.includes(card.id) ? current : [...current, card.id],
+      current.includes(card.id) ? current : [...current, card.id]
     )
   }
 
@@ -1028,7 +1062,7 @@ function GameTable({
       clientX >= rect.left &&
         clientX <= rect.right &&
         clientY >= rect.top &&
-        clientY <= rect.bottom,
+        clientY <= rect.bottom
     )
   }
 
@@ -1065,7 +1099,7 @@ function GameTable({
         ? discardExtraCardIds
         : undefined,
       topCardId: discardActionCard
-        ? selectedCards[selectedCards.length - 1]?.id ?? discardActionCard.id
+        ? (selectedCards[selectedCards.length - 1]?.id ?? discardActionCard.id)
         : undefined,
       swapWithPlayerId: needsSwap ? swapWithPlayerId : undefined,
       rotateHands: canChooseRotate && wantsRotate ? true : undefined,
@@ -1123,7 +1157,7 @@ function GameTable({
             cardCount={flight.cardCount}
             onDone={() =>
               setDeckDrawFlights((current) =>
-                current.filter((candidate) => candidate.id !== flight.id),
+                current.filter((candidate) => candidate.id !== flight.id)
               )
             }
           />
@@ -1181,7 +1215,9 @@ function GameTable({
             }}
             className={
               "relative isolate min-h-0 flex-1 overflow-hidden border shadow-[0_26px_70px_rgba(0,0,0,0.46)] transition-[border-color,box-shadow] " +
-              (phoneViewport ? "rounded-[1.15rem] p-1.5" : "rounded-[1.35rem] p-2") +
+              (phoneViewport
+                ? "rounded-[1.15rem] p-1.5"
+                : "rounded-[1.35rem] p-2") +
               " " +
               (tableDragActive
                 ? "border-white/35 shadow-[0_26px_70px_rgba(0,0,0,0.46),inset_0_0_0_2px_rgba(255,255,255,0.16)]"
@@ -1226,7 +1262,9 @@ function GameTable({
                       <span className="font-semibold text-red-100">
                         Draw +{drawStack.amount}
                       </span>
-                      <span className="text-white/42">stack +{drawStack.minimum}+</span>
+                      <span className="text-white/42">
+                        stack +{drawStack.minimum}+
+                      </span>
                       {playerGame?.canTakeDrawPenalty && (
                         <Button
                           type="button"
@@ -1458,7 +1496,7 @@ function GameTable({
           cardCount={flight.cardCount}
           onDone={() =>
             setDeckDrawFlights((current) =>
-              current.filter((candidate) => candidate.id !== flight.id),
+              current.filter((candidate) => candidate.id !== flight.id)
             )
           }
         />
@@ -1541,7 +1579,9 @@ function GameTable({
                           {rouletteTargetName} draws until
                           <span
                             className="size-2.5 rounded-full shadow-[0_0_0_1px_rgba(255,255,255,0.22)]"
-                            style={{ background: colorValue(rouletteChoice.color) }}
+                            style={{
+                              background: colorValue(rouletteChoice.color),
+                            }}
                           />
                           {rouletteChoice.color}
                         </span>
@@ -1570,7 +1610,10 @@ function GameTable({
                         size={tableCardSize}
                         onDraw={onDrawCard}
                       />
-                      <DiscardStack card={game?.topDiscard ?? null} size={tableCardSize} />
+                      <DiscardStack
+                        card={game?.topDiscard ?? null}
+                        size={tableCardSize}
+                      />
                     </div>
                     <TableStagedPlay
                       cards={tableStagedCards}
@@ -1655,7 +1698,9 @@ function GameTable({
                   {needsSwap && (
                     <select
                       value={swapWithPlayerId}
-                      onChange={(event) => setSwapWithPlayerId(event.target.value)}
+                      onChange={(event) =>
+                        setSwapWithPlayerId(event.target.value)
+                      }
                       className="h-9 rounded-lg border border-white/10 bg-neutral-950 px-2 text-sm text-white outline-none"
                     >
                       <option value="">Swap with...</option>
@@ -1777,10 +1822,12 @@ function TableChatPanel({
           </span>
           <div className="min-w-0">
             <h2 className="text-sm font-semibold text-white/86">Table chat</h2>
-            <p className="text-[11px] text-white/42">Emoji, GIFs, and quick roasts</p>
+            <p className="text-[11px] text-white/42">
+              Emoji, GIFs, and quick roasts
+            </p>
           </div>
         </div>
-        <span className="rounded-full border border-white/10 bg-black/26 px-2 py-1 text-[11px] tabular-nums text-white/52">
+        <span className="rounded-full border border-white/10 bg-black/26 px-2 py-1 text-[11px] text-white/52 tabular-nums">
           {messages.length}
         </span>
       </div>
@@ -1864,7 +1911,7 @@ function MobileChatSheet({
       >
         <MessageCircle className="size-4" strokeWidth={1.9} />
         {messages.length > 0 && (
-          <span className="absolute -right-1 -top-1 grid min-w-4 place-items-center rounded-full bg-white px-1 text-[9px] font-semibold tabular-nums text-neutral-950 shadow-[0_8px_20px_rgba(0,0,0,0.32)]">
+          <span className="absolute -top-1 -right-1 grid min-w-4 place-items-center rounded-full bg-white px-1 text-[9px] font-semibold text-neutral-950 tabular-nums shadow-[0_8px_20px_rgba(0,0,0,0.32)]">
             {Math.min(messages.length, 99)}
           </span>
         )}
@@ -1888,7 +1935,10 @@ function MobileChatSheet({
             >
               <div className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 px-4 py-3">
                 <div className="min-w-0">
-                  <h2 id="mobile-chat-title" className="text-base font-semibold text-white">
+                  <h2
+                    id="mobile-chat-title"
+                    className="text-base font-semibold text-white"
+                  >
                     Table chat
                   </h2>
                   <p className="mt-0.5 text-xs text-white/45">
@@ -1931,7 +1981,7 @@ function MobileChatSheet({
               </div>
             </section>
           </div>,
-          document.body,
+          document.body
         )}
     </>
   )
@@ -1965,7 +2015,7 @@ function MobilePlayerStrip({
     >
       {players.map((candidate) => {
         const state = game?.players.find(
-          (gamePlayer) => gamePlayer.playerId === candidate.id,
+          (gamePlayer) => gamePlayer.playerId === candidate.id
         )
         const active = game?.turnPlayerId === candidate.id
         const winnerPlacement = state?.winnerPlacement ?? null
@@ -1977,7 +2027,9 @@ function MobilePlayerStrip({
         const isMuted = !hasVoiceOn || Boolean(voiceState?.muted)
         const isSpeaking = Boolean(voiceState?.speaking && !isMuted)
         const drawStack =
-          game?.drawStack?.targetPlayerId === candidate.id ? game.drawStack : null
+          game?.drawStack?.targetPlayerId === candidate.id
+            ? game.drawStack
+            : null
         const status = winnerPlacement
           ? winnerPlacement.position === 1
             ? "Winner"
@@ -1988,15 +2040,15 @@ function MobilePlayerStrip({
               ? "On UNO"
               : isSpeaking
                 ? "Speaking"
-              : hasVoiceOn && isMuted
-                ? "Mic off"
-              : hasVoiceOn
-                ? "Voice on"
-              : active
-                ? "Turn"
-                : candidate.connected
-                  ? "At table"
-                  : "Away"
+                : hasVoiceOn && isMuted
+                  ? "Mic off"
+                  : hasVoiceOn
+                    ? "Voice on"
+                    : active
+                      ? "Turn"
+                      : candidate.connected
+                        ? "At table"
+                        : "Away"
 
         return (
           <div
@@ -2004,7 +2056,9 @@ function MobilePlayerStrip({
             data-seat-player-id={candidate.id}
             className={
               "relative flex items-center rounded-xl border transition-[background-color,border-color,box-shadow,opacity] duration-300 " +
-              (dense ? "min-w-[126px] gap-1.5 px-1.5 py-1" : "min-w-[138px] gap-2 px-2 py-1.5") +
+              (dense
+                ? "min-w-[126px] gap-1.5 px-1.5 py-1"
+                : "min-w-[138px] gap-2 px-2 py-1.5") +
               " " +
               (winnerPlacement?.position === 1
                 ? "border-amber-200/70 bg-amber-200/18 shadow-[0_0_28px_rgba(252,211,77,0.22)]"
@@ -2027,9 +2081,15 @@ function MobilePlayerStrip({
               }
             >
               {winnerPlacement ? (
-                <Trophy className={dense ? "size-3.5" : "size-4"} strokeWidth={2.1} />
+                <Trophy
+                  className={dense ? "size-3.5" : "size-4"}
+                  strokeWidth={2.1}
+                />
               ) : (
-                <UserRound className={dense ? "size-4" : "size-5"} strokeWidth={1.8} />
+                <UserRound
+                  className={dense ? "size-4" : "size-5"}
+                  strokeWidth={1.8}
+                />
               )}
               <span
                 className={
@@ -2043,22 +2103,42 @@ function MobilePlayerStrip({
                       : "border-white/12 text-white/34")
                 }
                 aria-label={
-                  isSpeaking ? "Speaking" : hasVoiceOn && !isMuted ? "Voice on" : "Mic off"
+                  isSpeaking
+                    ? "Speaking"
+                    : hasVoiceOn && !isMuted
+                      ? "Voice on"
+                      : "Mic off"
                 }
               >
                 {hasVoiceOn && !isMuted ? (
-                  <Mic className={dense ? "size-2.5" : "size-3"} strokeWidth={2.2} />
+                  <Mic
+                    className={dense ? "size-2.5" : "size-3"}
+                    strokeWidth={2.2}
+                  />
                 ) : (
-                  <MicOff className={dense ? "size-2.5" : "size-3"} strokeWidth={2.2} />
+                  <MicOff
+                    className={dense ? "size-2.5" : "size-3"}
+                    strokeWidth={2.2}
+                  />
                 )}
               </span>
             </div>
             <div className="min-w-0 flex-1">
-              <p className={(dense ? "text-[11px]" : "text-xs") + " truncate font-semibold text-white/88"}>
+              <p
+                className={
+                  (dense ? "text-[11px]" : "text-xs") +
+                  " truncate font-semibold text-white/88"
+                }
+              >
                 {candidate.name}
                 {isYou ? " · You" : ""}
               </p>
-              <p className={(dense ? "text-[9px]" : "text-[10px]") + " mt-0.5 truncate text-white/45"}>
+              <p
+                className={
+                  (dense ? "text-[9px]" : "text-[10px]") +
+                  " mt-0.5 truncate text-white/45"
+                }
+              >
                 {status}
               </p>
             </div>
@@ -2074,7 +2154,7 @@ function MobilePlayerStrip({
                 ? `#${winnerPlacement.position}`
                 : declaredUno
                   ? "UNO"
-                  : state?.handCount ?? 0}
+                  : (state?.handCount ?? 0)}
             </span>
             {drawStack && (
               <div className="absolute -bottom-2 left-10 flex items-center gap-1 rounded-full border border-white/12 bg-neutral-950 px-1.5 py-0.5 text-[10px] text-red-100 shadow-[0_8px_20px_rgba(0,0,0,0.3)]">
@@ -2120,10 +2200,10 @@ function ChatMessageList({
     emptyVariant === "sheet" ? (
       <div className="relative isolate flex min-h-[280px] flex-1 flex-col items-center justify-center overflow-hidden rounded-2xl border border-white/10 bg-[#0d0c0a] px-5 py-8 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.055),inset_0_0_0_1px_rgba(255,255,255,0.025)]">
         <div className="pointer-events-none absolute inset-x-5 top-0 h-px bg-white/14" />
-        <div className="pointer-events-none absolute bottom-0 left-8 right-8 h-px bg-black/70" />
+        <div className="pointer-events-none absolute right-8 bottom-0 left-8 h-px bg-black/70" />
         <div className="relative grid size-14 place-items-center rounded-2xl border border-white/10 bg-white/[0.045] text-white/78 shadow-[0_16px_36px_rgba(0,0,0,0.3),inset_0_1px_0_rgba(255,255,255,0.08)]">
           <MessageCircle className="size-6" strokeWidth={1.8} />
-          <span className="absolute -right-1 -top-1 grid size-5 place-items-center rounded-full border border-yellow-200/25 bg-yellow-200/12 text-yellow-100 shadow-[0_8px_18px_rgba(0,0,0,0.28)]">
+          <span className="absolute -top-1 -right-1 grid size-5 place-items-center rounded-full border border-yellow-200/25 bg-yellow-200/12 text-yellow-100 shadow-[0_8px_18px_rgba(0,0,0,0.28)]">
             <Sparkles className="size-3" strokeWidth={2} />
           </span>
         </div>
@@ -2147,8 +2227,13 @@ function ChatMessageList({
     ) : (
       <div className="grid min-h-[116px] place-items-center rounded-xl bg-black/18 px-4 text-center shadow-[inset_0_0_0_1px_rgba(255,255,255,0.045)]">
         <div>
-          <Sparkles className="mx-auto size-4 text-yellow-200/75" strokeWidth={1.9} />
-          <p className="mt-2 text-sm font-medium text-white/76">No chatter yet</p>
+          <Sparkles
+            className="mx-auto size-4 text-yellow-200/75"
+            strokeWidth={1.9}
+          />
+          <p className="mt-2 text-sm font-medium text-white/76">
+            No chatter yet
+          </p>
           <p className="mt-1 text-xs leading-relaxed text-white/42">
             Type a message or open quick actions.
           </p>
@@ -2164,17 +2249,15 @@ function ChatMessageList({
         (className ?? "")
       }
     >
-      {messages.length === 0 ? (
-        emptyState
-      ) : (
-        messages.map((message) => (
-          <ChatMessageBubble
-            key={message.id}
-            message={message}
-            isSelf={message.playerId === selfPlayerId}
-          />
-        ))
-      )}
+      {messages.length === 0
+        ? emptyState
+        : messages.map((message) => (
+            <ChatMessageBubble
+              key={message.id}
+              message={message}
+              isSelf={message.playerId === selfPlayerId}
+            />
+          ))}
     </div>
   )
 }
@@ -2221,7 +2304,11 @@ function ChatComposer({
       )}
 
       <div className={tray ? "mt-2" : ""}>
-        <div className={(comfortable ? "mb-2" : "mb-1.5") + " flex items-center gap-1"}>
+        <div
+          className={
+            (comfortable ? "mb-2" : "mb-1.5") + " flex items-center gap-1"
+          }
+        >
           <ChatToolButton
             active={tray === "presets"}
             label="Presets"
@@ -2256,7 +2343,7 @@ function ChatComposer({
             placeholder={comfortable ? "Talk your trash..." : "Talk..."}
             enterKeyHint="send"
             className={
-              "min-w-0 flex-1 resize-none rounded-lg border border-white/10 bg-neutral-950/74 text-white/84 outline-none transition-[border-color,background-color,box-shadow] duration-200 ease-[cubic-bezier(0.2,0,0,1)] placeholder:text-white/32 focus:border-white/24 focus:bg-neutral-950 focus:shadow-[0_0_0_3px_rgba(255,255,255,0.055)] " +
+              "min-w-0 flex-1 resize-none rounded-lg border border-white/10 bg-neutral-950/74 text-white/84 transition-[border-color,background-color,box-shadow] duration-200 ease-[cubic-bezier(0.2,0,0,1)] outline-none placeholder:text-white/32 focus:border-white/24 focus:bg-neutral-950 focus:shadow-[0_0_0_3px_rgba(255,255,255,0.055)] " +
               (comfortable
                 ? "min-h-12 px-3 py-2.5 text-base leading-6"
                 : "min-h-9 px-2.5 py-2 text-sm leading-5")
@@ -2318,7 +2405,11 @@ function ChatQuickTray({
 
   if (tray === "emoji") {
     return (
-      <div className={"grid gap-1.5 " + (comfortable ? "grid-cols-7" : "grid-cols-6")}>
+      <div
+        className={
+          "grid gap-1.5 " + (comfortable ? "grid-cols-7" : "grid-cols-6")
+        }
+      >
         {CHAT_EMOJIS.map((emoji) => (
           <button
             key={emoji}
@@ -2409,8 +2500,12 @@ function ChatMessageBubble({
             (isSelf ? "justify-end" : "justify-start")
           }
         >
-          <span className="max-w-[9rem] truncate">{isSelf ? "You" : message.playerName}</span>
-          <span className="tabular-nums">{formatChatTime(message.createdAt)}</span>
+          <span className="max-w-[9rem] truncate">
+            {isSelf ? "You" : message.playerName}
+          </span>
+          <span className="tabular-nums">
+            {formatChatTime(message.createdAt)}
+          </span>
         </div>
         <div
           className={
@@ -2429,7 +2524,12 @@ function ChatMessageBubble({
                 loading="lazy"
               />
               {message.label && (
-                <p className={"px-1 pt-1 text-[11px] " + (isSelf ? "text-neutral-600" : "text-white/52")}>
+                <p
+                  className={
+                    "px-1 pt-1 text-[11px] " +
+                    (isSelf ? "text-neutral-600" : "text-white/52")
+                  }
+                >
                   {message.label}
                 </p>
               )}
@@ -2437,7 +2537,9 @@ function ChatMessageBubble({
           ) : message.kind === "emoji" ? (
             <p className="text-3xl leading-none">{message.body}</p>
           ) : (
-            <p className="text-sm leading-relaxed text-pretty">{message.body}</p>
+            <p className="text-sm leading-relaxed text-pretty">
+              {message.body}
+            </p>
           )}
         </div>
       </div>
@@ -2472,7 +2574,7 @@ function FirstPlaceCelebration({ playerName }: { playerName: string }) {
 
       <div className="absolute inset-0 flex items-center justify-center p-4 sm:items-start sm:pt-[18dvh]">
         <div
-          className="flex min-w-[280px] max-w-[calc(100vw-2rem)] items-center gap-4 rounded-2xl border border-amber-100/38 bg-neutral-950/86 px-5 py-4 shadow-[0_24px_80px_rgba(0,0,0,0.48),0_0_70px_rgba(251,191,36,0.22)] backdrop-blur-md"
+          className="flex max-w-[calc(100vw-2rem)] min-w-[280px] items-center gap-4 rounded-2xl border border-amber-100/38 bg-neutral-950/86 px-5 py-4 shadow-[0_24px_80px_rgba(0,0,0,0.48),0_0_70px_rgba(251,191,36,0.22)] backdrop-blur-md"
           style={{
             animation:
               "uno-trophy-pop 3.4s cubic-bezier(0.16, 1, 0.3, 1) forwards",
@@ -2513,7 +2615,14 @@ function SideCannonConfetti() {
     const timeouts: number[] = []
 
     const defaults: ConfettiOptions = {
-      colors: ["#fbbf24", "#f97316", "#ef4444", "#22c55e", "#38bdf8", "#ffffff"],
+      colors: [
+        "#fbbf24",
+        "#f97316",
+        "#ef4444",
+        "#22c55e",
+        "#38bdf8",
+        "#ffffff",
+      ],
       disableForReducedMotion: true,
       gravity: 0.95,
       scalar: 1.05,
@@ -2529,7 +2638,11 @@ function SideCannonConfetti() {
       })
     }
 
-    const bursts: Array<{ delay: number; ratio: number; options: ConfettiOptions }> = [
+    const bursts: Array<{
+      delay: number
+      ratio: number
+      options: ConfettiOptions
+    }> = [
       {
         delay: 0,
         ratio: 0.28,
@@ -2560,7 +2673,7 @@ function SideCannonConfetti() {
             angle: 122,
             origin: { x: 1, y: 0.72 },
           })
-        }, burst.delay),
+        }, burst.delay)
       )
     }
 
@@ -2603,7 +2716,7 @@ function TableSeatRing({
       {players.map((candidate, index) => {
         const seat = tableSeatPosition(index, players.length, compact)
         const state = game?.players.find(
-          (gamePlayer) => gamePlayer.playerId === candidate.id,
+          (gamePlayer) => gamePlayer.playerId === candidate.id
         )
 
         return (
@@ -2620,11 +2733,14 @@ function TableSeatRing({
             isStaging={game?.stagedPlay?.playerId === candidate.id}
             voiceState={voiceStates[candidate.id]}
             drawStack={
-              game?.drawStack?.targetPlayerId === candidate.id ? game.drawStack : null
+              game?.drawStack?.targetPlayerId === candidate.id
+                ? game.drawStack
+                : null
             }
-            canTakeDrawPenalty={
-              Boolean(canTakeDrawPenalty && game?.drawStack?.targetPlayerId === candidate.id)
-            }
+            canTakeDrawPenalty={Boolean(
+              canTakeDrawPenalty &&
+              game?.drawStack?.targetPlayerId === candidate.id
+            )}
             onTakeDrawPenalty={onTakeDrawPenalty}
             left={seat.left}
             top={seat.top}
@@ -2701,17 +2817,17 @@ function TableAvatarSeat({
               : "border-white/18 bg-white/[0.075]"
             : isUno
               ? "scale-[1.03] border-yellow-200/75 bg-red-500/[0.14] shadow-[0_0_0_1px_rgba(250,204,21,0.26),0_0_44px_rgba(239,68,68,0.28),0_18px_38px_rgba(0,0,0,0.34)]"
-            : active
-            ? "scale-[1.03] border-amber-200/70 bg-amber-200/16 shadow-[0_0_0_1px_rgba(252,211,77,0.25),0_0_42px_rgba(252,211,77,0.36),0_18px_38px_rgba(0,0,0,0.34)]"
-            : isStaging
-              ? "border-sky-200/45 bg-sky-300/12"
-              : "border-white/12 bg-black/38")
+              : active
+                ? "scale-[1.03] border-amber-200/70 bg-amber-200/16 shadow-[0_0_0_1px_rgba(252,211,77,0.25),0_0_42px_rgba(252,211,77,0.36),0_18px_38px_rgba(0,0,0,0.34)]"
+                : isStaging
+                  ? "border-sky-200/45 bg-sky-300/12"
+                  : "border-white/12 bg-black/38")
         }
       >
         {winnerPlacement && (
           <div
             className={
-              "absolute -right-2 -top-2 grid size-8 place-items-center rounded-full border shadow-[0_8px_18px_rgba(0,0,0,0.28)] " +
+              "absolute -top-2 -right-2 grid size-8 place-items-center rounded-full border shadow-[0_8px_18px_rgba(0,0,0,0.28)] " +
               (isFirstPlace
                 ? "border-amber-100/70 bg-amber-300 text-amber-950"
                 : "border-white/16 bg-neutral-900 text-white/70")
@@ -2729,10 +2845,10 @@ function TableAvatarSeat({
                 ? "border-amber-100/75 bg-amber-100/24 text-amber-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.32),0_0_28px_rgba(252,211,77,0.28)]"
                 : "border-white/18 bg-white/[0.08] text-white/74"
               : active
-              ? "border-amber-100/65 bg-amber-100/24 text-amber-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_0_24px_rgba(252,211,77,0.24)]"
-              : isUno
-                ? "border-yellow-100/70 bg-red-400/[0.18] text-yellow-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.24),0_0_24px_rgba(250,204,21,0.22)]"
-              : "border-white/12 bg-white/[0.075] text-white/74")
+                ? "border-amber-100/65 bg-amber-100/24 text-amber-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_0_24px_rgba(252,211,77,0.24)]"
+                : isUno
+                  ? "border-yellow-100/70 bg-red-400/[0.18] text-yellow-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.24),0_0_24px_rgba(250,204,21,0.22)]"
+                  : "border-white/12 bg-white/[0.075] text-white/74")
           }
         >
           <UserRound className="size-5 sm:size-6" strokeWidth={1.8} />
@@ -2748,16 +2864,16 @@ function TableAvatarSeat({
                 ? "Winner"
                 : placementText
               : eliminated
-              ? "Eliminated"
-              : isUno
-                ? "On UNO"
-              : active
-                ? "Taking turn"
-                : isStaging
-                  ? "Staging"
-                  : connected
-                    ? "At table"
-                    : "Away"}
+                ? "Eliminated"
+                : isUno
+                  ? "On UNO"
+                  : active
+                    ? "Taking turn"
+                    : isStaging
+                      ? "Staging"
+                      : connected
+                        ? "At table"
+                        : "Away"}
           </p>
         </div>
         {winnerPlacement ? (
@@ -2795,12 +2911,16 @@ function TableAvatarSeat({
             "absolute -bottom-2 -left-2 grid size-6 place-items-center rounded-full border bg-neutral-950/95 text-white/72 shadow-[0_8px_18px_rgba(0,0,0,0.28)] transition-[border-color,color,box-shadow] " +
             (isSpeaking
               ? "border-emerald-300 text-white shadow-[0_0_0_1px_rgba(52,211,153,0.22),0_8px_18px_rgba(0,0,0,0.28)]"
-            : hasVoiceOn && !isMuted
+              : hasVoiceOn && !isMuted
                 ? "border-white/18"
                 : "border-white/12 text-white/34")
           }
           aria-label={
-            isSpeaking ? "Speaking" : hasVoiceOn && !isMuted ? "Voice on" : "Mic off"
+            isSpeaking
+              ? "Speaking"
+              : hasVoiceOn && !isMuted
+                ? "Voice on"
+                : "Mic off"
           }
         >
           {hasVoiceOn && !isMuted ? (
@@ -2825,9 +2945,7 @@ function DrawStackSeatBadge({
 }) {
   return (
     <div className="pointer-events-auto absolute top-1/2 left-[calc(100%+0.4rem)] z-30 flex -translate-y-1/2 items-center gap-1.5 rounded-full border border-white/12 bg-black/58 px-2 py-1 text-xs text-white/72 shadow-[0_10px_24px_rgba(0,0,0,0.26)] backdrop-blur-md">
-      <span className="font-semibold tabular-nums text-red-100">
-        +{amount}
-      </span>
+      <span className="font-semibold text-red-100 tabular-nums">+{amount}</span>
       {canTake && (
         <Button
           type="button"
@@ -2843,7 +2961,9 @@ function DrawStackSeatBadge({
 }
 
 function orderPlayersAroundSelf(players: Player[], selfPlayerId: string) {
-  const selfIndex = players.findIndex((candidate) => candidate.id === selfPlayerId)
+  const selfIndex = players.findIndex(
+    (candidate) => candidate.id === selfPlayerId
+  )
   if (selfIndex < 0) return players
   return [...players.slice(selfIndex), ...players.slice(0, selfIndex)]
 }
@@ -2866,7 +2986,7 @@ function canStageCardWithSelection(
   selectedCards: Card[],
   playableCardIds: string[],
   isMyTurn: boolean,
-  drawStack: NonNullable<RoomSnapshot["game"]>["drawStack"],
+  drawStack: NonNullable<RoomSnapshot["game"]>["drawStack"]
 ) {
   if (!isMyTurn) return false
   if (selectedCards.some((selected) => selected.id === card.id)) return true
@@ -2874,7 +2994,7 @@ function canStageCardWithSelection(
   return canPlayStagedCards(
     [...selectedCards, card],
     playableCardIds,
-    drawStack,
+    drawStack
   )
 }
 
@@ -2888,7 +3008,7 @@ function cardsInIdOrder(cards: Card[], cardIds: string[]) {
 function canPlayStagedCards(
   cards: Card[],
   playableCardIds: string[],
-  drawStack: NonNullable<RoomSnapshot["game"]>["drawStack"],
+  drawStack: NonNullable<RoomSnapshot["game"]>["drawStack"]
 ) {
   if (cards.length === 0) return false
   if (cards.length === 1) return playableCardIds.includes(cards[0]?.id ?? "")
@@ -2900,7 +3020,9 @@ function canPlayStagedCards(
   }
   if (isDiscardFirstStage(cards, playableCardIds)) return true
   return (
-    (sameNumberGroup(cards) || sameDrawGroup(cards) || sameActionGroup(cards)) &&
+    (sameNumberGroup(cards) ||
+      sameDrawGroup(cards) ||
+      sameActionGroup(cards)) &&
     cards.some((card) => playableCardIds.includes(card.id))
   )
 }
@@ -2914,15 +3036,14 @@ function isDiscardFirstStage(cards: Card[], playableCardIds: string[]) {
     .slice(1)
     .every(
       (card) =>
-        card.face.kind !== "discard-color" &&
-        card.color === discardCard.color,
+        card.face.kind !== "discard-color" && card.color === discardCard.color
     )
 }
 
 function canStackDrawCards(
   drawStack: NonNullable<RoomSnapshot["game"]>["drawStack"],
   cards: Card[],
-  playableCardIds: string[],
+  playableCardIds: string[]
 ) {
   if (!drawStack || cards.length === 0) return false
 
@@ -2931,14 +3052,16 @@ function canStackDrawCards(
     cards
       .filter((card) => playableCardIds.includes(card.id))
       .map((card) => drawGroupKey(card))
-      .filter((key): key is string => Boolean(key)),
+      .filter((key): key is string => Boolean(key))
   )
 
   return cards.every((card) => {
     const amount = drawAmount(card)
     const group = drawGroupKey(card)
 
-    return Boolean(amount && amount >= minimum && group && playableGroups.has(group))
+    return Boolean(
+      amount && amount >= minimum && group && playableGroups.has(group)
+    )
   })
 }
 
@@ -2962,7 +3085,7 @@ function sameNumberGroup(cards: Card[]) {
   if (!first || first.face.kind !== "number") return false
   const value = first.face.value
   return cards.every(
-    (card) => card.face.kind === "number" && card.face.value === value,
+    (card) => card.face.kind === "number" && card.face.value === value
   )
 }
 
@@ -3046,7 +3169,7 @@ function DeckStack({
           />
         ))}
         <div
-          className="absolute left-1/2 top-1/2 z-10"
+          className="absolute top-1/2 left-1/2 z-10"
           style={{
             transform: `translate(-50%, -50%) scale(${cardScale})`,
           }}
@@ -3060,12 +3183,19 @@ function DeckStack({
         onClick={onDraw}
         className={
           "rounded-lg border border-white/12 bg-black/35 font-medium text-white/84 transition-[background-color,border-color,color,transform] hover:border-white/22 hover:bg-white/10 hover:text-white active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-45 " +
-          (denseCompact ? "h-7 px-2 text-[11px]" : "h-8 px-2.5 text-xs sm:h-9 sm:px-3 sm:text-sm")
+          (denseCompact
+            ? "h-7 px-2 text-[11px]"
+            : "h-8 px-2.5 text-xs sm:h-9 sm:px-3 sm:text-sm")
         }
       >
         {alreadyDrawn ? "Drawn" : "Draw one"}
       </button>
-      <p className={(denseCompact ? "text-[10px]" : "text-[11px] sm:text-xs") + " text-white/45"}>
+      <p
+        className={
+          (denseCompact ? "text-[10px]" : "text-[11px] sm:text-xs") +
+          " text-white/45"
+        }
+      >
         {drawPileCount} in deck
       </p>
     </div>
@@ -3086,7 +3216,12 @@ function DiscardStack({
   const cardScale = denseCompact ? 0.88 : 1
 
   return (
-    <div className={(denseCompact ? "gap-1" : "gap-1.5 sm:gap-2") + " flex flex-col items-center"}>
+    <div
+      className={
+        (denseCompact ? "gap-1" : "gap-1.5 sm:gap-2") +
+        " flex flex-col items-center"
+      }
+    >
       <div
         className={
           compact
@@ -3100,7 +3235,7 @@ function DiscardStack({
         <div className="absolute inset-0 translate-x-1 translate-y-0.5 rounded-xl border border-black/30 bg-white/8 sm:translate-x-1.5 sm:translate-y-1 sm:rounded-2xl" />
         {card ? (
           <div
-            className="absolute left-1/2 top-1/2 z-10"
+            className="absolute top-1/2 left-1/2 z-10"
             style={{
               transform: `translate(-50%, -50%) scale(${cardScale})`,
             }}
@@ -3119,7 +3254,12 @@ function DiscardStack({
           />
         )}
       </div>
-      <p className={(denseCompact ? "text-[10px]" : "text-[11px] sm:text-xs") + " text-white/50"}>
+      <p
+        className={
+          (denseCompact ? "text-[10px]" : "text-[11px] sm:text-xs") +
+          " text-white/50"
+        }
+      >
         Discard pile
       </p>
     </div>
@@ -3149,7 +3289,7 @@ function TableStagedPlay({
   const gap = dense ? (compact ? 18 : 28) : compact ? 26 : 38
   const width = Math.min(
     dense ? 320 : 370,
-    Math.max(dense ? 118 : 154, (dense ? 64 : 92) + cards.length * gap),
+    Math.max(dense ? 118 : 154, (dense ? 64 : 92) + cards.length * gap)
   )
   const cardAnchor = 36 * cardScale
   const isRoulette = mode === "roulette"
@@ -3158,7 +3298,9 @@ function TableStagedPlay({
     <div
       className={
         "mx-auto w-full border shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] " +
-        (dense ? "max-w-[340px] rounded-xl p-2" : "max-w-[390px] rounded-2xl p-3") +
+        (dense
+          ? "max-w-[340px] rounded-xl p-2"
+          : "max-w-[390px] rounded-2xl p-3") +
         " " +
         (isRoulette
           ? "border-amber-100/18 bg-amber-200/10"
@@ -3166,7 +3308,12 @@ function TableStagedPlay({
       }
     >
       <div className="flex min-h-5 items-center justify-between gap-3 px-1">
-        <p className={(dense ? "text-[11px]" : "text-xs") + " truncate font-medium text-white/72"}>
+        <p
+          className={
+            (dense ? "text-[11px]" : "text-xs") +
+            " truncate font-medium text-white/72"
+          }
+        >
           {cards.length > 0
             ? isRoulette
               ? `${playerName ?? "Player"} picking up ${cards.length} card${cards.length === 1 ? "" : "s"}`
@@ -3184,19 +3331,25 @@ function TableStagedPlay({
           </span>
         )}
         {canEdit && cards.length > 0 && (
-          <span className="shrink-0 text-[11px] text-white/42">tap to remove</span>
+          <span className="shrink-0 text-[11px] text-white/42">
+            tap to remove
+          </span>
         )}
       </div>
       <div
         data-roulette-source={isRoulette ? "true" : undefined}
         className={
           "relative grid place-items-center overflow-visible rounded-xl border border-white/8 bg-black/18 shadow-[inset_0_12px_28px_rgba(0,0,0,0.18)] " +
-          (dense ? "mt-1.5 h-[88px] p-1.5" : "mt-2 h-[120px] p-2 sm:h-[132px] sm:p-3")
+          (dense
+            ? "mt-1.5 h-[88px] p-1.5"
+            : "mt-2 h-[120px] p-2 sm:h-[132px] sm:p-3")
         }
       >
         {cards.length > 0 ? (
           <div
-            className={dense ? "relative h-[78px]" : "relative h-[106px] sm:h-[112px]"}
+            className={
+              dense ? "relative h-[78px]" : "relative h-[106px] sm:h-[112px]"
+            }
             style={{ width }}
           >
             {cards.map((card, index) => {
@@ -3216,7 +3369,9 @@ function TableStagedPlay({
                     size="sm"
                     static={!canEdit}
                     onClick={canEdit ? () => onCardClick(card) : undefined}
-                    ariaLabel={isRoulette ? "Revealed pickup card" : "Staged card"}
+                    ariaLabel={
+                      isRoulette ? "Revealed pickup card" : "Staged card"
+                    }
                   />
                 </div>
               )
@@ -3250,7 +3405,13 @@ function DirectionPill({
         className={"size-3.5 " + (clockwise ? "" : "-scale-x-100")}
         aria-hidden="true"
       />
-      {compact ? (clockwise ? "CW" : "CCW") : clockwise ? "Clockwise" : "Counter-clockwise"}
+      {compact
+        ? clockwise
+          ? "CW"
+          : "CCW"
+        : clockwise
+          ? "Clockwise"
+          : "Counter-clockwise"}
     </div>
   )
 }
@@ -3316,7 +3477,8 @@ function FannedGameHand({
   const selectedCards = cardsInIdOrder(cards, selectedCardIds)
   const discardSelectionActive = selectedCards[0]?.face.kind === "discard-color"
   const visibleCards = cards.filter(
-    (card) => !selectedCardIds.includes(card.id) && !hiddenCardIdSet.has(card.id),
+    (card) =>
+      !selectedCardIds.includes(card.id) && !hiddenCardIdSet.has(card.id)
   )
   const activeDragCard = activeDrag
     ? cards.find((card) => card.id === activeDrag.cardId)
@@ -3348,7 +3510,13 @@ function FannedGameHand({
           ? 30
           : 22
   const rotation =
-    visibleCards.length <= 8 ? (compact ? 5 : 6) : visibleCards.length <= 14 ? 4 : 2.35
+    visibleCards.length <= 8
+      ? compact
+        ? 5
+        : 6
+      : visibleCards.length <= 14
+        ? 4
+        : 2.35
   const cardScale =
     !compact && visibleCards.length > 22
       ? 0.9
@@ -3362,7 +3530,7 @@ function FannedGameHand({
       selectedCards,
       playableCardIds,
       isMyTurn,
-      drawStack,
+      drawStack
     )
   }
 
@@ -3373,7 +3541,7 @@ function FannedGameHand({
   function startPointerDrag(
     event: PointerEvent<HTMLElement>,
     card: Card,
-    cardRotation: number,
+    cardRotation: number
   ) {
     if (event.button !== 0) return
     if (!canDragCard(card)) return
@@ -3469,9 +3637,11 @@ function FannedGameHand({
             const stageable = canSelectCard(card)
             const draggable = canDragCard(card)
             const highlighted = Boolean(
-              isMyTurn && stageable && (discardSelectionActive || playable),
+              isMyTurn && stageable && (discardSelectionActive || playable)
             )
-            const muted = Boolean(isMyTurn && discardSelectionActive && !stageable)
+            const muted = Boolean(
+              isMyTurn && discardSelectionActive && !stageable
+            )
             const activeDragForCard =
               activeDrag?.cardId === card.id ? activeDrag : null
             const dragging = Boolean(activeDragForCard?.dragging)
@@ -3482,8 +3652,10 @@ function FannedGameHand({
                 ? compact
                   ? -54
                   : -90
-                : Math.min(Math.abs(offset) * (compact ? 3 : 5), compact ? 20 : 34)) +
-              (activeDragForCard?.dy ?? 0)
+                : Math.min(
+                    Math.abs(offset) * (compact ? 3 : 5),
+                    compact ? 20 : 34
+                  )) + (activeDragForCard?.dy ?? 0)
             const scale = (dragging ? 1.05 : 1) * cardScale
 
             return (
@@ -3491,7 +3663,9 @@ function FannedGameHand({
                 key={card.id}
                 className={
                   "absolute bottom-0 " +
-                  (draggable ? "cursor-grab touch-none active:cursor-grabbing" : "")
+                  (draggable
+                    ? "cursor-grab touch-none active:cursor-grabbing"
+                    : "")
                 }
                 style={{
                   transform: `translateX(${translateX}px) translateY(${translateY}px) rotate(${rotate}deg) scale(${scale})`,
@@ -3508,7 +3682,9 @@ function FannedGameHand({
                   card={card}
                   size={cardSize}
                   raised={dragging}
-                  onPointerDown={(event) => startPointerDrag(event, card, rotate)}
+                  onPointerDown={(event) =>
+                    startPointerDrag(event, card, rotate)
+                  }
                   onPointerMove={(event) => movePointerDrag(event, card)}
                   onPointerUp={(event) => endPointerDrag(event, card)}
                   onPointerCancel={cancelPointerDrag}
@@ -3553,7 +3729,7 @@ function FannedGameHand({
               style={{ boxShadow: "none" }}
             />
           </div>,
-          document.body,
+          document.body
         )}
     </div>
   )
@@ -3596,10 +3772,10 @@ function InviteJoinScreen({
           <p className="text-[11px] font-medium tracking-[0.2em] text-white/45 uppercase sm:text-xs">
             UNO No Mercy invite
           </p>
-          <h1 className="mt-3 max-w-xl text-balance text-4xl font-semibold leading-[1.04] tracking-tight sm:text-5xl">
+          <h1 className="mt-3 max-w-xl text-4xl leading-[1.04] font-semibold tracking-tight text-balance sm:text-5xl">
             Join a private No Mercy table.
           </h1>
-          <p className="mt-4 max-w-xl text-pretty text-base leading-7 text-white/58">
+          <p className="mt-4 max-w-xl text-base leading-7 text-pretty text-white/58">
             {waitingCopy} Drop your name, claim your seat, and jump into the
             same live room.
           </p>
@@ -3611,7 +3787,10 @@ function InviteJoinScreen({
               onJoin()
             }}
           >
-            <label className="text-sm font-medium text-white/82" htmlFor="invite-name">
+            <label
+              className="text-sm font-medium text-white/82"
+              htmlFor="invite-name"
+            >
               Player name
             </label>
             <p className="mt-1 text-xs leading-5 text-white/42">
@@ -3623,7 +3802,7 @@ function InviteJoinScreen({
                 value={playerName}
                 onChange={(event) => onPlayerName(event.target.value)}
                 placeholder="Arc"
-                className="min-h-11 w-full flex-none rounded-lg border border-white/10 bg-black/42 px-3.5 text-base text-white outline-none transition-[border-color,background-color,box-shadow] duration-200 placeholder:text-white/30 focus:border-white/28 focus:bg-black/58 focus:shadow-[0_0_0_3px_rgba(255,255,255,0.055)] sm:h-10 sm:flex-1 sm:text-sm"
+                className="min-h-11 w-full flex-none rounded-lg border border-white/10 bg-black/42 px-3.5 text-base text-white transition-[border-color,background-color,box-shadow] duration-200 outline-none placeholder:text-white/30 focus:border-white/28 focus:bg-black/58 focus:shadow-[0_0_0_3px_rgba(255,255,255,0.055)] sm:h-10 sm:flex-1 sm:text-sm"
                 maxLength={24}
                 autoComplete="nickname"
                 autoFocus
@@ -3663,10 +3842,14 @@ function InviteJoinScreen({
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
                 <UsersRound className="size-4 text-white/55" />
-                <h2 className="text-sm font-medium text-white/86">Seats at the table</h2>
+                <h2 className="text-sm font-medium text-white/86">
+                  Seats at the table
+                </h2>
               </div>
               <span className="text-xs text-white/42">
-                {room ? `${room.players.length}/${room.houseRules.maxPlayers}` : "--"}
+                {room
+                  ? `${room.players.length}/${room.houseRules.maxPlayers}`
+                  : "--"}
               </span>
             </div>
 
@@ -3788,9 +3971,7 @@ function CopyInviteButton({
         className="relative inline-block size-3.5 shrink-0"
         aria-hidden="true"
       >
-        <Clipboard
-          className={`${layer} size-3.5 ${copied ? hidden : shown}`}
-        />
+        <Clipboard className={`${layer} size-3.5 ${copied ? hidden : shown}`} />
         <Check
           strokeWidth={2.75}
           className={`${layer} size-3.5 text-emerald-600 ${copied ? shown : hidden}`}
@@ -3842,7 +4023,7 @@ function ColorPicker({
       }
     >
       {required && (
-        <span className="hidden pl-0.5 pr-1 text-[11px] font-semibold tracking-[0.08em] text-yellow-100 uppercase sm:inline">
+        <span className="hidden pr-1 pl-0.5 text-[11px] font-semibold tracking-[0.08em] text-yellow-100 uppercase sm:inline">
           Pick
         </span>
       )}
@@ -3897,9 +4078,14 @@ function GameOptionCheckbox({
   )
 }
 
-function playerName(room: RoomSnapshot, playerId: string | null | undefined): string {
+function playerName(
+  room: RoomSnapshot,
+  playerId: string | null | undefined
+): string {
   if (!playerId) return "Someone"
-  return room.players.find((player) => player.id === playerId)?.name ?? "Someone"
+  return (
+    room.players.find((player) => player.id === playerId)?.name ?? "Someone"
+  )
 }
 
 function ordinalLabel(value: number): string {
@@ -3955,10 +4141,13 @@ function StatusDot({ connected }: { connected: boolean }) {
     <div className="flex h-8 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-2.5 text-xs text-white/60 sm:px-3">
       <Circle
         className={
-          "size-2 fill-current " + (connected ? "text-emerald-400" : "text-white/25")
+          "size-2 fill-current " +
+          (connected ? "text-emerald-400" : "text-white/25")
         }
       />
-      <span className="hidden sm:inline">{connected ? "Connected" : "Offline"}</span>
+      <span className="hidden sm:inline">
+        {connected ? "Connected" : "Offline"}
+      </span>
     </div>
   )
 }
@@ -4004,28 +4193,96 @@ function VoiceToggleButton({
   )
 }
 
+const remoteVoiceAudioElements = new Set<HTMLAudioElement>()
+
+function describeVoiceStream(stream: MediaStream) {
+  return {
+    id: stream.id,
+    active: stream.active,
+    tracks: stream.getAudioTracks().map((track) => ({
+      id: track.id,
+      enabled: track.enabled,
+      muted: track.muted,
+      readyState: track.readyState,
+    })),
+  }
+}
+
+function playRegisteredVoiceAudio(reason: string) {
+  for (const audio of remoteVoiceAudioElements) {
+    const playPromise = audio.play()
+    if (playPromise) {
+      playPromise
+        .then(() => {
+          logRoomVoiceDebug("remote audio play resolved", {
+            reason,
+            playerId: audio.dataset.playerId,
+            readyState: audio.readyState,
+            paused: audio.paused,
+          })
+        })
+        .catch((cause: unknown) => {
+          logRoomVoiceDebug("remote audio play blocked", {
+            reason,
+            playerId: audio.dataset.playerId,
+            readyState: audio.readyState,
+            paused: audio.paused,
+            cause,
+          })
+        })
+    }
+  }
+}
+
 function VoiceAudioOutputs({
   streamsByPlayerId,
 }: {
   streamsByPlayerId: Record<string, MediaStream>
 }) {
+  useEffect(() => {
+    const unlockAudio = () => playRegisteredVoiceAudio("user-gesture")
+    window.addEventListener("pointerdown", unlockAudio, { capture: true })
+    window.addEventListener("touchend", unlockAudio, { capture: true })
+    window.addEventListener("keydown", unlockAudio, { capture: true })
+
+    return () => {
+      window.removeEventListener("pointerdown", unlockAudio, { capture: true })
+      window.removeEventListener("touchend", unlockAudio, { capture: true })
+      window.removeEventListener("keydown", unlockAudio, { capture: true })
+    }
+  }, [])
+
   return (
     <>
       {Object.entries(streamsByPlayerId).map(([playerId, stream]) => (
-        <RemoteVoiceAudio key={playerId} stream={stream} />
+        <RemoteVoiceAudio key={playerId} playerId={playerId} stream={stream} />
       ))}
     </>
   )
 }
 
-function RemoteVoiceAudio({ stream }: { stream: MediaStream }) {
+function RemoteVoiceAudio({
+  playerId,
+  stream,
+}: {
+  playerId: string
+  stream: MediaStream
+}) {
   const audioRef = useRef<HTMLAudioElement | null>(null)
 
   useEffect(() => {
     const audio = audioRef.current
     if (!audio) return
 
+    audio.dataset.playerId = playerId
+    audio.muted = false
+    audio.volume = 1
     audio.srcObject = stream
+    remoteVoiceAudioElements.add(audio)
+    logRoomVoiceDebug("remote audio element attached", {
+      playerId,
+      stream: describeVoiceStream(stream),
+    })
     let waitingForGesture = false
     const unlockEvents: Array<keyof WindowEventMap> = [
       "pointerdown",
@@ -4052,25 +4309,72 @@ function RemoteVoiceAudio({ stream }: { stream: MediaStream }) {
     const playAudio = () => {
       const playPromise = audio.play()
       if (playPromise) {
-        playPromise.then(removeUnlockListeners).catch(addUnlockListeners)
+        playPromise
+          .then(() => {
+            removeUnlockListeners()
+            logRoomVoiceDebug("remote audio play resolved", {
+              playerId,
+              readyState: audio.readyState,
+              paused: audio.paused,
+            })
+          })
+          .catch((cause: unknown) => {
+            logRoomVoiceDebug("remote audio play blocked", {
+              playerId,
+              readyState: audio.readyState,
+              paused: audio.paused,
+              cause,
+            })
+            addUnlockListeners()
+          })
       }
     }
 
+    const handleTrackChanged = () => {
+      logRoomVoiceDebug("remote audio track changed", {
+        playerId,
+        stream: describeVoiceStream(stream),
+      })
+      playAudio()
+    }
+    const handlePlaying = () => {
+      logRoomVoiceDebug("remote audio playing", {
+        playerId,
+        readyState: audio.readyState,
+        paused: audio.paused,
+      })
+    }
+
+    const audioTracks = stream.getAudioTracks()
     playAudio()
     audio.addEventListener("loadedmetadata", playAudio)
     audio.addEventListener("canplay", playAudio)
+    audio.addEventListener("playing", handlePlaying)
+    for (const track of audioTracks) {
+      track.addEventListener("mute", handleTrackChanged)
+      track.addEventListener("unmute", handleTrackChanged)
+      track.addEventListener("ended", handleTrackChanged)
+    }
 
     return () => {
       removeUnlockListeners()
+      remoteVoiceAudioElements.delete(audio)
       audio.removeEventListener("loadedmetadata", playAudio)
       audio.removeEventListener("canplay", playAudio)
+      audio.removeEventListener("playing", handlePlaying)
+      for (const track of audioTracks) {
+        track.removeEventListener("mute", handleTrackChanged)
+        track.removeEventListener("unmute", handleTrackChanged)
+        track.removeEventListener("ended", handleTrackChanged)
+      }
       audio.srcObject = null
     }
-  }, [stream])
+  }, [playerId, stream])
 
   return (
     <audio
       ref={audioRef}
+      data-player-id={playerId}
       autoPlay
       playsInline
       className="pointer-events-none absolute size-px opacity-0"
@@ -4109,7 +4413,11 @@ function PlayerRow({
             : "bg-white/5 text-white/30")
         }
       >
-        {player.connected ? (player.ready || isHost ? "Ready" : "Waiting") : "Away"}
+        {player.connected
+          ? player.ready || isHost
+            ? "Ready"
+            : "Waiting"
+          : "Away"}
       </span>
     </div>
   )
@@ -4145,7 +4453,7 @@ function LobbyWaitingRoom({
   const players = room?.players ?? []
   const seatCount = players.length
   const readyCount = players.filter(
-    (candidate) => candidate.ready || candidate.id === room?.hostPlayerId,
+    (candidate) => candidate.ready || candidate.id === room?.hostPlayerId
   ).length
   const everyoneReady = seatCount >= 2 && readyCount === seatCount
   const messages = room?.chatMessages ?? []
@@ -4270,16 +4578,14 @@ function DimmedTablePreview({
       />
 
       <div className="relative z-10 flex h-full min-h-0 flex-col items-center justify-center gap-6 px-2 py-6 sm:px-6 sm:py-8">
-        <div className="grid place-items-center opacity-35 saturate-50 brightness-90 transition-[opacity,filter] duration-500">
+        <div className="grid place-items-center opacity-35 brightness-90 saturate-50 transition-[opacity,filter] duration-500">
           <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-8 lg:gap-12">
             <DimmedDeck size={cardSize} />
             <DimmedDiscardSlot size={cardSize} />
           </div>
         </div>
 
-        <div
-          className="pointer-events-auto relative z-10 flex w-full max-w-md flex-col items-center gap-4 rounded-2xl border border-white/14 bg-neutral-950/72 px-6 py-5 text-center shadow-[0_24px_60px_rgba(0,0,0,0.45)] backdrop-blur-md sm:px-8 sm:py-6"
-        >
+        <div className="pointer-events-auto relative z-10 flex w-full max-w-md flex-col items-center gap-4 rounded-2xl border border-white/14 bg-neutral-950/72 px-6 py-5 text-center shadow-[0_24px_60px_rgba(0,0,0,0.45)] backdrop-blur-md sm:px-8 sm:py-6">
           <span
             className={
               "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[10px] font-semibold tracking-[0.16em] uppercase " +
@@ -4294,7 +4600,9 @@ function DimmedTablePreview({
                 (everyoneReady ? "bg-amber-200" : "bg-white/55")
               }
             />
-            {everyoneReady ? "Lights are about to come on" : "Lights off · Waiting"}
+            {everyoneReady
+              ? "Lights are about to come on"
+              : "Lights off · Waiting"}
           </span>
           <div>
             <p className="text-xl font-semibold text-white sm:text-2xl">
@@ -4451,7 +4759,11 @@ function DimmedSeatRing({
                       : "border-white/12 text-white/34")
                 }
                 aria-label={
-                  isSpeaking ? "Speaking" : hasVoiceOn && !isMuted ? "Voice on" : "Mic off"
+                  isSpeaking
+                    ? "Speaking"
+                    : hasVoiceOn && !isMuted
+                      ? "Voice on"
+                      : "Mic off"
                 }
               >
                 {hasVoiceOn && !isMuted ? (
@@ -4474,7 +4786,9 @@ function DimmedDeck({ size }: { size: ResponsiveCardSize }) {
     <div className="flex flex-col items-center gap-1.5 sm:gap-2">
       <div
         className={
-          compact ? "relative h-[112px] w-[82px]" : "relative h-[178px] w-[128px]"
+          compact
+            ? "relative h-[112px] w-[82px]"
+            : "relative h-[178px] w-[128px]"
         }
       >
         {[0, 1, 2, 3].map((layer) => (
@@ -4487,7 +4801,7 @@ function DimmedDeck({ size }: { size: ResponsiveCardSize }) {
             }}
           />
         ))}
-        <div className="absolute left-1/2 top-1/2 z-10 -translate-x-1/2 -translate-y-1/2">
+        <div className="absolute top-1/2 left-1/2 z-10 -translate-x-1/2 -translate-y-1/2">
           <UnoCard card={cardBackPlaceholder} faceDown size={size} static />
         </div>
       </div>
@@ -4552,7 +4866,9 @@ function GameStartIntro({
   room: RoomSnapshot
   selfPlayerId: string
   phase: "idle" | "lights" | "shuffle" | "deal" | "done"
-  onPhaseChange: (phase: "idle" | "lights" | "shuffle" | "deal" | "done") => void
+  onPhaseChange: (
+    phase: "idle" | "lights" | "shuffle" | "deal" | "done"
+  ) => void
   onFinish: () => void
 }) {
   const compact = useMediaQuery("(max-width: 680px)")
@@ -4568,7 +4884,7 @@ function GameStartIntro({
 
   const orderedPlayers = useMemo(
     () => orderPlayersAroundSelf(room.players, selfPlayerId),
-    [room.players, selfPlayerId],
+    [room.players, selfPlayerId]
   )
   const handSize = room.houseRules.startingHandSize ?? 7
 
@@ -4600,11 +4916,20 @@ function GameStartIntro({
 
   useEffect(() => {
     if (phase !== "deal") return
-    const tokens: Array<{ id: number; left: number; top: number; delay: number }> = []
+    const tokens: Array<{
+      id: number
+      left: number
+      top: number
+      delay: number
+    }> = []
     let nextId = 0
     for (let round = 0; round < handSize; round += 1) {
       orderedPlayers.forEach((_, seatIndex) => {
-        const seat = tableSeatPosition(seatIndex, orderedPlayers.length, compact)
+        const seat = tableSeatPosition(
+          seatIndex,
+          orderedPlayers.length,
+          compact
+        )
         tokens.push({
           id: nextId++,
           left: seat.left,
@@ -4621,7 +4946,7 @@ function GameStartIntro({
       for (let index = 0; index < dealSoundCount; index += 1) {
         window.setTimeout(
           () => playCardSound("draw", 1),
-          index * Math.max(120, 180 - dealSoundCount * 8),
+          index * Math.max(120, 180 - dealSoundCount * 8)
         )
       }
     }
@@ -4709,7 +5034,7 @@ function GameStartIntro({
             return (
               <div
                 key={token.id}
-                className="absolute left-1/2 top-1/2"
+                className="absolute top-1/2 left-1/2"
                 style={{
                   width: compact ? 56 : 76,
                   height: compact ? 80 : 108,
@@ -4762,7 +5087,7 @@ function RouletteFlyToHand({
 
     const timer = window.setTimeout(() => {
       const sourceEl = document.querySelector<HTMLElement>(
-        "[data-roulette-source='true']",
+        "[data-roulette-source='true']"
       )
       const handEl = isSelfTarget
         ? document.querySelector<HTMLElement>("[data-self-hand='true']")
@@ -4770,7 +5095,7 @@ function RouletteFlyToHand({
       const destEl =
         handEl ??
         document.querySelector<HTMLElement>(
-          `[data-seat-player-id="${CSS.escape(targetPlayerId)}"]`,
+          `[data-seat-player-id="${CSS.escape(targetPlayerId)}"]`
         )
 
       const sourceRect = sourceEl?.getBoundingClientRect()
@@ -4830,7 +5155,10 @@ function RouletteFlyToHand({
   const half = (cards.length - 1) / 2
   const cardWidth = 84
   const cardHeight = 118
-  const gap = Math.min(38, Math.max(22, layout.source.width / Math.max(cards.length, 1)))
+  const gap = Math.min(
+    38,
+    Math.max(22, layout.source.width / Math.max(cards.length, 1))
+  )
   const stagger = 90
 
   return (
@@ -4873,7 +5201,7 @@ function RouletteFlyToHand({
         return (
           <div
             key={card.id}
-            className="absolute left-0 top-0"
+            className="absolute top-0 left-0"
             style={{
               width: cardWidth,
               height: cardHeight,
@@ -4919,9 +5247,11 @@ function DeckDrawFlight({
       return () => window.clearTimeout(timer)
     }
 
-    const sourceEl = document.querySelector<HTMLElement>("[data-draw-pile='true']")
+    const sourceEl = document.querySelector<HTMLElement>(
+      "[data-draw-pile='true']"
+    )
     const destEl = document.querySelector<HTMLElement>(
-      `[data-seat-player-id="${CSS.escape(targetPlayerId)}"]`,
+      `[data-seat-player-id="${CSS.escape(targetPlayerId)}"]`
     )
     const sourceRect = sourceEl?.getBoundingClientRect()
     const destRect = destEl?.getBoundingClientRect()
@@ -4962,7 +5292,10 @@ function DeckDrawFlight({
   const stagger = visibleCount > 6 ? 52 : 68
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-[58]" aria-hidden="true">
+    <div
+      className="pointer-events-none fixed inset-0 z-[58]"
+      aria-hidden="true"
+    >
       <style>
         {`
           @keyframes uno-deck-draw-flight {
@@ -4990,7 +5323,7 @@ function DeckDrawFlight({
         return (
           <div
             key={index}
-            className="absolute left-0 top-0"
+            className="absolute top-0 left-0"
             style={{
               ["--uno-draw-from-x" as string]: `${layout.source.left + offset * 2}px`,
               ["--uno-draw-from-y" as string]: `${layout.source.top + offset * -1}px`,

@@ -1,4 +1,8 @@
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http"
 
 import { Server, type Socket } from "socket.io"
 
@@ -9,6 +13,7 @@ import type {
   RoomSnapshot,
   ServerToClientEvents,
   SocketData,
+  VoiceSignal,
 } from "@workspace/game"
 
 import { RoomManager } from "./room-manager"
@@ -18,6 +23,8 @@ const allowedOrigins = (process.env.CORS_ORIGIN ?? "http://localhost:3000")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean)
+const voiceDebugEnabled =
+  process.env.VOICE_DEBUG === "1" || process.env.VOICE_DEBUG === "true"
 
 const rooms = new RoomManager()
 const voiceStatesByRoomCode = new Map<
@@ -34,7 +41,10 @@ const httpServer = createServer(async (req, res) => {
     return
   }
 
-  const url = new URL(req.url ?? "/", `http://${req.headers.host ?? "localhost"}`)
+  const url = new URL(
+    req.url ?? "/",
+    `http://${req.headers.host ?? "localhost"}`
+  )
 
   if (req.method === "GET" && url.pathname === "/health") {
     sendJson(req, res, 200, { ok: true })
@@ -53,7 +63,10 @@ const httpServer = createServer(async (req, res) => {
     if (!body.ok) {
       sendJson(req, res, 400, {
         ok: false,
-        error: { code: "invalid-json", message: "Request body must be valid JSON." },
+        error: {
+          code: "invalid-json",
+          message: "Request body must be valid JSON.",
+        },
       })
       return
     }
@@ -101,10 +114,12 @@ io.on("connection", (socket) => {
       const previousSnapshot = rooms.unregisterConnection(
         previousRoomCode,
         previousPlayerId,
-        socket.id,
+        socket.id
       )
-      if (previousRoomCode !== result.data.room.code) socket.leave(previousRoomCode)
-      if (previousSnapshot) void emitRoomState(previousRoomCode, previousSnapshot)
+      if (previousRoomCode !== result.data.room.code)
+        socket.leave(previousRoomCode)
+      if (previousSnapshot)
+        void emitRoomState(previousRoomCode, previousSnapshot)
     }
 
     socket.data.roomCode = result.data.room.code
@@ -115,7 +130,7 @@ io.on("connection", (socket) => {
     const snapshot = rooms.registerConnection(
       result.data.room.code,
       result.data.player.id,
-      socket.id,
+      socket.id
     )
 
     const room = snapshot ?? result.data.room
@@ -147,7 +162,10 @@ io.on("connection", (socket) => {
     if (!roomCode || !playerId) {
       ack({
         ok: false,
-        error: { code: "not-joined", message: "Join a room before changing readiness." },
+        error: {
+          code: "not-joined",
+          message: "Join a room before changing readiness.",
+        },
       })
       return
     }
@@ -189,7 +207,10 @@ io.on("connection", (socket) => {
     if (!roomCode || !playerId) {
       ack({
         ok: false,
-        error: { code: "not-joined", message: "Join a room before restarting." },
+        error: {
+          code: "not-joined",
+          message: "Join a room before restarting.",
+        },
       })
       return
     }
@@ -204,7 +225,7 @@ io.on("connection", (socket) => {
 
   socket.on("room:sendChatMessage", (input, ack) => {
     const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
-      rooms.sendChatMessage(roomCode, playerId, input),
+      rooms.sendChatMessage(roomCode, playerId, input)
     )
     ack(result)
     if (result.ok) void emitRoomState(result.data.code, result.data)
@@ -213,6 +234,11 @@ io.on("connection", (socket) => {
   socket.on("voice:requestStates", () => {
     const roomCode = socket.data.roomCode
     if (!roomCode) return
+    logVoiceDebug("states requested", {
+      roomCode,
+      socketId: socket.id,
+      playerId: socket.data.playerId,
+    })
     emitVoiceStates(socket, roomCode)
   })
 
@@ -225,6 +251,13 @@ io.on("connection", (socket) => {
     const muted = Boolean(input.muted)
     const speaking = Boolean(enabled && !muted && input.speaking)
     writeVoiceState(roomCode, playerId, { enabled, muted, speaking })
+    logVoiceDebug("state broadcast", {
+      roomCode,
+      playerId,
+      enabled,
+      muted,
+      speaking,
+    })
     io.to(roomCode).emit("voice:state", { playerId, enabled, muted, speaking })
   })
 
@@ -234,6 +267,12 @@ io.on("connection", (socket) => {
     if (!roomCode || !playerId) return
     if (!input.targetPlayerId || input.targetPlayerId === playerId) return
 
+    logVoiceDebug("signal relayed", {
+      roomCode,
+      fromPlayerId: playerId,
+      targetPlayerId: input.targetPlayerId,
+      signal: describeVoiceSignal(input.signal),
+    })
     io.to(roomCode).emit("voice:signal", {
       fromPlayerId: playerId,
       targetPlayerId: input.targetPlayerId,
@@ -243,7 +282,7 @@ io.on("connection", (socket) => {
 
   socket.on("game:playCards", (input, ack) => {
     const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
-      rooms.playCards(roomCode, playerId, input),
+      rooms.playCards(roomCode, playerId, input)
     )
     ack(result)
     if (result.ok) void emitRoomState(result.data.code, result.data)
@@ -251,7 +290,7 @@ io.on("connection", (socket) => {
 
   socket.on("game:stageCards", (input, ack) => {
     const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
-      rooms.stageCards(roomCode, playerId, input),
+      rooms.stageCards(roomCode, playerId, input)
     )
     ack(result)
     if (result.ok) void emitRoomState(result.data.code, result.data)
@@ -259,7 +298,7 @@ io.on("connection", (socket) => {
 
   socket.on("game:drawOne", (ack) => {
     const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
-      rooms.drawOne(roomCode, playerId),
+      rooms.drawOne(roomCode, playerId)
     )
     ack(result)
     if (result.ok) void emitRoomState(result.data.code, result.data)
@@ -267,7 +306,7 @@ io.on("connection", (socket) => {
 
   socket.on("game:endTurn", (ack) => {
     const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
-      rooms.endTurn(roomCode, playerId),
+      rooms.endTurn(roomCode, playerId)
     )
     ack(result)
     if (result.ok) void emitRoomState(result.data.code, result.data)
@@ -275,7 +314,7 @@ io.on("connection", (socket) => {
 
   socket.on("game:takeDrawPenalty", (ack) => {
     const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
-      rooms.takeDrawPenalty(roomCode, playerId),
+      rooms.takeDrawPenalty(roomCode, playerId)
     )
     ack(result)
     if (result.ok) void emitRoomState(result.data.code, result.data)
@@ -283,7 +322,7 @@ io.on("connection", (socket) => {
 
   socket.on("game:drawRouletteCard", (ack) => {
     const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
-      rooms.drawRouletteCard(roomCode, playerId),
+      rooms.drawRouletteCard(roomCode, playerId)
     )
     ack(result)
     if (result.ok) void emitRoomState(result.data.code, result.data)
@@ -291,7 +330,7 @@ io.on("connection", (socket) => {
 
   socket.on("game:catchUno", (input, ack) => {
     const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
-      rooms.catchUno(roomCode, playerId, input),
+      rooms.catchUno(roomCode, playerId, input)
     )
     ack(result)
     if (result.ok) void emitRoomState(result.data.code, result.data)
@@ -305,7 +344,7 @@ io.on("connection", (socket) => {
     const snapshot = rooms.unregisterConnection(roomCode, playerId, socket.id)
     if (snapshot) {
       const playerSnapshot = snapshot.players.find(
-        (candidate) => candidate.id === playerId,
+        (candidate) => candidate.id === playerId
       )
       if (!playerSnapshot?.connected) {
         writeVoiceState(roomCode, playerId, {
@@ -334,7 +373,10 @@ function setCorsHeaders(req: IncomingMessage, res: ServerResponse) {
   const allowedOrigin =
     origin && allowedOrigins.includes(origin) ? origin : allowedOrigins[0]
 
-  res.setHeader("Access-Control-Allow-Origin", allowedOrigin ?? "http://localhost:3000")
+  res.setHeader(
+    "Access-Control-Allow-Origin",
+    allowedOrigin ?? "http://localhost:3000"
+  )
   res.setHeader("Vary", "Origin")
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
   res.setHeader("Access-Control-Allow-Headers", "Content-Type")
@@ -344,7 +386,7 @@ function sendJson(
   req: IncomingMessage,
   res: ServerResponse,
   statusCode: number,
-  data: unknown,
+  data: unknown
 ) {
   setCorsHeaders(req, res)
   res.writeHead(statusCode, { "Content-Type": "application/json" })
@@ -400,7 +442,7 @@ function emitVoiceStates(
     InterServerEvents,
     SocketData
   >,
-  roomCode: string,
+  roomCode: string
 ) {
   const roomVoiceStates = voiceStatesByRoomCode.get(roomCode)
   if (!roomVoiceStates) return
@@ -413,7 +455,7 @@ function emitVoiceStates(
 function writeVoiceState(
   roomCode: string,
   playerId: string,
-  state: { enabled: boolean; muted: boolean; speaking: boolean },
+  state: { enabled: boolean; muted: boolean; speaking: boolean }
 ) {
   const roomVoiceStates = voiceStatesByRoomCode.get(roomCode) ?? new Map()
 
@@ -430,9 +472,44 @@ function writeVoiceState(
   }
 }
 
+function logVoiceDebug(event: string, details: Record<string, unknown>) {
+  if (!voiceDebugEnabled) return
+  console.log(`[uno voice] ${event}`, details)
+}
+
+function describeVoiceSignal(signal: VoiceSignal) {
+  if (signal.type === "offer" || signal.type === "answer") {
+    return { type: signal.type, sdpLength: signal.sdp.length }
+  }
+
+  if (signal.type === "leave") {
+    return { type: signal.type }
+  }
+
+  return {
+    type: signal.type,
+    candidate: describeVoiceCandidate(signal.candidate),
+  }
+}
+
+function describeVoiceCandidate(candidate: unknown) {
+  if (!candidate || typeof candidate !== "object") return null
+
+  const candidateValue =
+    "candidate" in candidate && typeof candidate.candidate === "string"
+      ? candidate.candidate
+      : ""
+
+  return {
+    type: candidateValue.match(/ typ ([a-z]+)/i)?.[1] ?? "unknown",
+    protocol:
+      candidateValue.match(/ (udp|tcp) /i)?.[1]?.toLowerCase() ?? "unknown",
+  }
+}
+
 function withJoinedPlayer<T>(
   data: SocketData,
-  command: (roomCode: string, playerId: string) => T,
+  command: (roomCode: string, playerId: string) => T
 ): T | { ok: false; error: { code: string; message: string } } {
   const roomCode = data.roomCode
   const playerId = data.playerId
