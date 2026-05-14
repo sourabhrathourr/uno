@@ -1896,7 +1896,28 @@ function MobileChatSheet({
   const [text, setText] = useState("")
   const [tray, setTray] = useState<ChatTray | null>(null)
   const [open, setOpen] = useState(false)
+  const latestMessageId =
+    messages.length > 0 ? messages[messages.length - 1]!.id : null
+  const [lastReadMessageId, setLastReadMessageId] = useState<string | null>(
+    latestMessageId
+  )
   const haptic = useWebHaptics()
+  const unreadMessageCount = useMemo(() => {
+    if (messages.length === 0) return 0
+
+    const lastReadIndex = lastReadMessageId
+      ? messages.findIndex((message) => message.id === lastReadMessageId)
+      : -1
+
+    return messages
+      .slice(lastReadIndex + 1)
+      .filter((message) => message.playerId !== selfPlayerId).length
+  }, [messages, lastReadMessageId, selfPlayerId])
+
+  function openChat() {
+    setLastReadMessageId(latestMessageId)
+    setOpen(true)
+  }
 
   function send(input: SendChatMessageInput) {
     playFx("buttonSoft", { volume: 0.36 })
@@ -1910,6 +1931,11 @@ function MobileChatSheet({
     send({ kind: "text", body })
     setText("")
   }
+
+  useEffect(() => {
+    if (!open) return
+    setLastReadMessageId(latestMessageId)
+  }, [open, latestMessageId])
 
   useEffect(() => {
     if (!open) return
@@ -1933,14 +1959,18 @@ function MobileChatSheet({
     <>
       <button
         type="button"
-        onClick={() => setOpen(true)}
+        onClick={openChat}
         className="relative grid size-9 shrink-0 place-items-center rounded-full border border-white/10 bg-white/[0.045] text-white/74 transition-[background-color,border-color,color,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] hover:border-white/18 hover:bg-white/[0.075] hover:text-white active:scale-[0.96]"
-        aria-label="Open table chat"
+        aria-label={
+          unreadMessageCount > 0
+            ? `Open table chat, ${unreadMessageCount} unread message${unreadMessageCount === 1 ? "" : "s"}`
+            : "Open table chat"
+        }
       >
         <MessageCircle className="size-4" strokeWidth={1.9} />
-        {messages.length > 0 && (
+        {unreadMessageCount > 0 && (
           <span className="absolute -top-1 -right-1 grid min-w-4 place-items-center rounded-full bg-white px-1 text-[9px] font-semibold text-neutral-950 tabular-nums shadow-[0_8px_20px_rgba(0,0,0,0.32)]">
-            {Math.min(messages.length, 99)}
+            {Math.min(unreadMessageCount, 99)}
           </span>
         )}
       </button>
