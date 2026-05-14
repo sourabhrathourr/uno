@@ -316,12 +316,11 @@ function RoomPage() {
     for (const nextEvent of newEvents) {
       switch (nextEvent.type) {
         case "card-played":
-          if (nextEvent.playerId !== player?.id) {
-            playCardSound("play", nextEvent.cards?.length ?? 1)
-          }
           break
         case "card-drawn":
-          playCardSound("draw", nextEvent.cards?.length ?? 1)
+          if (nextEvent.drawKind !== "roulette-complete") {
+            playCardSound("draw", nextEvent.cards?.length ?? 1)
+          }
           break
         case "draw-penalty":
           playCardSound("draw", Math.min(nextEvent.cards?.length ?? 1, 4))
@@ -1108,12 +1107,12 @@ function GameTable({
 
   function handleEndTurnButton() {
     if (selectedCardIds.length > 0) {
-      playCardSound("play", selectedCardIds.length)
+      playFx("successBling", { volume: 0.55 })
       submitPlay()
       return
     }
     if (canPassTurn) {
-      playCardSound("play", 1)
+      playFx("successBling", { volume: 0.5 })
       onEndTurn()
     }
   }
@@ -1144,6 +1143,7 @@ function GameTable({
             targetPlayerId={rouletteFly.targetPlayerId}
             isSelfTarget={rouletteFly.targetPlayerId === player.id}
             startDelayMs={520}
+            onFlightStart={() => setRouletteConsumedKey(rouletteFly.sessionId)}
             onDone={() => {
               setRouletteConsumedKey(rouletteFly.sessionId)
               setRouletteFly(null)
@@ -1255,7 +1255,7 @@ function GameTable({
                 </div>
               </div>
 
-              {(drawStack || rouletteChoice) && (
+              {(drawStack || (rouletteChoice && !canDrawRoulette)) && (
                 <div className="mt-2 flex shrink-0 flex-wrap items-center gap-1.5">
                   {drawStack && (
                     <div className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-black/48 px-2.5 py-1 text-[11px] text-white/68 shadow-[0_10px_24px_rgba(0,0,0,0.22)] backdrop-blur-md">
@@ -1277,21 +1277,11 @@ function GameTable({
                       )}
                     </div>
                   )}
-                  {rouletteChoice && (
+                  {rouletteChoice && !canDrawRoulette && (
                     <div className="inline-flex items-center gap-1.5 rounded-full border border-amber-200/20 bg-amber-300/12 px-2.5 py-1 text-[11px] text-amber-50 shadow-[0_10px_24px_rgba(0,0,0,0.22)] backdrop-blur-md">
                       <span className="truncate">
                         {rouletteTargetName} draws until {rouletteChoice.color}
                       </span>
-                      {canDrawRoulette && (
-                        <Button
-                          type="button"
-                          size="xs"
-                          onClick={onDrawRouletteCard}
-                          className="h-6 rounded-full bg-amber-100 px-2 text-[11px] text-amber-950 hover:bg-amber-50"
-                        >
-                          Draw
-                        </Button>
-                      )}
                     </div>
                   )}
                 </div>
@@ -1324,6 +1314,9 @@ function GameTable({
                       size="sm"
                       dense={phoneViewport}
                       onDraw={onDrawCard}
+                      rouletteMode={canDrawRoulette}
+                      rouletteColor={rouletteChoice?.color ?? null}
+                      onDrawRoulette={onDrawRouletteCard}
                     />
                     <DiscardStack
                       card={game?.topDiscard ?? null}
@@ -1483,6 +1476,7 @@ function GameTable({
           targetPlayerId={rouletteFly.targetPlayerId}
           isSelfTarget={rouletteFly.targetPlayerId === player.id}
           startDelayMs={520}
+          onFlightStart={() => setRouletteConsumedKey(rouletteFly.sessionId)}
           onDone={() => {
             setRouletteConsumedKey(rouletteFly.sessionId)
             setRouletteFly(null)
@@ -1573,8 +1567,8 @@ function GameTable({
                         Next hand
                       </Button>
                     )}
-                    {rouletteChoice && (
-                      <div className="flex items-center gap-2 rounded-full border border-amber-200/20 bg-amber-300/12 py-1 pr-1 pl-3 text-xs text-amber-50 shadow-[0_10px_26px_rgba(0,0,0,0.22)] backdrop-blur-md">
+                    {rouletteChoice && !canDrawRoulette && (
+                      <div className="flex items-center gap-2 rounded-full border border-amber-200/20 bg-amber-300/12 px-3 py-1 text-xs text-amber-50 shadow-[0_10px_26px_rgba(0,0,0,0.22)] backdrop-blur-md">
                         <span className="flex items-center gap-1.5">
                           {rouletteTargetName} draws until
                           <span
@@ -1585,16 +1579,6 @@ function GameTable({
                           />
                           {rouletteChoice.color}
                         </span>
-                        {canDrawRoulette && (
-                          <Button
-                            type="button"
-                            size="sm"
-                            onClick={onDrawRouletteCard}
-                            className="h-7 rounded-full bg-amber-100 px-3 text-xs text-amber-950 hover:bg-amber-50"
-                          >
-                            Draw card
-                          </Button>
-                        )}
                       </div>
                     )}
                   </div>
@@ -1609,6 +1593,9 @@ function GameTable({
                         drawPileCount={game?.drawPileCount ?? 0}
                         size={tableCardSize}
                         onDraw={onDrawCard}
+                        rouletteMode={canDrawRoulette}
+                        rouletteColor={rouletteChoice?.color ?? null}
+                        onDrawRoulette={onDrawRouletteCard}
                       />
                       <DiscardStack
                         card={game?.topDiscard ?? null}
@@ -3129,6 +3116,9 @@ function DeckStack({
   size,
   dense = false,
   onDraw,
+  rouletteMode = false,
+  rouletteColor = null,
+  onDrawRoulette,
 }: {
   canDraw: boolean
   alreadyDrawn: boolean
@@ -3136,10 +3126,28 @@ function DeckStack({
   size: ResponsiveCardSize
   dense?: boolean
   onDraw: () => void
+  rouletteMode?: boolean
+  rouletteColor?: PlayColor | null
+  onDrawRoulette?: () => void
 }) {
   const compact = size === "sm"
   const denseCompact = dense && compact
   const cardScale = denseCompact ? 0.88 : 1
+  const showRoulette = rouletteMode && Boolean(onDrawRoulette)
+
+  const buttonLabel = showRoulette
+    ? "Draw card"
+    : alreadyDrawn
+      ? "Drawn"
+      : "Draw one"
+  const handleClick = showRoulette ? onDrawRoulette : onDraw
+  const buttonDisabled = showRoulette ? false : !canDraw
+  const buttonClass = showRoulette
+    ? "rounded-lg border border-amber-200/55 bg-amber-300/22 font-semibold text-amber-50 shadow-[0_0_0_3px_rgba(252,211,77,0.18)] transition-[background-color,border-color,color,transform] hover:border-amber-200/75 hover:bg-amber-300/32 active:scale-[0.96]"
+    : "rounded-lg border border-white/12 bg-black/35 font-medium text-white/84 transition-[background-color,border-color,color,transform] hover:border-white/22 hover:bg-white/10 hover:text-white active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-45"
+  const buttonSize = denseCompact
+    ? "h-7 px-2 text-[11px]"
+    : "h-8 px-2.5 text-xs sm:h-9 sm:px-3 sm:text-sm"
 
   return (
     <div
@@ -3179,25 +3187,36 @@ function DeckStack({
       </div>
       <button
         type="button"
-        disabled={!canDraw}
-        onClick={onDraw}
-        className={
-          "rounded-lg border border-white/12 bg-black/35 font-medium text-white/84 transition-[background-color,border-color,color,transform] hover:border-white/22 hover:bg-white/10 hover:text-white active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-45 " +
-          (denseCompact
-            ? "h-7 px-2 text-[11px]"
-            : "h-8 px-2.5 text-xs sm:h-9 sm:px-3 sm:text-sm")
-        }
+        disabled={buttonDisabled}
+        onClick={handleClick}
+        className={buttonClass + " " + buttonSize}
       >
-        {alreadyDrawn ? "Drawn" : "Draw one"}
+        {buttonLabel}
       </button>
-      <p
-        className={
-          (denseCompact ? "text-[10px]" : "text-[11px] sm:text-xs") +
-          " text-white/45"
-        }
-      >
-        {drawPileCount} in deck
-      </p>
+      {showRoulette && rouletteColor ? (
+        <p
+          className={
+            (denseCompact ? "text-[10px]" : "text-[11px] sm:text-xs") +
+            " inline-flex items-center gap-1 text-amber-50/80"
+          }
+        >
+          until
+          <span
+            className="size-2 rounded-full shadow-[0_0_0_1px_rgba(255,255,255,0.22)]"
+            style={{ background: colorValue(rouletteColor) }}
+          />
+          {rouletteColor}
+        </p>
+      ) : (
+        <p
+          className={
+            (denseCompact ? "text-[10px]" : "text-[11px] sm:text-xs") +
+            " text-white/45"
+          }
+        >
+          {drawPileCount} in deck
+        </p>
+      )}
     </div>
   )
 }
@@ -5065,12 +5084,14 @@ function RouletteFlyToHand({
   targetPlayerId,
   isSelfTarget,
   startDelayMs = 0,
+  onFlightStart,
   onDone,
 }: {
   cards: Card[]
   targetPlayerId: string
   isSelfTarget: boolean
   startDelayMs?: number
+  onFlightStart?: () => void
   onDone: () => void
 }) {
   const [layout, setLayout] = useState<{
@@ -5129,10 +5150,11 @@ function RouletteFlyToHand({
             }
           : fallbackDest,
       })
+      onFlightStart?.()
     }, startDelayMs)
 
     return () => window.clearTimeout(timer)
-  }, [cards, targetPlayerId, isSelfTarget, startDelayMs, onDone])
+  }, [cards, targetPlayerId, isSelfTarget, startDelayMs, onFlightStart, onDone])
 
   useEffect(() => {
     if (!layout) return
@@ -5141,10 +5163,6 @@ function RouletteFlyToHand({
     const stagger = 90
     const flightDuration = 620
     const totalMs = (cards.length - 1) * stagger + flightDuration + 60
-
-    for (let index = 0; index < Math.min(cards.length, 5); index += 1) {
-      window.setTimeout(() => playCardSound("draw", 1), index * stagger)
-    }
 
     const timer = window.setTimeout(onDone, totalMs)
     return () => window.clearTimeout(timer)

@@ -86,6 +86,7 @@ const SOUNDS = {
   popupOpen: "ui/popup_open",
   successChime: "ui/success_chime",
   successBlip: "ui/success_blip",
+  successBling: "ui/success_bling",
   itemSelect: "ui/item_select",
   itemDeselect: "ui/item_deselect",
   copy: "ui/copy",
