@@ -34,6 +34,7 @@ import {
   type ReactNode,
 } from "react"
 import { createPortal } from "react-dom"
+import { useWebHaptics } from "web-haptics/react"
 
 import {
   CHAT_EMOJIS,
@@ -111,6 +112,7 @@ function RoomPage() {
   const lastStatusRef = useRef<RoomSnapshot["status"] | null>(null)
   const seenInitialGameSnapshotRef = useRef(false)
   useSoundSystem()
+  const haptic = useWebHaptics()
 
   const normalizedRoomCode = roomCode.toUpperCase()
   const isHost = room?.hostPlayerId === player?.id
@@ -214,6 +216,7 @@ function RoomPage() {
     }
 
     setError(nextError.message)
+    haptic.trigger("error")
   }
 
   function isActiveTurnPlayer() {
@@ -314,44 +317,60 @@ function RoomPage() {
     lastEventIdRef.current = newEvents[newEvents.length - 1]!.id
 
     for (const nextEvent of newEvents) {
+      const isSelfEvent = nextEvent.playerId === player?.id
       switch (nextEvent.type) {
         case "card-played":
+          if (isSelfEvent) haptic.trigger("success")
           break
         case "card-drawn":
           if (nextEvent.drawKind !== "roulette-complete") {
             playCardSound("draw", nextEvent.cards?.length ?? 1)
           }
+          if (isSelfEvent && nextEvent.drawKind === "single") {
+            haptic.trigger("light")
+          }
           break
         case "draw-penalty":
           playCardSound("draw", Math.min(nextEvent.cards?.length ?? 1, 4))
+          if (isSelfEvent) haptic.trigger("heavy")
           break
         case "hand-swapped":
         case "hands-rotated":
           playShuffleSound()
+          haptic.trigger("medium")
           break
         case "uno-called":
           playFx("successBlip", { volume: 0.55 })
+          if (isSelfEvent) haptic.trigger("success")
           break
         case "uno-caught":
           playFx("blocked", { volume: 0.5 })
+          haptic.trigger(
+            nextEvent.targetPlayerId === player?.id ? "error" : "warning"
+          )
           break
         case "player-eliminated":
           playFx("blocked", { volume: 0.6 })
+          if (isSelfEvent) haptic.trigger("error")
           break
-        case "game-won":
-          playWinnerSound(
+        case "game-won": {
+          const isFirstPlace =
             room.game?.winnerPlacements.some(
               (placement) =>
                 placement.playerId === nextEvent.playerId &&
                 placement.position === 1
             ) ?? false
-          )
+          playWinnerSound(isFirstPlace)
+          if (isSelfEvent) {
+            haptic.trigger(isFirstPlace ? "heavy" : "success")
+          }
           break
+        }
         default:
           break
       }
     }
-  }, [room, player?.id, startIntroPhase])
+  }, [room, player?.id, startIntroPhase, haptic])
 
   useEffect(() => {
     let cancelled = false
@@ -749,6 +768,7 @@ function GameTable({
   const narrowViewport = useMediaQuery("(max-width: 680px)")
   const shortViewport = useMediaQuery("(max-height: 760px)")
   const compactSurface = narrowViewport || shortViewport
+  const haptic = useWebHaptics()
   const tableCardSize: ResponsiveCardSize = compactSurface ? "sm" : "md"
   const handCardSize: ResponsiveCardSize = compactSurface ? "sm" : "md"
 
@@ -1030,20 +1050,28 @@ function GameTable({
   }
 
   function toggleSelected(card: Card) {
-    setSelectedCardIds((current) => {
-      if (current.includes(card.id)) {
-        const currentCards = cardsInIdOrder(playerGame?.hand ?? [], current)
-        const removingFirstDiscard =
-          current[0] === card.id &&
-          currentCards[0]?.face.kind === "discard-color" &&
-          current.length > 1
-        return removingFirstDiscard
+    const current = selectedCardIds
+    if (current.includes(card.id)) {
+      haptic.trigger("selection")
+      const currentCards = cardsInIdOrder(playerGame?.hand ?? [], current)
+      const removingFirstDiscard =
+        current[0] === card.id &&
+        currentCards[0]?.face.kind === "discard-color" &&
+        current.length > 1
+      setSelectedCardIds(
+        removingFirstDiscard
           ? []
           : current.filter((cardId) => cardId !== card.id)
-      }
+      )
+      return
+    }
 
-      return canStageCard(card) ? [...current, card.id] : current
-    })
+    if (canStageCard(card)) {
+      haptic.trigger("selection")
+      setSelectedCardIds([...current, card.id])
+      return
+    }
+    haptic.trigger("error")
   }
 
   function stageCard(card: Card) {
@@ -1108,13 +1136,35 @@ function GameTable({
   function handleEndTurnButton() {
     if (selectedCardIds.length > 0) {
       playFx("successBling", { volume: 0.55 })
+      haptic.trigger("medium")
       submitPlay()
       return
     }
     if (canPassTurn) {
       playFx("successBling", { volume: 0.5 })
+      haptic.trigger("light")
       onEndTurn()
     }
+  }
+
+  function handleDrawCard() {
+    haptic.trigger("light")
+    onDrawCard()
+  }
+
+  function handleTakePenalty() {
+    haptic.trigger("medium")
+    onTakePenalty()
+  }
+
+  function handleDrawRouletteCard() {
+    haptic.trigger("light")
+    onDrawRouletteCard()
+  }
+
+  function handleCatchUno(targetPlayerId: string) {
+    haptic.trigger("warning")
+    onCatchUno(targetPlayerId)
   }
 
   const tableStatusTitle =
@@ -1185,8 +1235,8 @@ function GameTable({
             </div>
             <div className="flex shrink-0 items-center gap-1.5">
               <VoiceToggleButton voice={voice} compact />
-              <SoundToggle />
-              <StatusDot connected={connected} />
+              <SoundToggle compact />
+              <StatusDot connected={connected} compact />
               <CopyInviteButton iconOnly onCopy={onCopyInvite} />
               <MobileChatSheet
                 messages={room.chatMessages}
@@ -1197,151 +1247,140 @@ function GameTable({
             </div>
           </header>
 
-          <MobilePlayerStrip
-            room={room}
-            game={game}
-            selfPlayerId={player.id}
-            dense={phoneViewport}
-            voiceStates={voice.voiceStates}
-            canTakeDrawPenalty={Boolean(playerGame?.canTakeDrawPenalty)}
-            onTakeDrawPenalty={onTakePenalty}
-          />
-
-          <section
+          <div
             ref={tableDropRef}
-            style={{
-              backgroundImage:
-                "linear-gradient(135deg, rgba(255,255,255,0.09), rgba(255,255,255,0) 18%, rgba(0,0,0,0.18) 62%), repeating-linear-gradient(92deg, rgba(255,255,255,0.035) 0 10px, rgba(0,0,0,0.05) 10px 22px), linear-gradient(90deg, #5a341d, #7a4829 38%, #4b2917)",
-            }}
-            className={
-              "relative isolate min-h-0 flex-1 overflow-hidden border shadow-[0_26px_70px_rgba(0,0,0,0.46)] transition-[border-color,box-shadow] " +
-              (phoneViewport
-                ? "rounded-[1.15rem] p-1.5"
-                : "rounded-[1.35rem] p-2") +
-              " " +
-              (tableDragActive
-                ? "border-white/35 shadow-[0_26px_70px_rgba(0,0,0,0.46),inset_0_0_0_2px_rgba(255,255,255,0.16)]"
-                : draggingCardId
-                  ? "border-white/22"
-                  : "border-white/12")
-            }
+            className="flex min-h-0 flex-1 flex-col gap-1.5"
           >
-            <div className="pointer-events-none absolute inset-0 rounded-[1.35rem] bg-black/[0.08] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.32),inset_0_0_0_2px_rgba(255,255,255,0.045),inset_0_24px_80px_rgba(0,0,0,0.32)]" />
+            <section
+              style={{
+                backgroundImage:
+                  "linear-gradient(135deg, rgba(255,255,255,0.09), rgba(255,255,255,0) 18%, rgba(0,0,0,0.18) 62%), repeating-linear-gradient(92deg, rgba(255,255,255,0.035) 0 10px, rgba(0,0,0,0.05) 10px 22px), linear-gradient(90deg, #5a341d, #7a4829 38%, #4b2917)",
+              }}
+              className={
+                "relative isolate min-h-0 flex-1 overflow-hidden border shadow-[0_26px_70px_rgba(0,0,0,0.46)] transition-[border-color,box-shadow] " +
+                (phoneViewport
+                  ? "rounded-[1.15rem] p-1.5"
+                  : "rounded-[1.35rem] p-2") +
+                " " +
+                (tableDragActive
+                  ? "border-white/35 shadow-[0_26px_70px_rgba(0,0,0,0.46),inset_0_0_0_2px_rgba(255,255,255,0.16)]"
+                  : draggingCardId
+                    ? "border-white/22"
+                    : "border-white/12")
+              }
+            >
+              <div className="pointer-events-none absolute inset-0 rounded-[1.35rem] bg-black/[0.08] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.32),inset_0_0_0_2px_rgba(255,255,255,0.045),inset_0_24px_80px_rgba(0,0,0,0.32)]" />
 
-            <div className="relative z-10 flex h-full min-h-0 flex-col">
-              <div className="flex shrink-0 items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-semibold text-white">
+              <MobileSeatingRing
+                room={room}
+                game={game}
+                selfPlayerId={player.id}
+                voiceStates={voice.voiceStates}
+                canTakeDrawPenalty={Boolean(playerGame?.canTakeDrawPenalty)}
+                onTakeDrawPenalty={handleTakePenalty}
+              />
+
+              <div className="relative z-10 flex h-full min-h-0 flex-col">
+                <div className="flex shrink-0 items-center justify-between gap-2">
+                  <p className="min-w-0 flex-1 truncate text-[13px] font-semibold text-white">
                     {tableStatusTitle}
                   </p>
-                  <p className="mt-0.5 line-clamp-2 text-[11px] leading-snug text-white/64">
-                    {tableStatusDetail}
-                  </p>
-                </div>
-                <div className="flex shrink-0 items-center gap-1">
-                  <DirectionPill direction={game?.direction ?? 1} compact />
-                  <ColorPill color={game?.currentColor ?? "red"} />
-                  {canRestartGame && (
-                    <Button
-                      type="button"
-                      size="xs"
-                      onClick={onRestartGame}
-                      className="h-8 rounded-full bg-white px-2.5 text-[11px] font-semibold text-neutral-950 hover:bg-white/85"
-                    >
-                      <Play className="mr-1 size-3" strokeWidth={2.2} />
-                      New
-                    </Button>
-                  )}
-                </div>
-              </div>
-
-              {(drawStack || (rouletteChoice && !canDrawRoulette)) && (
-                <div className="mt-2 flex shrink-0 flex-wrap items-center gap-1.5">
-                  {drawStack && (
-                    <div className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-black/48 px-2.5 py-1 text-[11px] text-white/68 shadow-[0_10px_24px_rgba(0,0,0,0.22)] backdrop-blur-md">
-                      <span className="font-semibold text-red-100">
-                        Draw +{drawStack.amount}
-                      </span>
-                      <span className="text-white/42">
-                        stack +{drawStack.minimum}+
-                      </span>
-                      {playerGame?.canTakeDrawPenalty && (
-                        <Button
-                          type="button"
-                          size="xs"
-                          onClick={onTakePenalty}
-                          className="h-6 rounded-full bg-white px-2 text-[11px] text-neutral-950 hover:bg-white/85"
-                        >
-                          Take
-                        </Button>
-                      )}
-                    </div>
-                  )}
-                  {rouletteChoice && !canDrawRoulette && (
-                    <div className="inline-flex items-center gap-1.5 rounded-full border border-amber-200/20 bg-amber-300/12 px-2.5 py-1 text-[11px] text-amber-50 shadow-[0_10px_24px_rgba(0,0,0,0.22)] backdrop-blur-md">
-                      <span className="truncate">
-                        {rouletteTargetName} draws until {rouletteChoice.color}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div
-                className={
-                  "flex min-h-0 flex-1 justify-center " +
-                  (phoneViewport ? "items-start pt-1" : "items-center py-2")
-                }
-              >
-                <div
-                  className={
-                    "flex w-full flex-col items-center " +
-                    (phoneViewport
-                      ? "max-w-[336px] justify-start gap-1.5"
-                      : "max-w-[360px] justify-center gap-2")
-                  }
-                >
-                  <div
-                    className={
-                      "flex items-start justify-center " +
-                      (phoneViewport ? "gap-3" : "gap-4")
-                    }
-                  >
-                    <DeckStack
-                      canDraw={Boolean(playerGame?.canDraw)}
-                      alreadyDrawn={Boolean(playerGame?.canEndTurn)}
-                      drawPileCount={game?.drawPileCount ?? 0}
-                      size="sm"
-                      dense={phoneViewport}
-                      onDraw={onDrawCard}
-                      rouletteMode={canDrawRoulette}
-                      rouletteColor={rouletteChoice?.color ?? null}
-                      onDrawRoulette={onDrawRouletteCard}
-                    />
-                    <DiscardStack
-                      card={game?.topDiscard ?? null}
-                      size="sm"
-                      dense={phoneViewport}
-                    />
+                  <div className="flex shrink-0 items-center gap-1">
+                    <DirectionPill direction={game?.direction ?? 1} compact />
+                    <ColorPill color={game?.currentColor ?? "red"} />
+                    {canRestartGame && (
+                      <Button
+                        type="button"
+                        size="xs"
+                        onClick={onRestartGame}
+                        className="h-7 rounded-full bg-white px-2 text-[11px] font-semibold text-neutral-950 hover:bg-white/85"
+                      >
+                        <Play className="mr-1 size-3" strokeWidth={2.2} />
+                        New
+                      </Button>
+                    )}
                   </div>
-                  <TableStagedPlay
-                    cards={tableStagedCards}
-                    playerName={tableStagedPlayerName}
-                    mode={tableStagedMode}
-                    dense={phoneViewport}
-                    targetColor={
-                      rouletteChoice?.color ??
-                      (game?.stagedPlay?.kind === "roulette"
-                        ? game.currentColor
-                        : null)
-                    }
-                    canEdit={canEditTableStaged}
-                    onCardClick={toggleSelected}
-                  />
+                </div>
+
+                {(drawStack || (rouletteChoice && !canDrawRoulette)) && (
+                  <div className="mt-2 flex shrink-0 flex-wrap items-center gap-1.5">
+                    {drawStack && (
+                      <div className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-black/48 px-2.5 py-1 text-[11px] text-white/68 shadow-[0_10px_24px_rgba(0,0,0,0.22)] backdrop-blur-md">
+                        <span className="font-semibold text-red-100">
+                          Draw +{drawStack.amount}
+                        </span>
+                        <span className="text-white/42">
+                          stack +{drawStack.minimum}+
+                        </span>
+                        {playerGame?.canTakeDrawPenalty && (
+                          <Button
+                            type="button"
+                            size="xs"
+                            onClick={handleTakePenalty}
+                            className="h-6 rounded-full bg-white px-2 text-[11px] text-neutral-950 hover:bg-white/85"
+                          >
+                            Take
+                          </Button>
+                        )}
+                      </div>
+                    )}
+                    {rouletteChoice && !canDrawRoulette && (
+                      <div className="inline-flex items-center gap-1.5 rounded-full border border-amber-200/20 bg-amber-300/12 px-2.5 py-1 text-[11px] text-amber-50 shadow-[0_10px_24px_rgba(0,0,0,0.22)] backdrop-blur-md">
+                        <span className="truncate">
+                          {rouletteTargetName} draws until{" "}
+                          {rouletteChoice.color}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <div className="flex min-h-0 flex-1 items-center justify-center py-2">
+                  <div className="flex w-full max-w-[336px] flex-col items-center justify-center">
+                    <div
+                      className={
+                        "flex items-start justify-center " +
+                        (phoneViewport ? "gap-3" : "gap-4")
+                      }
+                    >
+                      <DeckStack
+                        canDraw={Boolean(playerGame?.canDraw)}
+                        alreadyDrawn={Boolean(playerGame?.canEndTurn)}
+                        drawPileCount={game?.drawPileCount ?? 0}
+                        size="sm"
+                        dense={phoneViewport}
+                        onDraw={handleDrawCard}
+                        rouletteMode={canDrawRoulette}
+                        rouletteColor={rouletteChoice?.color ?? null}
+                        onDrawRoulette={handleDrawRouletteCard}
+                      />
+                      <DiscardStack
+                        card={game?.topDiscard ?? null}
+                        size="sm"
+                        dense={phoneViewport}
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
-            </div>
-          </section>
+            </section>
+
+            <TableStagedPlay
+              cards={tableStagedCards}
+              playerName={tableStagedPlayerName}
+              mode={tableStagedMode}
+              dense
+              surface="tray"
+              targetColor={
+                rouletteChoice?.color ??
+                (game?.stagedPlay?.kind === "roulette"
+                  ? game.currentColor
+                  : null)
+              }
+              canEdit={canEditTableStaged}
+              onCardClick={toggleSelected}
+            />
+          </div>
 
           {(visibleError || Boolean(playerGame?.catchablePlayerIds.length)) && (
             <div className="shrink-0 space-y-1">
@@ -1357,7 +1396,7 @@ function GameTable({
                       key={targetPlayerId}
                       type="button"
                       size="xs"
-                      onClick={() => onCatchUno(targetPlayerId)}
+                      onClick={() => handleCatchUno(targetPlayerId)}
                       className="shrink-0 bg-yellow-100 text-yellow-950 hover:bg-yellow-50"
                     >
                       Catch {playerName(room, targetPlayerId)}
@@ -1376,7 +1415,7 @@ function GameTable({
               <div className="min-w-0">
                 <p className="text-sm font-medium text-white/84">Your hand</p>
                 <p className="mt-0.5 truncate text-[11px] text-white/42">
-                  Drag cards to the table.
+                  Tap a card to stage it.
                 </p>
               </div>
               <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
@@ -1536,7 +1575,7 @@ function GameTable({
                 game={game}
                 selfPlayerId={player.id}
                 canTakeDrawPenalty={Boolean(playerGame?.canTakeDrawPenalty)}
-                onTakeDrawPenalty={onTakePenalty}
+                onTakeDrawPenalty={handleTakePenalty}
                 compact={compactSurface}
                 voiceStates={voice.voiceStates}
               />
@@ -1592,10 +1631,10 @@ function GameTable({
                         alreadyDrawn={Boolean(playerGame?.canEndTurn)}
                         drawPileCount={game?.drawPileCount ?? 0}
                         size={tableCardSize}
-                        onDraw={onDrawCard}
+                        onDraw={handleDrawCard}
                         rouletteMode={canDrawRoulette}
                         rouletteColor={rouletteChoice?.color ?? null}
-                        onDrawRoulette={onDrawRouletteCard}
+                        onDrawRoulette={handleDrawRouletteCard}
                       />
                       <DiscardStack
                         card={game?.topDiscard ?? null}
@@ -1634,7 +1673,7 @@ function GameTable({
                       key={targetPlayerId}
                       type="button"
                       size="sm"
-                      onClick={() => onCatchUno(targetPlayerId)}
+                      onClick={() => handleCatchUno(targetPlayerId)}
                       className="bg-yellow-100 text-yellow-950 hover:bg-yellow-50"
                     >
                       Catch {playerName(room, targetPlayerId)}
@@ -1857,9 +1896,11 @@ function MobileChatSheet({
   const [text, setText] = useState("")
   const [tray, setTray] = useState<ChatTray | null>(null)
   const [open, setOpen] = useState(false)
+  const haptic = useWebHaptics()
 
   function send(input: SendChatMessageInput) {
     playFx("buttonSoft", { volume: 0.36 })
+    haptic.trigger("light")
     onSendMessage(input)
   }
 
@@ -1893,7 +1934,7 @@ function MobileChatSheet({
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="relative grid size-8 place-items-center rounded-full border border-white/10 bg-white/[0.06] text-white/74 transition-[background-color,border-color,color,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] hover:border-white/20 hover:bg-white/[0.1] hover:text-white active:scale-[0.96]"
+        className="relative grid size-9 shrink-0 place-items-center rounded-full border border-white/10 bg-white/[0.045] text-white/74 transition-[background-color,border-color,color,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] hover:border-white/18 hover:bg-white/[0.075] hover:text-white active:scale-[0.96]"
         aria-label="Open table chat"
       >
         <MessageCircle className="size-4" strokeWidth={1.9} />
@@ -1974,11 +2015,10 @@ function MobileChatSheet({
   )
 }
 
-function MobilePlayerStrip({
+function MobileSeatingRing({
   room,
   game,
   selfPlayerId,
-  dense = false,
   voiceStates,
   canTakeDrawPenalty,
   onTakeDrawPenalty,
@@ -1986,21 +2026,20 @@ function MobilePlayerStrip({
   room: RoomSnapshot
   game: RoomSnapshot["game"]
   selfPlayerId: string
-  dense?: boolean
   voiceStates: RoomVoiceController["voiceStates"]
   canTakeDrawPenalty: boolean
   onTakeDrawPenalty: () => void
 }) {
-  const players = orderPlayersAroundSelf(room.players, selfPlayerId)
+  const ordered = orderPlayersAroundSelf(room.players, selfPlayerId)
+
+  if (ordered.length === 0) return null
+
+  const dense = ordered.length >= 7
 
   return (
-    <div
-      className={
-        "uno-scrollbar flex shrink-0 overflow-x-auto border border-white/10 bg-white/[0.035] shadow-[0_12px_34px_rgba(0,0,0,0.24)] " +
-        (dense ? "gap-1 rounded-[1.15rem] p-1" : "gap-1.5 rounded-2xl p-1.5")
-      }
-    >
-      {players.map((candidate) => {
+    <div className="pointer-events-none absolute inset-x-0 top-10 bottom-2 z-20">
+      {ordered.map((candidate, index) => {
+        const seat = mobileSeatPosition(index, ordered.length)
         const state = game?.players.find(
           (gamePlayer) => gamePlayer.playerId === candidate.id
         )
@@ -2017,77 +2056,79 @@ function MobilePlayerStrip({
           game?.drawStack?.targetPlayerId === candidate.id
             ? game.drawStack
             : null
-        const status = winnerPlacement
-          ? winnerPlacement.position === 1
-            ? "Winner"
-            : ordinalLabel(winnerPlacement.position)
-          : eliminated
-            ? "Out"
+        const handCount = state?.handCount ?? 0
+        const isWinner = winnerPlacement?.position === 1
+        const fadedOpacity = eliminated || !candidate.connected
+        const showName = !dense || isYou
+
+        const ringClass = isWinner
+          ? "ring-2 ring-amber-200/85 shadow-[0_0_22px_rgba(252,211,77,0.46)]"
+          : active
+            ? "ring-2 ring-amber-200/80 shadow-[0_0_22px_rgba(252,211,77,0.42)]"
             : declaredUno
-              ? "On UNO"
-              : isSpeaking
-                ? "Speaking"
-                : hasVoiceOn && isMuted
-                  ? "Mic off"
-                  : hasVoiceOn
-                    ? "Voice on"
-                    : active
-                      ? "Turn"
-                      : candidate.connected
-                        ? "At table"
-                        : "Away"
+              ? "ring-2 ring-yellow-200/65 shadow-[0_0_18px_rgba(250,204,21,0.32)]"
+              : isYou
+                ? "ring-2 ring-sky-200/55 shadow-[0_0_18px_rgba(125,211,252,0.24)]"
+                : "ring-1 ring-white/14"
 
         return (
           <div
             key={candidate.id}
             data-seat-player-id={candidate.id}
             className={
-              "relative flex items-center rounded-xl border transition-[background-color,border-color,box-shadow,opacity] duration-300 " +
-              (dense
-                ? "min-w-[126px] gap-1.5 px-1.5 py-1"
-                : "min-w-[138px] gap-2 px-2 py-1.5") +
+              "absolute flex -translate-x-1/2 -translate-y-1/2 flex-col items-center transition-[opacity,transform] duration-300 " +
+              (dense ? "w-[52px]" : "w-[60px]") +
               " " +
-              (winnerPlacement?.position === 1
-                ? "border-amber-200/70 bg-amber-200/18 shadow-[0_0_28px_rgba(252,211,77,0.22)]"
-                : declaredUno && !eliminated && !winnerPlacement
-                  ? "border-yellow-200/55 bg-red-500/[0.12] shadow-[0_0_28px_rgba(250,204,21,0.16)]"
-                  : active
-                    ? "border-amber-200/65 bg-amber-200/14 shadow-[0_0_28px_rgba(252,211,77,0.22)]"
-                    : "border-white/10 bg-black/28") +
-              (eliminated || !candidate.connected ? " opacity-55" : "")
+              (fadedOpacity ? "opacity-55" : "opacity-100")
             }
+            style={{
+              left: `${seat.left}%`,
+              top: `${seat.top}%`,
+              zIndex: active || isWinner ? 3 : isYou ? 2 : 1,
+            }}
           >
             <div
               className={
-                "relative grid shrink-0 place-items-center rounded-full border " +
+                "relative grid place-items-center rounded-lg border bg-white/[0.06] text-white/82 transition-transform duration-300 " +
                 (dense ? "size-8" : "size-9") +
                 " " +
-                (active
-                  ? "border-amber-100/60 bg-amber-100/20 text-amber-50"
-                  : "border-white/12 bg-white/[0.07] text-white/72")
+                ringClass +
+                " " +
+                (active || isWinner
+                  ? "scale-110 border-amber-200/65"
+                  : "border-white/10")
               }
             >
               {winnerPlacement ? (
-                <Trophy
-                  className={dense ? "size-3.5" : "size-4"}
-                  strokeWidth={2.1}
-                />
+                <Trophy className="size-4" strokeWidth={2.1} />
               ) : (
                 <UserRound
-                  className={dense ? "size-4" : "size-5"}
-                  strokeWidth={1.8}
+                  className={dense ? "size-3.5" : "size-4"}
+                  strokeWidth={1.85}
                 />
               )}
               <span
                 className={
-                  "absolute -right-1 -bottom-1 grid rounded-full border bg-neutral-950/95 shadow-[0_4px_10px_rgba(0,0,0,0.28)] transition-[border-color,color] " +
-                  (dense ? "size-4" : "size-[18px]") +
-                  " " +
+                  "absolute -top-1.5 -right-1.5 grid h-4 min-w-4 place-items-center rounded-full border px-1 text-[9px] font-semibold tabular-nums shadow-[0_4px_10px_rgba(0,0,0,0.32)] " +
+                  (declaredUno && !winnerPlacement && !eliminated
+                    ? "border-yellow-100/45 bg-yellow-300/20 text-yellow-50"
+                    : "border-white/14 bg-neutral-950/95 text-white/80")
+                }
+              >
+                {winnerPlacement
+                  ? `#${winnerPlacement.position}`
+                  : declaredUno
+                    ? "UNO"
+                    : handCount}
+              </span>
+              <span
+                className={
+                  "absolute -right-1 -bottom-1 grid size-4 place-items-center rounded-full border bg-neutral-950/95 transition-[border-color,color] " +
                   (isSpeaking
                     ? "border-emerald-300 text-white"
                     : hasVoiceOn && !isMuted
-                      ? "border-white/20 text-white/70"
-                      : "border-white/12 text-white/34")
+                      ? "border-white/20 text-white/72"
+                      : "border-white/12 text-white/32")
                 }
                 aria-label={
                   isSpeaking
@@ -2098,59 +2139,32 @@ function MobilePlayerStrip({
                 }
               >
                 {hasVoiceOn && !isMuted ? (
-                  <Mic
-                    className={dense ? "size-2.5" : "size-3"}
-                    strokeWidth={2.2}
-                  />
+                  <Mic className="size-2.5" strokeWidth={2.4} />
                 ) : (
-                  <MicOff
-                    className={dense ? "size-2.5" : "size-3"}
-                    strokeWidth={2.2}
-                  />
+                  <MicOff className="size-2.5" strokeWidth={2.4} />
                 )}
               </span>
             </div>
-            <div className="min-w-0 flex-1">
+            {showName && (
               <p
                 className={
-                  (dense ? "text-[11px]" : "text-xs") +
-                  " truncate font-semibold text-white/88"
-                }
-              >
-                {candidate.name}
-                {isYou ? " · You" : ""}
-              </p>
-              <p
-                className={
+                  "mt-0.5 w-full truncate text-center font-medium " +
                   (dense ? "text-[9px]" : "text-[10px]") +
-                  " mt-0.5 truncate text-white/45"
+                  " " +
+                  (active ? "text-amber-50" : "text-white/78")
                 }
               >
-                {status}
+                {isYou ? "You" : candidate.name}
               </p>
-            </div>
-            <span
-              className={
-                "rounded-full border px-1.5 py-0.5 text-[10px] font-semibold tabular-nums " +
-                (declaredUno && !winnerPlacement && !eliminated
-                  ? "border-yellow-100/45 bg-yellow-300/20 text-yellow-50"
-                  : "border-white/10 bg-black/34 text-white/64")
-              }
-            >
-              {winnerPlacement
-                ? `#${winnerPlacement.position}`
-                : declaredUno
-                  ? "UNO"
-                  : (state?.handCount ?? 0)}
-            </span>
+            )}
             {drawStack && (
-              <div className="absolute -bottom-2 left-10 flex items-center gap-1 rounded-full border border-white/12 bg-neutral-950 px-1.5 py-0.5 text-[10px] text-red-100 shadow-[0_8px_20px_rgba(0,0,0,0.3)]">
+              <div className="pointer-events-auto absolute -bottom-1.5 flex items-center gap-1 rounded-full border border-white/14 bg-neutral-950 px-1.5 py-0.5 text-[9px] font-semibold text-red-100 shadow-[0_8px_18px_rgba(0,0,0,0.32)]">
                 +{drawStack.amount}
                 {canTakeDrawPenalty && (
                   <button
                     type="button"
                     onClick={onTakeDrawPenalty}
-                    className="rounded-full bg-white px-1.5 py-0.5 text-[9px] font-semibold text-neutral-950"
+                    className="rounded-full bg-white px-1 py-px text-[8px] font-semibold text-neutral-950"
                   >
                     Take
                   </button>
@@ -2162,6 +2176,18 @@ function MobilePlayerStrip({
       })}
     </div>
   )
+}
+
+function mobileSeatPosition(index: number, total: number) {
+  const count = Math.max(total, 1)
+  const angle = Math.PI / 2 + (index * Math.PI * 2) / count
+  const xRadius = count <= 2 ? 0 : count >= 7 ? 43 : 41
+  const yRadius = count >= 7 ? 41 : 39
+
+  return {
+    left: 50 + Math.cos(angle) * xRadius,
+    top: 50 + Math.sin(angle) * yRadius,
+  }
 }
 
 function ChatMessageList({
@@ -3291,6 +3317,7 @@ function TableStagedPlay({
   mode,
   targetColor,
   dense = false,
+  surface = "table",
   canEdit,
   onCardClick,
 }: {
@@ -3299,31 +3326,82 @@ function TableStagedPlay({
   mode: "stage" | "roulette"
   targetColor: PlayColor | null
   dense?: boolean
+  surface?: "table" | "tray"
   canEdit: boolean
   onCardClick: (card: Card) => void
 }) {
   const half = (cards.length - 1) / 2
+  const isTray = surface === "tray"
   const compact = cards.length > 5
-  const cardScale = dense ? 0.78 : 1
-  const gap = dense ? (compact ? 18 : 28) : compact ? 26 : 38
+  const trayCardScale =
+    cards.length > 40
+      ? 0.46
+      : cards.length > 24
+        ? 0.52
+        : cards.length > 16
+          ? 0.58
+          : 0.66
+  const cardScale = isTray && dense ? trayCardScale : dense ? 0.78 : 1
+  const maxWidth = isTray && dense ? 300 : dense ? 320 : 370
+  const cardVisualWidth = 72 * cardScale
+  const baseGap =
+    isTray && dense
+      ? compact
+        ? 15
+        : 22
+      : dense
+        ? compact
+          ? 18
+          : 28
+        : compact
+          ? 26
+          : 38
+  const adaptiveGap =
+    cards.length > 1
+      ? Math.max(0, (maxWidth - cardVisualWidth) / (cards.length - 1))
+      : baseGap
+  const gap = Math.min(baseGap, adaptiveGap)
   const width = Math.min(
-    dense ? 320 : 370,
-    Math.max(dense ? 118 : 154, (dense ? 64 : 92) + cards.length * gap)
+    maxWidth,
+    Math.max(
+      isTray && dense ? 104 : dense ? 118 : 154,
+      cardVisualWidth + Math.max(cards.length - 1, 0) * gap
+    )
   )
   const cardAnchor = 36 * cardScale
   const isRoulette = mode === "roulette"
+  const sizeClass = isTray
+    ? dense
+      ? "rounded-[1rem] p-2"
+      : "rounded-2xl p-3"
+    : dense
+      ? "max-w-[340px] rounded-xl p-2"
+      : "max-w-[390px] rounded-2xl p-3"
+  const shadowClass = isTray
+    ? "shadow-[0_14px_36px_rgba(0,0,0,0.26),inset_0_1px_0_rgba(255,255,255,0.08)]"
+    : "shadow-[inset_0_1px_0_rgba(255,255,255,0.1)]"
 
   return (
     <div
+      style={
+        isTray
+          ? {
+              backgroundImage:
+                "linear-gradient(135deg, rgba(255,255,255,0.055), rgba(255,255,255,0) 22%, rgba(0,0,0,0.2) 70%), repeating-linear-gradient(94deg, rgba(255,255,255,0.026) 0 9px, rgba(0,0,0,0.075) 9px 20px), linear-gradient(90deg, #2b160d, #3a2012 45%, #241209)",
+            }
+          : undefined
+      }
       className={
-        "mx-auto w-full border shadow-[inset_0_1px_0_rgba(255,255,255,0.1)] " +
-        (dense
-          ? "max-w-[340px] rounded-xl p-2"
-          : "max-w-[390px] rounded-2xl p-3") +
+        "mx-auto w-full shrink-0 border " +
+        sizeClass +
+        " " +
+        shadowClass +
         " " +
         (isRoulette
           ? "border-amber-100/18 bg-amber-200/10"
-          : "border-black/25 bg-black/24")
+          : isTray
+            ? "border-black/45 bg-[#2b160d] backdrop-blur-md"
+            : "border-black/25 bg-black/24")
       }
     >
       <div className="flex min-h-5 items-center justify-between gap-3 px-1">
@@ -3358,16 +3436,22 @@ function TableStagedPlay({
       <div
         data-roulette-source={isRoulette ? "true" : undefined}
         className={
-          "relative grid place-items-center overflow-visible rounded-xl border border-white/8 bg-black/18 shadow-[inset_0_12px_28px_rgba(0,0,0,0.18)] " +
-          (dense
-            ? "mt-1.5 h-[88px] p-1.5"
-            : "mt-2 h-[120px] p-2 sm:h-[132px] sm:p-3")
+          "relative grid place-items-center overflow-hidden rounded-xl border border-white/8 bg-black/24 shadow-[inset_0_12px_28px_rgba(0,0,0,0.22)] " +
+          (isTray && dense
+            ? "mt-1 h-[78px] p-1.5"
+            : dense
+              ? "mt-1.5 h-[88px] p-1.5"
+              : "mt-2 h-[120px] p-2 sm:h-[132px] sm:p-3")
         }
       >
         {cards.length > 0 ? (
           <div
             className={
-              dense ? "relative h-[78px]" : "relative h-[106px] sm:h-[112px]"
+              isTray && dense
+                ? "relative h-[72px]"
+                : dense
+                  ? "relative h-[78px]"
+                  : "relative h-[106px] sm:h-[112px]"
             }
             style={{ width }}
           >
@@ -3399,9 +3483,11 @@ function TableStagedPlay({
         ) : (
           <div
             className={
-              dense
-                ? "h-[52px] w-[112px] rounded-lg border border-dashed border-white/16 bg-white/[0.035]"
-                : "h-[78px] w-[132px] rounded-xl border border-dashed border-white/16 bg-white/[0.035]"
+              isTray && dense
+                ? "h-[46px] w-[104px] rounded-lg border border-dashed border-white/16 bg-white/[0.035]"
+                : dense
+                  ? "h-[52px] w-[112px] rounded-lg border border-dashed border-white/16 bg-white/[0.035]"
+                  : "h-[78px] w-[132px] rounded-xl border border-dashed border-white/16 bg-white/[0.035]"
             }
           />
         )}
@@ -3479,6 +3565,8 @@ function FannedGameHand({
   const activeDragRef = useRef<ActiveCardDrag | null>(null)
   const ignoreNextClickRef = useRef(false)
   const [activeDrag, setActiveDragState] = useState<ActiveCardDrag | null>(null)
+  const [magnifyId, setMagnifyId] = useState<string | null>(null)
+  const haptic = useWebHaptics()
 
   function setActiveDrag(nextDrag: ActiveCardDrag | null) {
     activeDragRef.current = nextDrag
@@ -3624,7 +3712,15 @@ function FannedGameHand({
       ignoreNextClickRef.current = false
       return
     }
-    if (canSelectCard(card)) onToggleCard(card)
+    if (!canSelectCard(card)) {
+      haptic.trigger("error")
+      return
+    }
+    setMagnifyId(card.id)
+    window.setTimeout(() => {
+      onToggleCard(card)
+      setMagnifyId((current) => (current === card.id ? null : current))
+    }, 170)
   }
 
   function cancelPointerDrag(event: PointerEvent<HTMLElement>) {
@@ -3664,18 +3760,23 @@ function FannedGameHand({
             const activeDragForCard =
               activeDrag?.cardId === card.id ? activeDrag : null
             const dragging = Boolean(activeDragForCard?.dragging)
-            const rotate = offset * rotation
+            const magnifying = magnifyId === card.id
+            const rotate = magnifying ? 0 : offset * rotation
             const translateX = offset * spread + (activeDragForCard?.dx ?? 0)
             const translateY =
               (dragging
                 ? compact
                   ? -54
                   : -90
-                : Math.min(
-                    Math.abs(offset) * (compact ? 3 : 5),
-                    compact ? 20 : 34
-                  )) + (activeDragForCard?.dy ?? 0)
-            const scale = (dragging ? 1.05 : 1) * cardScale
+                : magnifying
+                  ? compact
+                    ? -52
+                    : -76
+                  : Math.min(
+                      Math.abs(offset) * (compact ? 3 : 5),
+                      compact ? 20 : 34
+                    )) + (activeDragForCard?.dy ?? 0)
+            const scale = (dragging ? 1.05 : magnifying ? 1.26 : 1) * cardScale
 
             return (
               <div
@@ -3689,9 +3790,15 @@ function FannedGameHand({
                 style={{
                   transform: `translateX(${translateX}px) translateY(${translateY}px) rotate(${rotate}deg) scale(${scale})`,
                   transitionProperty: "transform",
-                  transitionDuration: dragging ? "0ms" : "480ms",
-                  transitionTimingFunction: "cubic-bezier(0.22, 0.9, 0.18, 1)",
-                  zIndex: dragging ? 90 : 10 + index,
+                  transitionDuration: dragging
+                    ? "0ms"
+                    : magnifying
+                      ? "150ms"
+                      : "480ms",
+                  transitionTimingFunction: magnifying
+                    ? "cubic-bezier(0.22, 1.4, 0.36, 1)"
+                    : "cubic-bezier(0.22, 0.9, 0.18, 1)",
+                  zIndex: dragging || magnifying ? 90 : 10 + index,
                   willChange: "transform",
                   opacity: dragging ? 0 : muted ? 0.32 : 1,
                   filter: muted ? "saturate(0.55)" : undefined,
@@ -3932,6 +4039,7 @@ function CopyInviteButton({
 }) {
   const [copied, setCopied] = useState(false)
   const [copyFailed, setCopyFailed] = useState(false)
+  const haptic = useWebHaptics()
 
   useEffect(() => {
     if (!copied) return
@@ -3950,9 +4058,11 @@ function CopyInviteButton({
     try {
       await onCopy()
       setCopied(true)
+      haptic.trigger("success")
     } catch (error) {
       setCopied(false)
       setCopyFailed(true)
+      haptic.trigger("error")
       console.error("Failed to copy invite link", error)
     }
   }
@@ -3966,7 +4076,7 @@ function CopyInviteButton({
   return (
     <Button
       type="button"
-      size={iconOnly ? "icon-sm" : "sm"}
+      size={iconOnly ? "icon-lg" : "sm"}
       aria-label={
         iconOnly
           ? copied
@@ -3981,19 +4091,30 @@ function CopyInviteButton({
       aria-live="polite"
       onClick={handleCopy}
       className={
-        "relative z-50 bg-white text-neutral-950 transition-[background-color,color,scale,transform] hover:bg-white/85 active:scale-[0.96] " +
-        (copyFailed ? "bg-red-100 text-red-950 hover:bg-red-100" : "")
+        "relative z-50 transition-[background-color,color,border-color,scale,transform] active:scale-[0.96] " +
+        (iconOnly
+          ? "rounded-full border border-white/10 bg-white/[0.045] text-white/74 hover:border-white/18 hover:bg-white/[0.075] hover:text-white/88 "
+          : "bg-white text-neutral-950 hover:bg-white/85 ") +
+        (copyFailed
+          ? iconOnly
+            ? "!border-red-300/40 !bg-red-500/12 !text-red-100"
+            : "bg-red-100 text-red-950 hover:bg-red-100"
+          : "")
       }
     >
       <span
         data-icon={iconOnly ? undefined : "inline-start"}
-        className="relative inline-block size-3.5 shrink-0"
+        className={
+          "relative inline-block shrink-0 " + (iconOnly ? "size-4" : "size-3.5")
+        }
         aria-hidden="true"
       >
-        <Clipboard className={`${layer} size-3.5 ${copied ? hidden : shown}`} />
+        <Clipboard
+          className={`${layer} ${iconOnly ? "size-4" : "size-3.5"} ${copied ? hidden : shown}`}
+        />
         <Check
           strokeWidth={2.75}
-          className={`${layer} size-3.5 text-emerald-600 ${copied ? shown : hidden}`}
+          className={`${layer} ${iconOnly ? "size-4" : "size-3.5"} text-emerald-600 ${copied ? shown : hidden}`}
         />
       </span>
       {!iconOnly && <span>{copyFailed ? "Try again" : "Copy invite"}</span>}
@@ -4155,7 +4276,29 @@ function useMediaQuery(query: string) {
   return matches
 }
 
-function StatusDot({ connected }: { connected: boolean }) {
+function StatusDot({
+  connected,
+  compact = false,
+}: {
+  connected: boolean
+  compact?: boolean
+}) {
+  if (compact) {
+    return (
+      <div
+        className="grid size-9 shrink-0 place-items-center rounded-full border border-white/10 bg-white/[0.045]"
+        title={connected ? "Connected" : "Offline"}
+        aria-label={connected ? "Connected" : "Offline"}
+      >
+        <Circle
+          className={
+            "size-2.5 fill-current " +
+            (connected ? "text-emerald-400" : "text-white/25")
+          }
+        />
+      </div>
+    )
+  }
   return (
     <div className="flex h-8 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-2.5 text-xs text-white/60 sm:px-3">
       <Circle
@@ -4845,17 +4988,44 @@ function DimmedDiscardSlot({ size }: { size: ResponsiveCardSize }) {
   )
 }
 
-function SoundToggle() {
+function SoundToggle({ compact = false }: { compact?: boolean }) {
   const { enabled, setEnabled } = useSoundSystem()
+  const haptic = useWebHaptics()
+
+  const handleClick = () => {
+    const next = !enabled
+    setEnabled(next)
+    haptic.trigger("light")
+    if (next) playFx("buttonSoft", { volume: 0.5 })
+  }
+
+  if (compact) {
+    return (
+      <button
+        type="button"
+        onClick={handleClick}
+        aria-label={enabled ? "Mute sound effects" : "Unmute sound effects"}
+        title={enabled ? "Mute sound effects" : "Unmute sound effects"}
+        className={
+          "inline-flex size-9 shrink-0 items-center justify-center rounded-full border transition-[background-color,border-color,color,scale] active:scale-[0.96] " +
+          (enabled
+            ? "border-white/10 bg-white/[0.045] text-white/74 hover:border-white/18 hover:bg-white/[0.075] hover:text-white/88"
+            : "border-white/10 bg-black/30 text-white/45 hover:text-white/65")
+        }
+      >
+        {enabled ? (
+          <Volume2 className="size-4" strokeWidth={1.9} />
+        ) : (
+          <VolumeX className="size-4" strokeWidth={1.9} />
+        )}
+      </button>
+    )
+  }
 
   return (
     <button
       type="button"
-      onClick={() => {
-        const next = !enabled
-        setEnabled(next)
-        if (next) playFx("buttonSoft", { volume: 0.5 })
-      }}
+      onClick={handleClick}
       aria-label={enabled ? "Mute sound effects" : "Unmute sound effects"}
       title={enabled ? "Mute sound effects" : "Unmute sound effects"}
       className={
