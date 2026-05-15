@@ -26,6 +26,8 @@
       "@/*": ["./src/*"],
       "@workspace/game": ["../../packages/game/src/index.ts"],
       "@workspace/game/*": ["../../packages/game/src/*"],
+      "@workspace/uno-card-tokens": ["../../packages/uno-card-tokens/src/index.ts"],
+      "@workspace/uno-card-tokens/*": ["../../packages/uno-card-tokens/src/*"],
       "@workspace/ui/*": ["../../packages/ui/src/*"]
     }
   }

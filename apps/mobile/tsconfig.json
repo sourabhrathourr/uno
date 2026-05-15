@@ -2,12 +2,28 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
+    "types": [
+      "react",
+      "react-native"
+    ],
     "paths": {
       "@/*": [
         "./src/*"
       ],
       "@/assets/*": [
         "./assets/*"
+      ],
+      "@workspace/game": [
+        "../../packages/game/src/index.ts"
+      ],
+      "@workspace/game/*": [
+        "../../packages/game/src/*"
+      ],
+      "@workspace/uno-card-tokens": [
+        "../../packages/uno-card-tokens/src/index.ts"
+      ],
+      "@workspace/uno-card-tokens/*": [
+        "../../packages/uno-card-tokens/src/*"
       ]
     }
   },

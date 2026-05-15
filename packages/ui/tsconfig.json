@@ -8,10 +8,13 @@
     "skipLibCheck": true,
     "strict": true,
     "noEmit": true,
+    "types": ["node", "react", "react-dom"],
     "baseUrl": ".",
     "paths": {
       "@workspace/game": ["../game/src/index.ts"],
       "@workspace/game/*": ["../game/src/*"],
+      "@workspace/uno-card-tokens": ["../uno-card-tokens/src/index.ts"],
+      "@workspace/uno-card-tokens/*": ["../uno-card-tokens/src/*"],
       "@workspace/ui/*": ["./src/*"]
     }
   },

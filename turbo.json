@@ -4,7 +4,7 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "env": ["VITE_SOCKET_URL"],
+      "env": ["VITE_SOCKET_URL", "EXPO_PUBLIC_SOCKET_URL"],
       "inputs": ["$TURBO_DEFAULT$", ".env*"],
       "outputs": [".output/**"]
     },

@@ -70,7 +70,7 @@ export class RoomManager {
     const host = createPlayer({
       name: playerName,
       seat: 1,
-      connected: true,
+      connected: false,
       now,
     })
 
