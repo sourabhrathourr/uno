@@ -12,12 +12,12 @@ import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
   ArrowLeft,
+  LogOut,
   Mic,
   Play,
   Plus,
   RotateCcw,
   RotateCw,
-  Share2,
   SkipForward,
   User,
   Volume2,
@@ -455,7 +455,12 @@ export default function RoomScreen() {
   }, [isMyTurn]);
 
   function emitRoomCommand(
-    event: 'room:setReady' | 'room:start' | 'game:drawOne' | 'game:endTurn',
+    event:
+      | 'room:setReady'
+      | 'room:start'
+      | 'game:drawOne'
+      | 'game:endTurn'
+      | 'game:takeDrawPenalty',
     payload?: { ready: boolean },
   ) {
     if (!socket) return;
@@ -627,7 +632,6 @@ export default function RoomScreen() {
         room={room}
         player={player}
         playerGame={playerGame}
-        connected={connected}
         soundEnabled={sound.enabled}
         onToggleSound={() => {
           const next = !sound.enabled;
@@ -636,7 +640,6 @@ export default function RoomScreen() {
           void impact('light');
         }}
         onBack={() => router.back()}
-        onShareInvite={shareInvite}
         stagedCards={stagedCards}
         stagedCardIds={stagedCardIds}
         canSubmitStagedCards={canSubmitStagedCards}
@@ -656,6 +659,11 @@ export default function RoomScreen() {
           void impact('light');
           playCardSound('draw');
           emitRoomCommand('game:drawOne');
+        }}
+        onTakePenalty={() => {
+          void impact('medium');
+          playCardSound('draw');
+          emitRoomCommand('game:takeDrawPenalty');
         }}
         onEndTurn={() => {
           void impact('light');
@@ -932,11 +940,9 @@ function GamePlayScreen({
   room,
   player,
   playerGame,
-  connected,
   soundEnabled,
   onToggleSound,
   onBack,
-  onShareInvite,
   stagedCards,
   stagedCardIds,
   canSubmitStagedCards,
@@ -945,6 +951,7 @@ function GamePlayScreen({
   onClearStage,
   onPlay,
   onDraw,
+  onTakePenalty,
   onEndTurn,
   chosenColor,
   setChosenColor,
@@ -954,11 +961,9 @@ function GamePlayScreen({
   room: RoomSnapshot;
   player: Player;
   playerGame: PlayerGameSnapshot | null;
-  connected: boolean;
   soundEnabled: boolean;
   onToggleSound: () => void;
   onBack: () => void;
-  onShareInvite: () => void;
   stagedCards: Card[];
   stagedCardIds: string[];
   canSubmitStagedCards: boolean;
@@ -967,6 +972,7 @@ function GamePlayScreen({
   onClearStage: () => void;
   onPlay: () => void;
   onDraw: () => void;
+  onTakePenalty: () => void;
   onEndTurn: () => void;
   chosenColor: PlayColor;
   setChosenColor: (color: PlayColor) => void;
@@ -983,9 +989,6 @@ function GamePlayScreen({
     game?.stagedPlay && game.stagedPlay.playerId !== player.id
       ? game.stagedPlay.cards
       : stagedCards;
-  const visibleStagingPlayer = room.players.find(
-    (candidate) => candidate.id === game?.stagedPlay?.playerId,
-  );
   const canEditStaging =
     isMyTurn && (!game?.stagedPlay || game.stagedPlay.playerId === player.id);
 
@@ -994,11 +997,9 @@ function GamePlayScreen({
       <SafeAreaView style={styles.gameSafe}>
         <View style={styles.gameFrame}>
           <TableControls
-            connected={connected}
             soundEnabled={soundEnabled}
-            onBack={onBack}
             onToggleSound={onToggleSound}
-            onShareInvite={onShareInvite}
+            onBack={onBack}
           />
 
           <View style={[styles.feltTable, compact && styles.feltTableCompact]}>
@@ -1051,11 +1052,6 @@ function GamePlayScreen({
 
           <StagingTray
             cards={visibleStagedCards}
-            playerName={
-              visibleStagedCards.length
-                ? (visibleStagingPlayer?.name ?? player.name)
-                : null
-            }
             canEdit={canEditStaging}
             compact={compact}
             onCardPress={onToggleStage}
@@ -1087,16 +1083,6 @@ function GamePlayScreen({
           ) : null}
 
           <View style={[styles.handDock, compact && styles.handDockCompact]}>
-            <View style={styles.handHeader}>
-              <Text style={styles.handLabel}>
-                {stagedCards.length
-                  ? `${stagedCards.length} staged`
-                  : 'Your hand'}
-              </Text>
-              <Text style={styles.handHint}>
-                {isMyTurn ? 'Tap or drag up' : 'Waiting'}
-              </Text>
-            </View>
             <ScrollView
               horizontal
               style={styles.handScrollView}
@@ -1104,19 +1090,19 @@ function GamePlayScreen({
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.handScroll}
             >
-              {(playerGame?.hand ?? []).map((card) => {
-                const staged = stagedCardIds.includes(card.id);
-                const stageable = canStageCard(card);
-                return (
-                  <DraggableHandCard
-                    key={card.id}
-                    card={card}
-                    staged={staged}
-                    disabled={!isMyTurn || (!stageable && !staged)}
-                    onToggle={onToggleStage}
-                  />
-                );
-              })}
+              {(playerGame?.hand ?? [])
+                .filter((card) => !stagedCardIds.includes(card.id))
+                .map((card) => {
+                  const stageable = canStageCard(card);
+                  return (
+                    <DraggableHandCard
+                      key={card.id}
+                      card={card}
+                      disabled={!isMyTurn || !stageable}
+                      onToggle={onToggleStage}
+                    />
+                  );
+                })}
             </ScrollView>
           </View>
 
@@ -1124,8 +1110,10 @@ function GamePlayScreen({
             stagedCount={stagedCards.length}
             canPlay={canSubmitStagedCards}
             playerGame={playerGame}
+            drawStack={room.game?.drawStack ?? null}
             onPlay={onPlay}
             onDraw={onDraw}
+            onTakePenalty={onTakePenalty}
             onEndTurn={onEndTurn}
           />
         </View>
@@ -1186,17 +1174,13 @@ function ColorPill({ color }: { color: PlayColor }) {
 }
 
 function TableControls({
-  connected,
   soundEnabled,
   onBack,
   onToggleSound,
-  onShareInvite,
 }: {
-  connected: boolean;
   soundEnabled: boolean;
   onBack: () => void;
   onToggleSound: () => void;
-  onShareInvite: () => void;
 }) {
   return (
     <View style={styles.gameChrome}>
@@ -1204,20 +1188,12 @@ function TableControls({
         onPress={onBack}
         style={styles.chromeIconButton}
         accessibilityRole="button"
-        accessibilityLabel="Leave table"
+        accessibilityLabel="Back"
       >
         <ArrowLeft color="#fff8ea" size={18} strokeWidth={2.4} />
       </Pressable>
 
       <View style={styles.chromeControls}>
-        <View style={styles.chromeStatus}>
-          <View
-            style={[
-              styles.chromeStatusDot,
-              connected && styles.chromeStatusDotLive,
-            ]}
-          />
-        </View>
         <Pressable
           style={styles.chromeIconButton}
           accessibilityRole="button"
@@ -1232,7 +1208,9 @@ function TableControls({
             soundEnabled && styles.chromeButtonActive,
           ]}
           accessibilityRole="button"
-          accessibilityLabel={soundEnabled ? 'Mute sound effects' : 'Enable sound effects'}
+          accessibilityLabel={
+            soundEnabled ? 'Mute sound effects' : 'Enable sound effects'
+          }
         >
           {soundEnabled ? (
             <Volume2 color="#fff8ea" size={16} strokeWidth={2.4} />
@@ -1241,12 +1219,12 @@ function TableControls({
           )}
         </Pressable>
         <Pressable
-          onPress={onShareInvite}
+          onPress={onBack}
           style={styles.chromeIconButton}
           accessibilityRole="button"
-          accessibilityLabel="Share invite"
+          accessibilityLabel="Leave game"
         >
-          <Share2 color="#fff8ea" size={16} strokeWidth={2.4} />
+          <LogOut color="#fff8ea" size={16} strokeWidth={2.4} />
         </Pressable>
       </View>
     </View>
@@ -1382,50 +1360,29 @@ function SeatRing({
 
 function StagingTray({
   cards,
-  playerName,
   canEdit,
   compact,
   onCardPress,
   onClear,
 }: {
   cards: Card[];
-  playerName: string | null;
   canEdit: boolean;
   compact: boolean;
   onCardPress: (card: Card) => void;
   onClear: () => void;
 }) {
   const visibleCards = cards.slice(0, compact ? 4 : 5);
-
   const isEmpty = cards.length === 0;
+  const showClear = !isEmpty && canEdit;
 
   return (
-    <View
-      style={[
-        styles.stagingTray,
-        cards.length > 0 && styles.stagingTrayActive,
-      ]}
-    >
-      {!isEmpty ? (
-        <View style={styles.stagingHeader}>
-          <Text style={styles.stagingTitle} numberOfLines={1}>
-            {`${playerName ?? 'Player'} staged ${cards.length} card${cards.length === 1 ? '' : 's'}`}
-          </Text>
-          {canEdit ? (
-            <Pressable
-              onPress={onClear}
-              hitSlop={6}
-              style={styles.stagingClear}
-              accessibilityRole="button"
-              accessibilityLabel="Clear staged cards"
-            >
-              <X color="#fff8ea" size={12} strokeWidth={2.6} />
-            </Pressable>
-          ) : null}
-        </View>
-      ) : null}
-
-      <View style={styles.stagingDropArea}>
+    <View style={styles.stagingTray}>
+      <View
+        style={[
+          styles.stagingDropArea,
+          !isEmpty && styles.stagingDropAreaActive,
+        ]}
+      >
         {isEmpty ? (
           <Text style={styles.stagingPlaceholder}>
             Drag and drop cards here
@@ -1463,6 +1420,17 @@ function StagingTray({
             </Text>
           </View>
         ) : null}
+        {showClear ? (
+          <Pressable
+            onPress={onClear}
+            hitSlop={8}
+            style={styles.stagingClear}
+            accessibilityRole="button"
+            accessibilityLabel="Clear staged cards"
+          >
+            <X color="#fff8ea" size={12} strokeWidth={2.6} />
+          </Pressable>
+        ) : null}
       </View>
     </View>
   );
@@ -1470,12 +1438,10 @@ function StagingTray({
 
 function DraggableHandCard({
   card,
-  staged,
   disabled,
   onToggle,
 }: {
   card: Card;
-  staged: boolean;
   disabled: boolean;
   onToggle: (card: Card) => void;
 }) {
@@ -1514,7 +1480,7 @@ function DraggableHandCard({
       { translateY: translateY.value },
       { scale: scale.value },
     ],
-    zIndex: translateY.value !== 0 ? 30 : staged ? 8 : 1,
+    zIndex: translateY.value !== 0 ? 30 : 1,
   }));
 
   return (
@@ -1523,7 +1489,6 @@ function DraggableHandCard({
         <UnoCardMobile
           card={card}
           size="sm"
-          raised={staged}
           disabled={disabled}
           noHaptics
           onPress={() => onToggle(card)}
@@ -1543,40 +1508,63 @@ function ActionBar({
   stagedCount,
   canPlay,
   playerGame,
+  drawStack,
   onPlay,
   onDraw,
+  onTakePenalty,
   onEndTurn,
 }: {
   stagedCount: number;
   canPlay: boolean;
   playerGame: PlayerGameSnapshot | null;
+  drawStack: DrawStackSnapshot;
   onPlay: () => void;
   onDraw: () => void;
+  onTakePenalty: () => void;
   onEndTurn: () => void;
 }) {
   const hasStagedCards = stagedCount > 0;
   const canPass = !hasStagedCards && Boolean(playerGame?.canEndTurn);
-  const primaryLabel = hasStagedCards
-    ? `Play ${stagedCount}`
-    : canPass
-      ? 'Pass'
-      : 'Play';
+  const isPenaltyTarget =
+    Boolean(playerGame?.canTakeDrawPenalty) &&
+    drawStack?.targetPlayerId === playerGame?.playerId;
+  const primaryLabel = hasStagedCards ? `Play ${stagedCount}` : 'End turn';
   const primaryEnabled = hasStagedCards ? canPlay : canPass;
-  const PrimaryIcon = canPass && !hasStagedCards ? SkipForward : Play;
+  const PrimaryIcon = hasStagedCards ? Play : SkipForward;
+
+  const drawLabel = isPenaltyTarget
+    ? `Take +${drawStack?.amount ?? 0}`
+    : 'Draw';
+  const drawEnabled = isPenaltyTarget
+    ? !hasStagedCards
+    : Boolean(playerGame?.canDraw) && !hasStagedCards;
+  const drawHandler = isPenaltyTarget ? onTakePenalty : onDraw;
 
   return (
     <View style={styles.actionBar}>
       <Pressable
-        onPress={onDraw}
-        disabled={!playerGame?.canDraw || hasStagedCards}
+        onPress={drawHandler}
+        disabled={!drawEnabled}
         style={({ pressed }) => [
           styles.actionButton,
-          (!playerGame?.canDraw || hasStagedCards) && styles.disabled,
+          isPenaltyTarget && styles.actionButtonPenalty,
+          !drawEnabled && styles.disabled,
           pressed && styles.pressed,
         ]}
       >
-        <Plus color="#fff8ea" size={17} strokeWidth={2.6} />
-        <Text style={styles.actionButtonText}>Draw</Text>
+        <Plus
+          color={isPenaltyTarget ? '#ffd7d7' : '#fff8ea'}
+          size={17}
+          strokeWidth={2.6}
+        />
+        <Text
+          style={[
+            styles.actionButtonText,
+            isPenaltyTarget && styles.actionButtonPenaltyText,
+          ]}
+        >
+          {drawLabel}
+        </Text>
       </Pressable>
       <Pressable
         onPress={hasStagedCards ? onPlay : onEndTurn}
@@ -1808,22 +1796,6 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: Spacing.one,
   },
-  chromeBackButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.07)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-  },
-  chromeBackLabel: {
-    color: '#fffdf4',
-    fontSize: 30,
-    lineHeight: 32,
-    fontWeight: '300',
-  },
   chromeControls: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1839,44 +1811,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(255,255,255,0.08)',
   },
-  chromeStatus: {
-    width: 34,
-    height: 34,
-    borderRadius: 17,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-  },
-  chromeStatusDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 3.5,
-    backgroundColor: '#f65f5f',
-  },
-  chromeStatusDotLive: {
-    backgroundColor: '#42d782',
-  },
-  chromeButton: {
-    minWidth: 46,
-    height: 34,
-    borderRadius: 17,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 10,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
-  },
   chromeButtonActive: {
     backgroundColor: 'rgba(255,243,163,0.14)',
     borderColor: 'rgba(255,243,163,0.22)',
-  },
-  chromeButtonText: {
-    color: '#fffdf4',
-    fontSize: 11,
-    fontWeight: '600',
   },
   feltTable: {
     flex: 1,
@@ -2110,36 +2047,9 @@ const styles = StyleSheet.create({
     color: '#fff3a3',
   },
   stagingTray: {
-    borderRadius: 16,
     padding: 6,
-    gap: 4,
     backgroundColor: 'transparent',
     zIndex: 5,
-  },
-  stagingTrayActive: {
-    backgroundColor: 'rgba(255,243,163,0.05)',
-  },
-  stagingHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: 8,
-    minHeight: 16,
-    paddingHorizontal: 4,
-  },
-  stagingTitle: {
-    flex: 1,
-    color: 'rgba(255,253,244,0.7)',
-    fontSize: 11,
-    fontWeight: '500',
-  },
-  stagingClear: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.32)',
   },
   stagingDropArea: {
     position: 'relative',
@@ -2152,6 +2062,22 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.1)',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  stagingDropAreaActive: {
+    backgroundColor: 'rgba(255,243,163,0.06)',
+    borderColor: 'rgba(255,243,163,0.22)',
+  },
+  stagingClear: {
+    position: 'absolute',
+    top: 6,
+    right: 6,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    zIndex: 20,
   },
   stagingPlaceholder: {
     color: 'rgba(255,255,255,0.32)',
@@ -2586,38 +2512,13 @@ const styles = StyleSheet.create({
     borderColor: '#ffffff',
   },
   handDock: {
-    gap: Spacing.one,
-    minHeight: 128,
-    borderRadius: 22,
-    paddingTop: 10,
+    minHeight: 116,
     paddingLeft: 10,
-    backgroundColor: 'rgba(255,255,255,0.035)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.06)',
     overflow: 'visible',
     zIndex: 20,
   },
   handDockCompact: {
-    minHeight: 116,
-    paddingTop: 8,
-  },
-  handHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingRight: Spacing.two,
-  },
-  handLabel: {
-    color: 'rgba(255,255,255,0.62)',
-    fontSize: 11,
-    fontWeight: '600',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-  },
-  handHint: {
-    color: 'rgba(255,255,255,0.38)',
-    fontSize: 11,
-    fontWeight: '500',
+    minHeight: 104,
   },
   handScrollView: {
     overflow: 'visible',
@@ -2653,10 +2554,19 @@ const styles = StyleSheet.create({
     gap: 7,
     backgroundColor: 'rgba(255,255,255,0.1)',
   },
+  actionButtonPenalty: {
+    backgroundColor: 'rgba(255,90,90,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,90,90,0.32)',
+  },
   actionButtonText: {
     color: '#ffffff',
     fontSize: 14,
     fontWeight: '600',
+  },
+  actionButtonPenaltyText: {
+    color: '#ffd7d7',
+    fontWeight: '700',
   },
   actionButtonPrimary: {
     flex: 1.2,
