@@ -143,6 +143,28 @@ export default function RoomScreen() {
     (!needsColor || Boolean(chosenColor));
   const inviteUrl = room ? getInviteUrl(room.code) : getInviteUrl(roomCode);
 
+  /** +2 / +4 stack — take full penalty in one tap (server draws all at once). */
+  const drawPenaltyTakeAmount = useMemo(() => {
+    const g = room?.game;
+    const ds = g?.drawStack;
+    const pid = player?.id;
+    if (!g || !ds || !pid) return null;
+    if (g.pendingChoice || g.winnerPlayerId) return null;
+    if (g.turnPlayerId !== pid || ds.targetPlayerId !== pid) return null;
+    return ds.amount > 0 ? ds.amount : null;
+  }, [room?.game, player?.id]);
+
+  /** Wild “draw until color” — one reveal per tap via game:drawRouletteCard. */
+  const roulettePickupColor = useMemo(() => {
+    const g = room?.game;
+    const pc = g?.pendingChoice;
+    const pid = player?.id;
+    if (!g || !pc || pc.type !== 'roulette-draw' || !pid) return null;
+    if (g.winnerPlayerId) return null;
+    if (pc.playerId !== pid || g.turnPlayerId !== pid) return null;
+    return pc.color;
+  }, [room?.game, player?.id]);
+
   const joinRoom = useCallback(
     async (nameOverride?: string) => {
       if (!isRoomCode(roomCode)) {
@@ -460,7 +482,8 @@ export default function RoomScreen() {
       | 'room:start'
       | 'game:drawOne'
       | 'game:endTurn'
-      | 'game:takeDrawPenalty',
+      | 'game:takeDrawPenalty'
+      | 'game:drawRouletteCard',
     payload?: { ready: boolean },
   ) {
     if (!socket) return;
@@ -660,10 +683,17 @@ export default function RoomScreen() {
           playCardSound('draw');
           emitRoomCommand('game:drawOne');
         }}
-        onTakePenalty={() => {
+        drawPenaltyTakeAmount={drawPenaltyTakeAmount}
+        roulettePickupColor={roulettePickupColor}
+        onTakeDrawPenalty={() => {
           void impact('medium');
           playCardSound('draw');
           emitRoomCommand('game:takeDrawPenalty');
+        }}
+        onRoulettePickup={() => {
+          void impact('light');
+          playCardSound('draw');
+          emitRoomCommand('game:drawRouletteCard');
         }}
         onEndTurn={() => {
           void impact('light');
@@ -951,7 +981,10 @@ function GamePlayScreen({
   onClearStage,
   onPlay,
   onDraw,
-  onTakePenalty,
+  drawPenaltyTakeAmount,
+  roulettePickupColor,
+  onTakeDrawPenalty,
+  onRoulettePickup,
   onEndTurn,
   chosenColor,
   setChosenColor,
@@ -972,7 +1005,10 @@ function GamePlayScreen({
   onClearStage: () => void;
   onPlay: () => void;
   onDraw: () => void;
-  onTakePenalty: () => void;
+  drawPenaltyTakeAmount: number | null;
+  roulettePickupColor: PlayColor | null;
+  onTakeDrawPenalty: () => void;
+  onRoulettePickup: () => void;
   onEndTurn: () => void;
   chosenColor: PlayColor;
   setChosenColor: (color: PlayColor) => void;
@@ -985,12 +1021,22 @@ function GamePlayScreen({
   );
   const isMyTurn = game?.turnPlayerId === player.id;
   const needsColor = stagedCards.some((card) => card.color === 'wild');
-  const visibleStagedCards =
-    game?.stagedPlay && game.stagedPlay.playerId !== player.id
-      ? game.stagedPlay.cards
-      : stagedCards;
+  /** Match web: local selection wins when present; else server stagedPlay (play + roulette pickup projections). */
+  const localStagedPlayActive = isMyTurn && stagedCards.length > 0;
+  const visibleStagedCards = localStagedPlayActive
+    ? stagedCards
+    : (game?.stagedPlay?.cards ?? []);
   const canEditStaging =
-    isMyTurn && (!game?.stagedPlay || game.stagedPlay.playerId === player.id);
+    isMyTurn &&
+    game?.pendingChoice?.type !== 'roulette-draw' &&
+    (!game?.stagedPlay || game.stagedPlay.playerId === player.id);
+
+  const rouletteActive = Boolean(roulettePickupColor);
+
+  const deckDisabled =
+    rouletteActive ? false : !playerGame?.canDraw;
+
+  const deckPressHandler = rouletteActive ? onRoulettePickup : onDraw;
 
   return (
     <View style={styles.gameRoot}>
@@ -1034,8 +1080,8 @@ function GamePlayScreen({
 
             <View style={styles.tableCore}>
               <Pressable
-                onPress={onDraw}
-                disabled={!playerGame?.canDraw}
+                onPress={deckPressHandler}
+                disabled={deckDisabled}
                 style={({ pressed }) => [
                   styles.deckColumn,
                   pressed && styles.pressed,
@@ -1110,10 +1156,12 @@ function GamePlayScreen({
             stagedCount={stagedCards.length}
             canPlay={canSubmitStagedCards}
             playerGame={playerGame}
-            drawStack={room.game?.drawStack ?? null}
+            drawPenaltyTakeAmount={drawPenaltyTakeAmount}
+            roulettePickupColor={roulettePickupColor}
             onPlay={onPlay}
             onDraw={onDraw}
-            onTakePenalty={onTakePenalty}
+            onTakeDrawPenalty={onTakeDrawPenalty}
+            onRoulettePickup={onRoulettePickup}
             onEndTurn={onEndTurn}
           />
         </View>
@@ -1508,37 +1556,54 @@ function ActionBar({
   stagedCount,
   canPlay,
   playerGame,
-  drawStack,
+  drawPenaltyTakeAmount,
+  roulettePickupColor,
   onPlay,
   onDraw,
-  onTakePenalty,
+  onTakeDrawPenalty,
+  onRoulettePickup,
   onEndTurn,
 }: {
   stagedCount: number;
   canPlay: boolean;
   playerGame: PlayerGameSnapshot | null;
-  drawStack: DrawStackSnapshot;
+  drawPenaltyTakeAmount: number | null;
+  roulettePickupColor: PlayColor | null;
   onPlay: () => void;
   onDraw: () => void;
-  onTakePenalty: () => void;
+  onTakeDrawPenalty: () => void;
+  onRoulettePickup: () => void;
   onEndTurn: () => void;
 }) {
   const hasStagedCards = stagedCount > 0;
   const canPass = !hasStagedCards && Boolean(playerGame?.canEndTurn);
-  const isPenaltyTarget =
-    Boolean(playerGame?.canTakeDrawPenalty) &&
-    drawStack?.targetPlayerId === playerGame?.playerId;
   const primaryLabel = hasStagedCards ? `Play ${stagedCount}` : 'End turn';
   const primaryEnabled = hasStagedCards ? canPlay : canPass;
   const PrimaryIcon = hasStagedCards ? Play : SkipForward;
 
-  const drawLabel = isPenaltyTarget
-    ? `Take +${drawStack?.amount ?? 0}`
-    : 'Draw';
-  const drawEnabled = isPenaltyTarget
-    ? !hasStagedCards
-    : Boolean(playerGame?.canDraw) && !hasStagedCards;
-  const drawHandler = isPenaltyTarget ? onTakePenalty : onDraw;
+  const isRoulettePickup =
+    roulettePickupColor !== null && !hasStagedCards;
+  const isDrawPenaltyTake =
+    !isRoulettePickup &&
+    drawPenaltyTakeAmount !== null &&
+    drawPenaltyTakeAmount > 0 &&
+    !hasStagedCards;
+
+  const drawLabel = isRoulettePickup
+    ? 'Pickup'
+    : isDrawPenaltyTake
+      ? `Take +${drawPenaltyTakeAmount}`
+      : 'Draw';
+  const drawEnabled = isRoulettePickup
+    ? true
+    : isDrawPenaltyTake
+      ? true
+      : Boolean(playerGame?.canDraw) && !hasStagedCards;
+  const drawHandler = isRoulettePickup
+    ? onRoulettePickup
+    : isDrawPenaltyTake
+      ? onTakeDrawPenalty
+      : onDraw;
 
   return (
     <View style={styles.actionBar}>
@@ -1547,20 +1612,23 @@ function ActionBar({
         disabled={!drawEnabled}
         style={({ pressed }) => [
           styles.actionButton,
-          isPenaltyTarget && styles.actionButtonPenalty,
+          (isDrawPenaltyTake || isRoulettePickup) && styles.actionButtonPenalty,
           !drawEnabled && styles.disabled,
           pressed && styles.pressed,
         ]}
       >
         <Plus
-          color={isPenaltyTarget ? '#ffd7d7' : '#fff8ea'}
+          color={
+            isDrawPenaltyTake || isRoulettePickup ? '#ffd7d7' : '#fff8ea'
+          }
           size={17}
           strokeWidth={2.6}
         />
         <Text
           style={[
             styles.actionButtonText,
-            isPenaltyTarget && styles.actionButtonPenaltyText,
+            (isDrawPenaltyTake || isRoulettePickup) &&
+              styles.actionButtonPenaltyText,
           ]}
         >
           {drawLabel}
@@ -2537,11 +2605,8 @@ const styles = StyleSheet.create({
   actionBar: {
     flexDirection: 'row',
     gap: Spacing.two,
-    borderRadius: 24,
-    padding: 8,
-    backgroundColor: 'rgba(15,15,18,0.94)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
     zIndex: 10,
   },
   actionButton: {
