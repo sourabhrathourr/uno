@@ -15,6 +15,8 @@ import {
   Mic,
   Play,
   Plus,
+  RotateCcw,
+  RotateCw,
   Share2,
   SkipForward,
   User,
@@ -975,7 +977,6 @@ function GamePlayScreen({
   const activePlayer = room.players.find(
     (candidate) => candidate.id === game?.turnPlayerId,
   );
-  const latestEvent = game?.events.at(-1);
   const isMyTurn = game?.turnPlayerId === player.id;
   const needsColor = stagedCards.some((card) => card.color === 'wild');
   const visibleStagedCards =
@@ -1009,18 +1010,25 @@ function GamePlayScreen({
               compact={compact}
             />
 
-            <View style={styles.tableStatus}>
-              <View style={[styles.colorChip, colorChipStyle(game?.currentColor ?? 'red')]} />
-              <Text style={styles.tableStatusTitle} numberOfLines={1}>
-                {activePlayer
-                  ? isMyTurn
-                    ? 'Your turn'
-                    : `${activePlayer.name}'s turn`
-                  : 'Table settling'}
-              </Text>
-              {game?.drawStack ? (
-                <Text style={styles.stackText}>+{game.drawStack.amount}</Text>
-              ) : null}
+            <View style={styles.tableHeader} pointerEvents="box-none">
+              <View style={styles.tableHeaderLeft} pointerEvents="none">
+                <Text style={styles.tableTurnText} numberOfLines={1}>
+                  {activePlayer
+                    ? isMyTurn
+                      ? 'Your turn'
+                      : `${activePlayer.name}'s turn`
+                    : 'Table settling'}
+                </Text>
+                {game?.drawStack ? (
+                  <Text style={styles.tableStackBadge}>
+                    +{game.drawStack.amount}
+                  </Text>
+                ) : null}
+              </View>
+              <View style={styles.tableHeaderRight} pointerEvents="none">
+                <DirectionPill direction={game?.direction ?? 1} />
+                <ColorPill color={game?.currentColor ?? 'red'} />
+              </View>
             </View>
 
             <View style={styles.tableCore}>
@@ -1072,12 +1080,11 @@ function GamePlayScreen({
             </View>
           ) : null}
 
-          <Text
-            style={[styles.eventText, error && styles.eventError]}
-            numberOfLines={2}
-          >
-            {error ?? latestEvent?.message ?? ' '}
-          </Text>
+          {error ? (
+            <Text style={styles.errorBanner} numberOfLines={2}>
+              {error}
+            </Text>
+          ) : null}
 
           <View style={[styles.handDock, compact && styles.handDockCompact]}>
             <View style={styles.handHeader}>
@@ -1129,26 +1136,10 @@ function GamePlayScreen({
 
 function DeckPile({ drawPileCount }: { drawPileCount: number }) {
   return (
-    <View style={styles.pileStack}>
-      {[0, 1, 2, 3].map((layer) => (
-        <View
-          key={layer}
-          style={[
-            styles.deckLayer,
-            {
-              left: 12 - layer * 3,
-              right: layer * 3,
-              top: 12 - layer * 3,
-              bottom: layer * 3,
-              transform: [
-                { translateX: layer * 3 },
-                { translateY: layer * -3 },
-              ],
-            },
-          ]}
-        />
-      ))}
-      <View style={styles.pileCardFace}>
+    <View style={styles.deckStack}>
+      <View style={[styles.deckLayer, styles.deckLayerBack]} />
+      <View style={[styles.deckLayer, styles.deckLayerMid]} />
+      <View style={styles.deckCardFace}>
         <UnoCardMobile card={fallbackCard} size="sm" faceDown static noHaptics />
       </View>
       <Text style={styles.deckCount}>{drawPileCount}</Text>
@@ -1158,10 +1149,10 @@ function DeckPile({ drawPileCount }: { drawPileCount: number }) {
 
 function DiscardPile({ card }: { card: Card | null }) {
   return (
-    <View style={styles.pileStack}>
+    <View style={styles.discardStack}>
       <View style={[styles.discardLayer, styles.discardLayerBack]} />
       <View style={[styles.discardLayer, styles.discardLayerMid]} />
-      <View style={styles.pileCardFace}>
+      <View style={styles.discardCardFace}>
         <UnoCardMobile
           card={card ?? fallbackCard}
           size="sm"
@@ -1170,7 +1161,26 @@ function DiscardPile({ card }: { card: Card | null }) {
           faceDown={!card}
         />
       </View>
-      <Text style={styles.pileLabel}>Discard</Text>
+    </View>
+  );
+}
+
+function DirectionPill({ direction }: { direction: 1 | -1 }) {
+  const clockwise = direction === 1;
+  const Icon = clockwise ? RotateCw : RotateCcw;
+  return (
+    <View style={styles.statusPill}>
+      <Icon color="rgba(255,253,244,0.78)" size={11} strokeWidth={2.2} />
+      <Text style={styles.statusPillText}>{clockwise ? 'CW' : 'CCW'}</Text>
+    </View>
+  );
+}
+
+function ColorPill({ color }: { color: PlayColor }) {
+  return (
+    <View style={styles.statusPill}>
+      <View style={[styles.statusPillDot, colorChipStyle(color)]} />
+      <Text style={styles.statusPillText}>{color}</Text>
     </View>
   );
 }
@@ -1387,6 +1397,8 @@ function StagingTray({
 }) {
   const visibleCards = cards.slice(0, compact ? 4 : 5);
 
+  const isEmpty = cards.length === 0;
+
   return (
     <View
       style={[
@@ -1394,31 +1406,31 @@ function StagingTray({
         cards.length > 0 && styles.stagingTrayActive,
       ]}
     >
-      <View style={styles.stagingHeader}>
-        <View>
-          <Text style={styles.stagingTitle}>
-            {cards.length ? `${playerName ?? 'Player'} staging` : 'Staging area'}
+      {!isEmpty ? (
+        <View style={styles.stagingHeader}>
+          <Text style={styles.stagingTitle} numberOfLines={1}>
+            {`${playerName ?? 'Player'} staged ${cards.length} card${cards.length === 1 ? '' : 's'}`}
           </Text>
-          <Text style={styles.stagingMeta}>
-            {cards.length
-              ? `${cards.length} ready to play`
-              : 'Tap cards or drag them here'}
-          </Text>
+          {canEdit ? (
+            <Pressable
+              onPress={onClear}
+              hitSlop={6}
+              style={styles.stagingClear}
+              accessibilityRole="button"
+              accessibilityLabel="Clear staged cards"
+            >
+              <X color="#fff8ea" size={12} strokeWidth={2.6} />
+            </Pressable>
+          ) : null}
         </View>
-        {cards.length > 0 && canEdit ? (
-          <Pressable
-            onPress={onClear}
-            style={styles.stagingClear}
-            accessibilityRole="button"
-            accessibilityLabel="Clear staged cards"
-          >
-            <X color="#fff8ea" size={13} strokeWidth={2.6} />
-          </Pressable>
-        ) : null}
-      </View>
+      ) : null}
 
-      <View style={styles.stagingCards}>
-        {visibleCards.length > 0 ? (
+      <View style={styles.stagingDropArea}>
+        {isEmpty ? (
+          <Text style={styles.stagingPlaceholder}>
+            Drag and drop cards here
+          </Text>
+        ) : (
           visibleCards.map((card, index) => (
             <Pressable
               key={card.id}
@@ -1426,20 +1438,23 @@ function StagingTray({
               disabled={!canEdit}
               style={[
                 styles.stagedCardWrap,
-                { left: index * (compact ? 28 : 34), zIndex: index },
+                {
+                  left: 8 + index * (compact ? 20 : 24),
+                  zIndex: index,
+                },
               ]}
             >
-              <UnoCardMobile
-                card={card}
-                size="sm"
-                static
-                noHaptics
-                disabled={!canEdit}
-              />
+              <View style={styles.stagedCardScale}>
+                <UnoCardMobile
+                  card={card}
+                  size="sm"
+                  static
+                  noHaptics
+                  disabled={!canEdit}
+                />
+              </View>
             </Pressable>
           ))
-        ) : (
-          <Text style={styles.stagingEmpty}>Drop cards here</Text>
         )}
         {cards.length > visibleCards.length ? (
           <View style={styles.stagingOverflow}>
@@ -1861,12 +1876,11 @@ const styles = StyleSheet.create({
   chromeButtonText: {
     color: '#fffdf4',
     fontSize: 11,
-    fontWeight: '900',
+    fontWeight: '600',
   },
   feltTable: {
     flex: 1,
-    minHeight: 286,
-    maxHeight: 390,
+    minHeight: 340,
     overflow: 'hidden',
     borderRadius: 32,
     borderWidth: 1,
@@ -1880,7 +1894,7 @@ const styles = StyleSheet.create({
     zIndex: 1,
   },
   feltTableCompact: {
-    minHeight: 268,
+    minHeight: 320,
     borderRadius: 28,
     paddingHorizontal: Spacing.two,
     paddingVertical: Spacing.two,
@@ -1915,34 +1929,77 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.055)',
     transform: [{ rotate: '1.5deg' }],
   },
-  tableStatus: {
+  tableHeader: {
     position: 'absolute',
-    top: 74,
-    alignSelf: 'center',
+    top: 18,
+    left: 18,
+    right: 18,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.one,
-    maxWidth: '64%',
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    backgroundColor: '#2b160b',
-    borderWidth: 1,
-    borderColor: 'rgba(255,226,173,0.16)',
+    justifyContent: 'space-between',
+    gap: Spacing.two,
+    zIndex: 4,
   },
-  tableStatusTitle: {
+  tableHeaderLeft: {
     flexShrink: 1,
-    color: '#fffdf4',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  tableHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  tableTurnText: {
+    flexShrink: 1,
+    color: 'rgba(255,253,244,0.86)',
     fontSize: 12,
-    fontWeight: '900',
+    fontWeight: '500',
+    letterSpacing: 0.1,
+  },
+  tableStackBadge: {
+    overflow: 'hidden',
+    borderRadius: 999,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    backgroundColor: 'rgba(246,95,95,0.18)',
+    color: '#ffb1b1',
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: 'rgba(0,0,0,0.32)',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  statusPillText: {
+    color: 'rgba(255,253,244,0.78)',
+    fontSize: 10,
+    fontWeight: '500',
+    letterSpacing: 0.2,
+    textTransform: 'capitalize',
+  },
+  statusPillDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.22)',
   },
   tableCore: {
     alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: Spacing.two,
-    marginTop: Spacing.five,
+    gap: Spacing.three,
+    marginBottom: 6,
   },
   seat: {
     position: 'absolute',
@@ -1998,7 +2055,7 @@ const styles = StyleSheet.create({
     maxWidth: '100%',
     color: '#fffdf4',
     fontSize: 10,
-    fontWeight: '900',
+    fontWeight: '600',
     lineHeight: 12,
     textShadowColor: 'rgba(0,0,0,0.72)',
     textShadowOffset: { width: 0, height: 1 },
@@ -2043,7 +2100,7 @@ const styles = StyleSheet.create({
   seatCountText: {
     color: '#fffdf4',
     fontSize: 9,
-    fontWeight: '900',
+    fontWeight: '700',
     fontVariant: ['tabular-nums'],
   },
   seatCountTextDense: {
@@ -2053,86 +2110,71 @@ const styles = StyleSheet.create({
     color: '#fff3a3',
   },
   stagingTray: {
-    minHeight: 112,
-    borderRadius: 22,
-    padding: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.two,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 16,
+    padding: 6,
+    gap: 4,
+    backgroundColor: 'transparent',
     zIndex: 5,
   },
   stagingTrayActive: {
-    backgroundColor: 'rgba(255,243,163,0.09)',
-    borderColor: 'rgba(255,243,163,0.26)',
+    backgroundColor: 'rgba(255,243,163,0.05)',
   },
   stagingHeader: {
-    width: 112,
-    minHeight: 88,
+    flexDirection: 'row',
+    alignItems: 'center',
     justifyContent: 'space-between',
-    gap: Spacing.two,
+    gap: 8,
+    minHeight: 16,
+    paddingHorizontal: 4,
   },
   stagingTitle: {
-    color: '#fffdf4',
-    fontSize: 12,
-    fontWeight: '900',
-  },
-  stagingMeta: {
-    color: 'rgba(255,255,255,0.5)',
-    fontSize: 10,
-    fontWeight: '700',
-    lineHeight: 13,
-    marginTop: 2,
+    flex: 1,
+    color: 'rgba(255,253,244,0.7)',
+    fontSize: 11,
+    fontWeight: '500',
   },
   stagingClear: {
-    alignSelf: 'flex-start',
-    borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
     backgroundColor: 'rgba(0,0,0,0.32)',
   },
-  stagingClearText: {
-    color: '#fffdf4',
-    fontSize: 10,
-    fontWeight: '900',
-  },
-  stagingCards: {
-    flex: 1,
-    height: 104,
-    justifyContent: 'center',
+  stagingDropArea: {
+    position: 'relative',
+    height: 76,
     overflow: 'hidden',
-    borderRadius: 18,
-    backgroundColor: 'rgba(0,0,0,0.18)',
+    borderRadius: 12,
+    backgroundColor: 'rgba(0,0,0,0.22)',
     borderWidth: 1,
     borderStyle: 'dashed',
-    borderColor: 'rgba(255,255,255,0.12)',
+    borderColor: 'rgba(255,255,255,0.1)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stagingPlaceholder: {
+    color: 'rgba(255,255,255,0.32)',
+    fontSize: 11,
+    fontWeight: '500',
+    letterSpacing: 0.2,
   },
   stagedCardWrap: {
     position: 'absolute',
-    bottom: 1,
+    bottom: 4,
   },
-  stagingEmpty: {
-    alignSelf: 'center',
-    overflow: 'hidden',
-    borderRadius: 999,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    color: 'rgba(255,255,255,0.44)',
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    fontSize: 10,
-    fontWeight: '900',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
+  stagedCardScale: {
+    transform: [{ scale: 0.62 }],
+    transformOrigin: 'bottom left',
   },
   stagingOverflow: {
     position: 'absolute',
-    right: 8,
-    bottom: 35,
-    width: 34,
-    height: 34,
-    borderRadius: 17,
+    right: 6,
+    bottom: 6,
+    minWidth: 26,
+    height: 22,
+    paddingHorizontal: 6,
+    borderRadius: 11,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(0,0,0,0.58)',
@@ -2141,8 +2183,8 @@ const styles = StyleSheet.create({
   },
   stagingOverflowText: {
     color: '#fffdf4',
-    fontSize: 12,
-    fontWeight: '900',
+    fontSize: 11,
+    fontWeight: '600',
   },
   topBar: {
     flexDirection: 'row',
@@ -2434,81 +2476,77 @@ const styles = StyleSheet.create({
   deckColumn: {
     alignItems: 'center',
   },
-  pileStack: {
-    width: 94,
-    height: 124,
+  deckStack: {
+    width: 78,
+    height: 108,
     position: 'relative',
-    alignItems: 'center',
-    justifyContent: 'center',
+  },
+  discardStack: {
+    width: 78,
+    height: 108,
+    position: 'relative',
   },
   deckLayer: {
     position: 'absolute',
-    borderRadius: 12,
+    width: 72,
+    height: 102,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.45)',
-    backgroundColor: '#09090a',
+    borderColor: 'rgba(0,0,0,0.55)',
+    backgroundColor: '#0c0c10',
+  },
+  deckLayerBack: {
+    left: 6,
+    top: 0,
+  },
+  deckLayerMid: {
+    left: 3,
+    top: 3,
   },
   discardLayer: {
     position: 'absolute',
-    left: 11,
-    right: 9,
-    top: 10,
-    bottom: 12,
-    borderRadius: 12,
+    width: 72,
+    height: 102,
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: 'rgba(0,0,0,0.34)',
   },
   discardLayerBack: {
-    backgroundColor: 'rgba(0,0,0,0.28)',
-    transform: [{ translateX: 10 }, { translateY: 7 }],
+    left: 6,
+    top: 0,
+    backgroundColor: 'rgba(0,0,0,0.32)',
   },
   discardLayerMid: {
+    left: 3,
+    top: 3,
     backgroundColor: 'rgba(255,255,255,0.08)',
-    transform: [{ translateX: 5 }, { translateY: 3 }],
   },
-  pileCardFace: {
+  deckCardFace: {
     position: 'absolute',
-    left: 11,
-    top: 11,
+    left: 0,
+    top: 6,
+    zIndex: 10,
+  },
+  discardCardFace: {
+    position: 'absolute',
+    left: 0,
+    top: 6,
     zIndex: 10,
   },
   deckCount: {
     position: 'absolute',
     right: 8,
-    bottom: 5,
+    bottom: 4,
     zIndex: 20,
     overflow: 'hidden',
     borderRadius: 999,
-    paddingHorizontal: 7,
-    paddingVertical: 3,
-    backgroundColor: 'rgba(0,0,0,0.56)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    backgroundColor: 'rgba(0,0,0,0.62)',
     color: '#fff3a3',
-    fontSize: 12,
-    fontWeight: '900',
-  },
-  pileLabel: {
-    position: 'absolute',
-    bottom: 2,
-    zIndex: 20,
-    color: 'rgba(255,255,255,0.5)',
     fontSize: 10,
-    fontWeight: '800',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  turnPanel: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.two,
-    borderRadius: 16,
-    backgroundColor: 'rgba(255,255,255,0.06)',
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  colorChip: {
-    width: 16,
-    height: 16,
-    borderRadius: 8,
+    fontWeight: '600',
+    fontVariant: ['tabular-nums'],
   },
   redChip: {
     backgroundColor: '#ce2b26',
@@ -2522,26 +2560,12 @@ const styles = StyleSheet.create({
   blueChip: {
     backgroundColor: '#255fd7',
   },
-  turnText: {
-    flex: 1,
-    color: '#ffffff',
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  stackText: {
+  errorBanner: {
     color: '#ff9d9d',
-    fontSize: 13,
-    fontWeight: '900',
-  },
-  eventText: {
-    color: 'rgba(255,255,255,0.58)',
     fontSize: 12,
     lineHeight: 15,
-    minHeight: 30,
     textAlign: 'center',
-  },
-  eventError: {
-    color: '#ff9d9d',
+    paddingHorizontal: Spacing.three,
   },
   colorPicker: {
     flexDirection: 'row',
@@ -2586,14 +2610,14 @@ const styles = StyleSheet.create({
   handLabel: {
     color: 'rgba(255,255,255,0.62)',
     fontSize: 11,
-    fontWeight: '800',
+    fontWeight: '600',
     letterSpacing: 1,
     textTransform: 'uppercase',
   },
   handHint: {
     color: 'rgba(255,255,255,0.38)',
     fontSize: 11,
-    fontWeight: '800',
+    fontWeight: '500',
   },
   handScrollView: {
     overflow: 'visible',
@@ -2632,7 +2656,7 @@ const styles = StyleSheet.create({
   actionButtonText: {
     color: '#ffffff',
     fontSize: 14,
-    fontWeight: '800',
+    fontWeight: '600',
   },
   actionButtonPrimary: {
     flex: 1.2,
@@ -2647,7 +2671,7 @@ const styles = StyleSheet.create({
   actionButtonPrimaryText: {
     color: '#151006',
     fontSize: 14,
-    fontWeight: '900',
+    fontWeight: '700',
   },
   error: {
     color: '#ff9d9d',
