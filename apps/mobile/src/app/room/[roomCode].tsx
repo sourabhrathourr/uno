@@ -1021,10 +1021,27 @@ function GamePlayScreen({
   );
   const isMyTurn = game?.turnPlayerId === player.id;
   const needsColor = stagedCards.some((card) => card.color === 'wild');
+  const rouletteHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+  const [hiddenRouletteStagedKey, setHiddenRouletteStagedKey] = useState<
+    string | null
+  >(null);
   /** Match web: local selection wins when present; else server stagedPlay (play + roulette pickup projections). */
   const localStagedPlayActive = isMyTurn && stagedCards.length > 0;
+  const stagedPlayKey = game?.stagedPlay
+    ? `${game.stagedPlay.playerId}:${game.stagedPlay.cards
+        .map((card) => card.id)
+        .join('-')}`
+    : null;
+  const stagedPlayHidden =
+    Boolean(stagedPlayKey) &&
+    game?.stagedPlay?.kind === 'roulette' &&
+    hiddenRouletteStagedKey === stagedPlayKey;
   const visibleStagedCards = localStagedPlayActive
     ? stagedCards
+    : stagedPlayHidden
+      ? []
     : (game?.stagedPlay?.cards ?? []);
   const canEditStaging =
     isMyTurn &&
@@ -1037,6 +1054,43 @@ function GamePlayScreen({
     rouletteActive ? false : !playerGame?.canDraw;
 
   const deckPressHandler = rouletteActive ? onRoulettePickup : onDraw;
+
+  useEffect(() => {
+    if (rouletteHideTimerRef.current) {
+      clearTimeout(rouletteHideTimerRef.current);
+      rouletteHideTimerRef.current = null;
+    }
+
+    const stagedPlay = game?.stagedPlay;
+    const pendingChoice = game?.pendingChoice;
+    if (
+      !stagedPlayKey ||
+      !stagedPlay ||
+      stagedPlay.kind !== 'roulette' ||
+      pendingChoice?.type === 'roulette-draw'
+    ) {
+      if (pendingChoice?.type === 'roulette-draw') {
+        setHiddenRouletteStagedKey(null);
+      }
+      return;
+    }
+
+    rouletteHideTimerRef.current = setTimeout(() => {
+      setHiddenRouletteStagedKey(stagedPlayKey);
+      rouletteHideTimerRef.current = null;
+    }, 1100);
+
+    return () => {
+      if (rouletteHideTimerRef.current) {
+        clearTimeout(rouletteHideTimerRef.current);
+        rouletteHideTimerRef.current = null;
+      }
+    };
+  }, [
+    game?.pendingChoice,
+    game?.stagedPlay,
+    stagedPlayKey,
+  ]);
 
   return (
     <View style={styles.gameRoot}>
@@ -1455,7 +1509,6 @@ function StagingTray({
                   size="sm"
                   static
                   noHaptics
-                  disabled={!canEdit}
                 />
               </View>
             </Pressable>
