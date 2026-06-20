@@ -57,7 +57,13 @@
           }
         }
       ],
-      "expo-audio"
+      "expo-audio",
+      [
+        "@config-plugins/react-native-webrtc",
+        {
+          "microphonePermission": "Allow UNO to use your microphone for live table voice chat."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

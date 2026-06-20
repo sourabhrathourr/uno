@@ -3,8 +3,10 @@
 // Two things matter:
 //   1. `watchFolders` includes the workspace root so changes inside
 //      `packages/*` are picked up by Fast Refresh.
-//   2. `nodeModulesPaths` lists both the local and the hoisted node_modules
-//      so pnpm-symlinked workspace packages (`@workspace/*`) resolve.
+//   2. `nodeModulesPaths` lists both the local and workspace node_modules so
+//      pnpm-symlinked workspace packages (`@workspace/*`) resolve.
+//   3. Hierarchical lookup remains enabled so Metro can follow pnpm's nested
+//      package links for Expo/runtime transitive dependencies.
 const { getDefaultConfig } = require('expo/metro-config');
 const path = require('node:path');
 
@@ -18,6 +20,5 @@ config.resolver.nodeModulesPaths = [
   path.resolve(projectRoot, 'node_modules'),
   path.resolve(workspaceRoot, 'node_modules'),
 ];
-config.resolver.disableHierarchicalLookup = true;
 
 module.exports = config;

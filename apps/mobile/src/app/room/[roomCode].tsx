@@ -14,6 +14,7 @@ import {
   ArrowLeft,
   LogOut,
   Mic,
+  MicOff,
   Play,
   Plus,
   RotateCcw,
@@ -70,6 +71,10 @@ import {
   playWinnerSound,
   useSoundSystem,
 } from '@/lib/sound';
+import {
+  useRoomVoice,
+  type RoomVoiceController,
+} from '@/lib/use-room-voice';
 
 const colorOptions: PlayColor[] = ['red', 'yellow', 'green', 'blue'];
 
@@ -142,6 +147,13 @@ export default function RoomScreen() {
     !finishesWithForbiddenPower &&
     (!needsColor || Boolean(chosenColor));
   const inviteUrl = room ? getInviteUrl(room.code) : getInviteUrl(roomCode);
+  const voice = useRoomVoice({
+    socket,
+    roomCode,
+    selfPlayerId: player?.id ?? null,
+    players: room?.players ?? [],
+  });
+  const activeError = voice.error ?? error;
 
   /** +2 / +4 stack — take full penalty in one tap (server draws all at once). */
   const drawPenaltyTakeAmount = useMemo(() => {
@@ -663,6 +675,7 @@ export default function RoomScreen() {
           void impact('light');
         }}
         onBack={() => router.back()}
+        voice={voice}
         stagedCards={stagedCards}
         stagedCardIds={stagedCardIds}
         canSubmitStagedCards={canSubmitStagedCards}
@@ -707,7 +720,7 @@ export default function RoomScreen() {
           playFx('itemSelect', { volume: 0.4 });
         }}
         compact={height < 760 || width < 390}
-        error={error}
+        error={activeError}
       />
     );
   }
@@ -759,6 +772,7 @@ export default function RoomScreen() {
                 onStart={() => emitRoomCommand('room:start')}
                 onCopyInvite={() => void copyInvite()}
                 inviteCopied={inviteCopied}
+                voice={voice}
               />
             ) : (
               <View style={styles.panel}>
@@ -767,7 +781,9 @@ export default function RoomScreen() {
             )
           ) : null}
 
-          {error && player ? <Text style={styles.error}>{error}</Text> : null}
+          {activeError && player ? (
+            <Text style={styles.error}>{activeError}</Text>
+          ) : null}
         </ScrollView>
 
       </SafeAreaView>
@@ -861,6 +877,7 @@ function LobbyPanel({
   onStart,
   onCopyInvite,
   inviteCopied,
+  voice,
 }: {
   room: RoomSnapshot;
   player: Player | null;
@@ -869,6 +886,7 @@ function LobbyPanel({
   onStart: () => void;
   onCopyInvite: () => void;
   inviteCopied: boolean;
+  voice: RoomVoiceController;
 }) {
   const self = room.players.find((candidate) => candidate.id === player?.id);
   const nonHostPlayers = room.players.filter(
@@ -909,6 +927,7 @@ function LobbyPanel({
         {room.players.map((candidate) => {
           const candidateIsHost = candidate.id === room.hostPlayerId;
           const candidateReady = candidateIsHost || candidate.ready;
+          const voiceState = voice.voiceStates[candidate.id];
 
           return (
             <View key={candidate.id} style={styles.playerRow}>
@@ -922,6 +941,7 @@ function LobbyPanel({
                   {candidateIsHost ? ' · Host' : ''}
                 </Text>
               </View>
+              <VoiceStatusPill state={voiceState} />
               <Text style={[styles.readyText, candidateReady && styles.ready]}>
                 {candidateIsHost ? 'Host' : candidate.ready ? 'Ready' : 'Waiting'}
               </Text>
@@ -932,6 +952,7 @@ function LobbyPanel({
 
       {player ? (
         <View style={styles.lobbyActions}>
+          <LobbyVoiceButton voice={voice} />
           {!isHost ? (
             <Pressable
               onPress={onReady}
@@ -973,6 +994,7 @@ function GamePlayScreen({
   soundEnabled,
   onToggleSound,
   onBack,
+  voice,
   stagedCards,
   stagedCardIds,
   canSubmitStagedCards,
@@ -997,6 +1019,7 @@ function GamePlayScreen({
   soundEnabled: boolean;
   onToggleSound: () => void;
   onBack: () => void;
+  voice: RoomVoiceController;
   stagedCards: Card[];
   stagedCardIds: string[];
   canSubmitStagedCards: boolean;
@@ -1100,6 +1123,7 @@ function GamePlayScreen({
             soundEnabled={soundEnabled}
             onToggleSound={onToggleSound}
             onBack={onBack}
+            voice={voice}
           />
 
           <View style={[styles.feltTable, compact && styles.feltTableCompact]}>
@@ -1109,6 +1133,7 @@ function GamePlayScreen({
               room={room}
               selfPlayerId={player.id}
               compact={compact}
+              voiceStates={voice.voiceStates}
             />
 
             <View style={styles.tableHeader} pointerEvents="box-none">
@@ -1279,11 +1304,16 @@ function TableControls({
   soundEnabled,
   onBack,
   onToggleSound,
+  voice,
 }: {
   soundEnabled: boolean;
   onBack: () => void;
   onToggleSound: () => void;
+  voice: RoomVoiceController;
 }) {
+  const micOn = Boolean(voice.enabled && !voice.muted);
+  const voiceActionLabel = getVoiceActionLabel(voice);
+
   return (
     <View style={styles.gameChrome}>
       <Pressable
@@ -1297,11 +1327,28 @@ function TableControls({
 
       <View style={styles.chromeControls}>
         <Pressable
-          style={styles.chromeIconButton}
+          onPress={voice.toggle}
+          disabled={voice.connecting}
+          style={[
+            styles.chromeIconButton,
+            micOn && styles.chromeButtonActive,
+            voice.error && styles.chromeButtonError,
+            voice.connecting && styles.disabled,
+          ]}
           accessibilityRole="button"
-          accessibilityLabel="Microphone controls coming soon"
+          accessibilityLabel={voiceActionLabel}
         >
-          <Mic color="#fff8ea" size={16} strokeWidth={2.4} />
+          {voice.connecting ? (
+            <ActivityIndicator color="#fff8ea" size="small" />
+          ) : micOn ? (
+            <Mic color="#fff8ea" size={16} strokeWidth={2.4} />
+          ) : (
+            <MicOff
+              color={voice.error ? '#ffd7d7' : '#ffb1b1'}
+              size={16}
+              strokeWidth={2.4}
+            />
+          )}
         </Pressable>
         <Pressable
           onPress={onToggleSound}
@@ -1359,10 +1406,12 @@ function SeatRing({
   room,
   selfPlayerId,
   compact,
+  voiceStates,
 }: {
   room: RoomSnapshot;
   selfPlayerId: string;
   compact: boolean;
+  voiceStates: RoomVoiceController['voiceStates'];
 }) {
   const players = orderPlayersAroundSelf(room.players, selfPlayerId);
   const game = room.game;
@@ -1390,6 +1439,7 @@ function SeatRing({
         );
         const isSelf = candidate.id === selfPlayerId;
         const isTurn = game?.turnPlayerId === candidate.id;
+        const voiceState = voiceStates[candidate.id];
         const seatStyle: ViewStyle = {
           left: `${position.left}%`,
           top: `${position.top}%`,
@@ -1443,6 +1493,7 @@ function SeatRing({
                   {cardCountLabel}
                 </Text>
               </View>
+              <SeatVoiceBadge state={voiceState} dense={denseSeats} />
             </View>
             <View style={styles.seatNamePlate}>
               {isTurn ? <View style={styles.seatTurnDot} /> : null}
@@ -1458,6 +1509,144 @@ function SeatRing({
       })}
     </View>
   );
+}
+
+function LobbyVoiceButton({ voice }: { voice: RoomVoiceController }) {
+  const micOn = Boolean(voice.enabled && !voice.muted);
+  const voiceActionLabel = getVoiceActionLabel(voice);
+
+  return (
+    <Pressable
+      onPress={voice.toggle}
+      disabled={voice.connecting}
+      style={({ pressed }) => [
+        styles.lobbyVoiceButton,
+        micOn && styles.lobbyVoiceButtonActive,
+        voice.error && styles.lobbyVoiceButtonError,
+        (pressed || voice.connecting) && styles.pressed,
+      ]}
+      accessibilityRole="button"
+      accessibilityLabel={voiceActionLabel}
+    >
+      {voice.connecting ? (
+        <ActivityIndicator color="#fff8ea" size="small" />
+      ) : micOn ? (
+        <Mic color="#fff8ea" size={17} strokeWidth={2.5} />
+      ) : (
+        <MicOff
+          color={voice.error ? '#ffd7d7' : '#ffb1b1'}
+          size={17}
+          strokeWidth={2.5}
+        />
+      )}
+    </Pressable>
+  );
+}
+
+function VoiceStatusPill({
+  state,
+}: {
+  state: RoomVoiceController['voiceStates'][string] | undefined;
+}) {
+  const status = getVoiceStatus(state);
+  const Icon = status.micLive ? Mic : MicOff;
+
+  return (
+    <View
+      style={[
+        styles.voiceStatusPill,
+        status.micLive && styles.voiceStatusPillOn,
+        status.speaking && styles.voiceStatusPillSpeaking,
+      ]}
+      accessibilityLabel={status.label}
+    >
+      <Icon
+        color={
+          status.speaking
+            ? '#dfffee'
+            : status.micLive
+              ? '#fff8ea'
+              : 'rgba(255,255,255,0.44)'
+        }
+        size={11}
+        strokeWidth={2.5}
+      />
+      <Text
+        style={[
+          styles.voiceStatusPillText,
+          status.micLive && styles.voiceStatusPillTextOn,
+        ]}
+        numberOfLines={1}
+      >
+        {status.shortLabel}
+      </Text>
+    </View>
+  );
+}
+
+function SeatVoiceBadge({
+  state,
+  dense,
+}: {
+  state: RoomVoiceController['voiceStates'][string] | undefined;
+  dense: boolean;
+}) {
+  const status = getVoiceStatus(state);
+  const Icon = status.micLive ? Mic : MicOff;
+
+  return (
+    <View
+      style={[
+        styles.seatVoiceBadge,
+        dense && styles.seatVoiceBadgeDense,
+        status.micLive && styles.seatVoiceBadgeOn,
+        status.speaking && styles.seatVoiceBadgeSpeaking,
+      ]}
+      accessibilityLabel={status.label}
+    >
+      <Icon
+        color={
+          status.speaking
+            ? '#dfffee'
+            : status.micLive
+              ? '#fff8ea'
+              : 'rgba(255,255,255,0.42)'
+        }
+        size={dense ? 8 : 9}
+        strokeWidth={2.6}
+      />
+    </View>
+  );
+}
+
+function getVoiceStatus(
+  state: RoomVoiceController['voiceStates'][string] | undefined,
+) {
+  const enabled = Boolean(state?.enabled);
+  const muted = !enabled || Boolean(state?.muted);
+  const speaking = Boolean(state?.speaking && !muted);
+  const micLive = enabled && !muted;
+
+  return {
+    micLive,
+    speaking,
+    label: speaking
+      ? 'Speaking'
+      : micLive
+        ? 'Mic on'
+        : enabled
+          ? 'Muted'
+          : 'Mic off',
+    shortLabel: speaking ? 'Live' : micLive ? 'On' : enabled ? 'Muted' : 'Off',
+  };
+}
+
+function getVoiceActionLabel(voice: RoomVoiceController) {
+  if (voice.error) return voice.error;
+  if (voice.connecting) return 'Connecting voice';
+  if (!voice.enabled) return 'Join voice';
+  if (voice.muted) return 'Unmute microphone';
+  return 'Mute microphone';
 }
 
 function StagingTray({
@@ -1936,6 +2125,10 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,243,163,0.14)',
     borderColor: 'rgba(255,243,163,0.22)',
   },
+  chromeButtonError: {
+    backgroundColor: 'rgba(246,95,95,0.16)',
+    borderColor: 'rgba(246,95,95,0.32)',
+  },
   feltTable: {
     flex: 1,
     minHeight: 340,
@@ -2166,6 +2359,33 @@ const styles = StyleSheet.create({
   },
   seatCountTextTurn: {
     color: '#fff3a3',
+  },
+  seatVoiceBadge: {
+    position: 'absolute',
+    left: -6,
+    bottom: -6,
+    width: 17,
+    height: 17,
+    borderRadius: 8.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(10,7,5,0.94)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.12)',
+  },
+  seatVoiceBadgeDense: {
+    left: -5,
+    bottom: -5,
+    width: 15,
+    height: 15,
+    borderRadius: 7.5,
+  },
+  seatVoiceBadgeOn: {
+    borderColor: 'rgba(255,255,255,0.22)',
+  },
+  seatVoiceBadgeSpeaking: {
+    borderColor: 'rgba(66,215,130,0.72)',
+    backgroundColor: 'rgba(34,130,78,0.82)',
   },
   stagingTray: {
     padding: 6,
@@ -2451,9 +2671,56 @@ const styles = StyleSheet.create({
   ready: {
     color: '#42d782',
   },
+  voiceStatusPill: {
+    minWidth: 56,
+    height: 25,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    backgroundColor: 'rgba(0,0,0,0.26)',
+    paddingHorizontal: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+  },
+  voiceStatusPillOn: {
+    borderColor: 'rgba(255,255,255,0.18)',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  voiceStatusPillSpeaking: {
+    borderColor: 'rgba(66,215,130,0.5)',
+    backgroundColor: 'rgba(66,215,130,0.16)',
+  },
+  voiceStatusPillText: {
+    color: 'rgba(255,255,255,0.48)',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  voiceStatusPillTextOn: {
+    color: '#fff8ea',
+  },
   lobbyActions: {
     flexDirection: 'row',
     gap: Spacing.two,
+  },
+  lobbyVoiceButton: {
+    width: 50,
+    height: 50,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  lobbyVoiceButtonActive: {
+    backgroundColor: 'rgba(255,243,163,0.14)',
+    borderColor: 'rgba(255,243,163,0.22)',
+  },
+  lobbyVoiceButtonError: {
+    backgroundColor: 'rgba(246,95,95,0.16)',
+    borderColor: 'rgba(246,95,95,0.32)',
   },
   secondaryButton: {
     flex: 1,
