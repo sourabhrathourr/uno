@@ -15,6 +15,7 @@ import {
   playCards,
   projectPlayerGame,
   projectPublicGame,
+  projectSpectatorView,
   stageCards,
   takeDrawPenalty,
   type CatchUnoInput,
@@ -393,6 +394,23 @@ export class RoomManager {
       ...projectPlayerGame(room.gameState, gameContext(room), playerId),
       roomVersion: room.version,
     }
+  }
+
+  getSpectatorView(
+    code: string,
+    spectatorPlayerId: string,
+    targetPlayerId: string,
+  ): PlayerGameSnapshot | null {
+    const room = this.rooms.get(normalizeRoomCode(code))
+    if (!room?.gameState) return null
+    if (!findPlayer(room, spectatorPlayerId)) return null
+    if (!findPlayer(room, targetPlayerId)) return null
+    return projectSpectatorView(
+      room.gameState,
+      gameContext(room),
+      spectatorPlayerId,
+      targetPlayerId,
+    )
   }
 
   registerConnection(code: string, playerId: string, socketId: string): RoomSnapshot | null {

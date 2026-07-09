@@ -663,6 +663,7 @@ function RoomPage() {
           onSendChatMessage={sendChatMessage}
           onRestartGame={restartGame}
           voice={voice}
+          socket={socket}
         />
         {showIntro && (
           <GameStartIntro
@@ -712,6 +713,7 @@ function GameTable({
   onSendChatMessage,
   onRestartGame,
   voice,
+  socket,
 }: {
   room: RoomSnapshot
   player: Player
@@ -729,9 +731,17 @@ function GameTable({
   onSendChatMessage: (input: SendChatMessageInput) => void
   onRestartGame: () => void
   voice: RoomVoiceController
+  socket: GameSocket | null
 }) {
   const game = room.game
   const tableDropRef = useRef<HTMLDivElement | null>(null)
+  
+  const [spectatingPlayerId, setSpectatingPlayerId] = useState<string | null>(null)
+  const [spectatingHand, setSpectatingHand] = useState<Card[] | null>(null)
+
+  const selfState = game?.players.find((p) => p.playerId === player.id)
+  const isSelfEliminated = Boolean(selfState?.eliminated)
+
   const [selectedCardIds, setSelectedCardIds] = useState<string[]>([])
   const [pendingPlayedCardIds, setPendingPlayedCardIds] = useState<string[]>([])
   const [declaredUno, setDeclaredUno] = useState(false)
@@ -894,6 +904,34 @@ function GameTable({
     Boolean(isMyTurn) &&
     pendingPlayedCardIds.length === 0
   const visibleError = error ?? voice.error
+
+  useEffect(() => {
+    if (!isSelfEliminated) {
+      setSpectatingPlayerId(null)
+      setSpectatingHand(null)
+      return
+    }
+
+    if (!spectatingPlayerId || !socket) {
+      setSpectatingHand(null)
+      return
+    }
+
+    const targetState = game?.players.find((p) => p.playerId === spectatingPlayerId)
+    if (!targetState || targetState.eliminated || targetState.winnerPlacement) {
+      setSpectatingPlayerId(null)
+      setSpectatingHand(null)
+      return
+    }
+
+    socket.emit("game:spectatePlayer", { targetPlayerId: spectatingPlayerId }, (result) => {
+      if (result.ok && result.data) {
+        setSpectatingHand(result.data.hand)
+      } else {
+        setSpectatingHand(null)
+      }
+    })
+  }, [spectatingPlayerId, room.version, socket, isSelfEliminated, game?.players])
 
   useEffect(() => {
     const hand = playerGame?.hand ?? []
@@ -1278,6 +1316,9 @@ function GameTable({
                 voiceStates={voice.voiceStates}
                 canTakeDrawPenalty={Boolean(playerGame?.canTakeDrawPenalty)}
                 onTakeDrawPenalty={handleTakePenalty}
+                isSelfEliminated={isSelfEliminated}
+                spectatingPlayerId={spectatingPlayerId}
+                onSpectatePlayer={setSpectatingPlayerId}
               />
 
               <div className="relative z-10 flex h-full min-h-0 flex-col">
@@ -1413,58 +1454,70 @@ function GameTable({
           >
             <div className="flex shrink-0 items-start justify-between gap-2">
               <div className="min-w-0">
-                <p className="text-sm font-medium text-white/84">Your hand</p>
+                <p className="text-sm font-medium text-white/84">
+                  {isSelfEliminated
+                    ? spectatingPlayerId
+                      ? `${playerName(room, spectatingPlayerId)}'s hand`
+                      : "Your hand"
+                    : "Your hand"}
+                </p>
                 <p className="mt-0.5 truncate text-[11px] text-white/42">
-                  Tap a card to stage it.
+                  {isSelfEliminated
+                    ? spectatingPlayerId
+                      ? "👁 Spectating"
+                      : "Tap a active player to view their cards."
+                    : "Tap a card to stage it."}
                 </p>
               </div>
-              <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-                {needsColor && (
-                  <ColorPicker
-                    value={chosenColor}
-                    required={!chosenColor}
-                    onChange={setChosenColor}
-                  />
-                )}
-                {canChooseRotate && (
+              {!isSelfEliminated && (
+                <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+                  {needsColor && (
+                    <ColorPicker
+                      value={chosenColor}
+                      required={!chosenColor}
+                      onChange={setChosenColor}
+                    />
+                  )}
+                  {canChooseRotate && (
+                    <GameOptionCheckbox
+                      checked={wantsRotate}
+                      onCheckedChange={setWantsRotate}
+                    >
+                      Cycle
+                    </GameOptionCheckbox>
+                  )}
+                  {canChooseSwap && (
+                    <GameOptionCheckbox
+                      checked={wantsSwap}
+                      onCheckedChange={(checked) => {
+                        setWantsSwap(checked)
+                        if (!checked) setSwapWithPlayerId("")
+                      }}
+                    >
+                      Swap
+                    </GameOptionCheckbox>
+                  )}
                   <GameOptionCheckbox
-                    checked={wantsRotate}
-                    onCheckedChange={setWantsRotate}
+                    checked={declaredUno && canDeclareUno}
+                    disabled={!canDeclareUno}
+                    onCheckedChange={setDeclaredUno}
                   >
-                    Cycle
+                    UNO
                   </GameOptionCheckbox>
-                )}
-                {canChooseSwap && (
-                  <GameOptionCheckbox
-                    checked={wantsSwap}
-                    onCheckedChange={(checked) => {
-                      setWantsSwap(checked)
-                      if (!checked) setSwapWithPlayerId("")
-                    }}
+                  <Button
+                    type="button"
+                    size="sm"
+                    disabled={!canUseEndTurnButton}
+                    onClick={handleEndTurnButton}
+                    className="h-8 bg-white px-3 text-neutral-950 hover:bg-white/85"
                   >
-                    Swap
-                  </GameOptionCheckbox>
-                )}
-                <GameOptionCheckbox
-                  checked={declaredUno && canDeclareUno}
-                  disabled={!canDeclareUno}
-                  onCheckedChange={setDeclaredUno}
-                >
-                  UNO
-                </GameOptionCheckbox>
-                <Button
-                  type="button"
-                  size="sm"
-                  disabled={!canUseEndTurnButton}
-                  onClick={handleEndTurnButton}
-                  className="h-8 bg-white px-3 text-neutral-950 hover:bg-white/85"
-                >
-                  {canPassTurn ? "Pass" : "End"}
-                </Button>
-              </div>
+                    {canPassTurn ? "Pass" : "End"}
+                  </Button>
+                </div>
+              )}
             </div>
 
-            {needsSwap && (
+            {!isSelfEliminated && needsSwap && (
               <select
                 value={swapWithPlayerId}
                 onChange={(event) => setSwapWithPlayerId(event.target.value)}
@@ -1480,16 +1533,16 @@ function GameTable({
             )}
 
             <FannedGameHand
-              cards={playerGame?.hand ?? []}
-              playableCardIds={playerGame?.playableCardIds ?? []}
-              selectedCardIds={selectedCardIds}
-              hiddenCardIds={pendingPlayedCardIds}
-              isMyTurn={Boolean(isMyTurn)}
-              drawStack={drawStack}
-              onToggleCard={toggleSelected}
-              onDragStart={setDraggingCardId}
-              onDragMove={updatePointerDragTarget}
-              onDragEnd={finishPointerDrag}
+              cards={isSelfEliminated ? (spectatingHand ?? []) : (playerGame?.hand ?? [])}
+              playableCardIds={isSelfEliminated ? [] : (playerGame?.playableCardIds ?? [])}
+              selectedCardIds={isSelfEliminated ? [] : selectedCardIds}
+              hiddenCardIds={isSelfEliminated ? [] : pendingPlayedCardIds}
+              isMyTurn={isSelfEliminated ? false : Boolean(isMyTurn)}
+              drawStack={isSelfEliminated ? null : drawStack}
+              onToggleCard={isSelfEliminated ? () => {} : toggleSelected}
+              onDragStart={isSelfEliminated ? () => {} : setDraggingCardId}
+              onDragMove={isSelfEliminated ? () => {} : updatePointerDragTarget}
+              onDragEnd={isSelfEliminated ? () => {} : finishPointerDrag}
               onCancelDrag={() => {
                 setDraggingCardId(null)
                 setTableDragActive(false)
@@ -1578,6 +1631,9 @@ function GameTable({
                 onTakeDrawPenalty={handleTakePenalty}
                 compact={compactSurface}
                 voiceStates={voice.voiceStates}
+                isSelfEliminated={isSelfEliminated}
+                spectatingPlayerId={spectatingPlayerId}
+                onSpectatePlayer={setSpectatingPlayerId}
               />
               <div className="relative z-10 flex h-full min-h-0 flex-col">
                 <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1689,84 +1745,96 @@ function GameTable({
             >
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <p className="text-sm font-medium text-white/82">Your hand</p>
+                  <p className="text-sm font-medium text-white/82">
+                    {isSelfEliminated
+                      ? spectatingPlayerId
+                        ? `${playerName(room, spectatingPlayerId)}'s hand`
+                        : "Your hand"
+                      : "Your hand"}
+                  </p>
                   <p className="mt-0.5 text-xs text-white/42 sm:mt-1">
-                    Drag cards to the table, then end your turn.
+                    {isSelfEliminated
+                      ? spectatingPlayerId
+                        ? "👁 Spectating"
+                        : "Click an active player to view their cards."
+                      : "Drag cards to the table, then end your turn."}
                   </p>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  {needsColor && (
-                    <ColorPicker
-                      value={chosenColor}
-                      required={!chosenColor}
-                      onChange={setChosenColor}
-                    />
-                  )}
-                  {canChooseRotate && (
+                {!isSelfEliminated && (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {needsColor && (
+                      <ColorPicker
+                        value={chosenColor}
+                        required={!chosenColor}
+                        onChange={setChosenColor}
+                      />
+                    )}
+                    {canChooseRotate && (
+                      <GameOptionCheckbox
+                        checked={wantsRotate}
+                        onCheckedChange={setWantsRotate}
+                      >
+                        Cycle hands
+                      </GameOptionCheckbox>
+                    )}
+                    {canChooseSwap && (
+                      <GameOptionCheckbox
+                        checked={wantsSwap}
+                        onCheckedChange={(checked) => {
+                          setWantsSwap(checked)
+                          if (!checked) setSwapWithPlayerId("")
+                        }}
+                      >
+                        Swap
+                      </GameOptionCheckbox>
+                    )}
+                    {needsSwap && (
+                      <select
+                        value={swapWithPlayerId}
+                        onChange={(event) =>
+                          setSwapWithPlayerId(event.target.value)
+                        }
+                        className="h-9 rounded-lg border border-white/10 bg-neutral-950 px-2 text-sm text-white outline-none"
+                      >
+                        <option value="">Swap with...</option>
+                        {activeOpponents.map((candidate) => (
+                          <option key={candidate.id} value={candidate.id}>
+                            {candidate.name}
+                          </option>
+                        ))}
+                      </select>
+                    )}
                     <GameOptionCheckbox
-                      checked={wantsRotate}
-                      onCheckedChange={setWantsRotate}
+                      checked={declaredUno && canDeclareUno}
+                      disabled={!canDeclareUno}
+                      onCheckedChange={setDeclaredUno}
                     >
-                      Cycle hands
+                      UNO
                     </GameOptionCheckbox>
-                  )}
-                  {canChooseSwap && (
-                    <GameOptionCheckbox
-                      checked={wantsSwap}
-                      onCheckedChange={(checked) => {
-                        setWantsSwap(checked)
-                        if (!checked) setSwapWithPlayerId("")
-                      }}
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={!canUseEndTurnButton}
+                      onClick={handleEndTurnButton}
+                      className="bg-white text-neutral-950 hover:bg-white/85"
                     >
-                      Swap
-                    </GameOptionCheckbox>
-                  )}
-                  {needsSwap && (
-                    <select
-                      value={swapWithPlayerId}
-                      onChange={(event) =>
-                        setSwapWithPlayerId(event.target.value)
-                      }
-                      className="h-9 rounded-lg border border-white/10 bg-neutral-950 px-2 text-sm text-white outline-none"
-                    >
-                      <option value="">Swap with...</option>
-                      {activeOpponents.map((candidate) => (
-                        <option key={candidate.id} value={candidate.id}>
-                          {candidate.name}
-                        </option>
-                      ))}
-                    </select>
-                  )}
-                  <GameOptionCheckbox
-                    checked={declaredUno && canDeclareUno}
-                    disabled={!canDeclareUno}
-                    onCheckedChange={setDeclaredUno}
-                  >
-                    UNO
-                  </GameOptionCheckbox>
-                  <Button
-                    type="button"
-                    size="sm"
-                    disabled={!canUseEndTurnButton}
-                    onClick={handleEndTurnButton}
-                    className="bg-white text-neutral-950 hover:bg-white/85"
-                  >
-                    {canPassTurn ? "Pass turn" : "End turn"}
-                  </Button>
-                </div>
+                      {canPassTurn ? "Pass turn" : "End turn"}
+                    </Button>
+                  </div>
+                )}
               </div>
 
               <FannedGameHand
-                cards={playerGame?.hand ?? []}
-                playableCardIds={playerGame?.playableCardIds ?? []}
-                selectedCardIds={selectedCardIds}
-                hiddenCardIds={pendingPlayedCardIds}
-                isMyTurn={Boolean(isMyTurn)}
-                drawStack={drawStack}
-                onToggleCard={toggleSelected}
-                onDragStart={setDraggingCardId}
-                onDragMove={updatePointerDragTarget}
-                onDragEnd={finishPointerDrag}
+                cards={isSelfEliminated ? (spectatingHand ?? []) : (playerGame?.hand ?? [])}
+                playableCardIds={isSelfEliminated ? [] : (playerGame?.playableCardIds ?? [])}
+                selectedCardIds={isSelfEliminated ? [] : selectedCardIds}
+                hiddenCardIds={isSelfEliminated ? [] : pendingPlayedCardIds}
+                isMyTurn={isSelfEliminated ? false : Boolean(isMyTurn)}
+                drawStack={isSelfEliminated ? null : drawStack}
+                onToggleCard={isSelfEliminated ? () => {} : toggleSelected}
+                onDragStart={isSelfEliminated ? () => {} : setDraggingCardId}
+                onDragMove={isSelfEliminated ? () => {} : updatePointerDragTarget}
+                onDragEnd={isSelfEliminated ? () => {} : finishPointerDrag}
                 onCancelDrag={() => {
                   setDraggingCardId(null)
                   setTableDragActive(false)
@@ -2052,6 +2120,9 @@ function MobileSeatingRing({
   voiceStates,
   canTakeDrawPenalty,
   onTakeDrawPenalty,
+  isSelfEliminated,
+  spectatingPlayerId,
+  onSpectatePlayer,
 }: {
   room: RoomSnapshot
   game: RoomSnapshot["game"]
@@ -2059,6 +2130,9 @@ function MobileSeatingRing({
   voiceStates: RoomVoiceController["voiceStates"]
   canTakeDrawPenalty: boolean
   onTakeDrawPenalty: () => void
+  isSelfEliminated: boolean
+  spectatingPlayerId: string | null
+  onSpectatePlayer: (targetPlayerId: string) => void
 }) {
   const ordered = orderPlayersAroundSelf(room.players, selfPlayerId)
 
@@ -2091,25 +2165,37 @@ function MobileSeatingRing({
         const fadedOpacity = eliminated || !candidate.connected
         const showName = !dense || isYou
 
+        const isSpectated = spectatingPlayerId === candidate.id
+        const canSpectate = isSelfEliminated && !isYou && !eliminated && !winnerPlacement
+
         const ringClass = isWinner
           ? "ring-2 ring-amber-200/85 shadow-[0_0_22px_rgba(252,211,77,0.46)]"
-          : active
-            ? "ring-2 ring-amber-200/80 shadow-[0_0_22px_rgba(252,211,77,0.42)]"
-            : declaredUno
-              ? "ring-2 ring-yellow-200/65 shadow-[0_0_18px_rgba(250,204,21,0.32)]"
-              : isYou
-                ? "ring-2 ring-sky-200/55 shadow-[0_0_18px_rgba(125,211,252,0.24)]"
-                : "ring-1 ring-white/14"
+          : isSpectated
+            ? "ring-2 ring-cyan-400/90 shadow-[0_0_22px_rgba(34,211,238,0.6)]"
+            : active
+              ? "ring-2 ring-amber-200/80 shadow-[0_0_22px_rgba(252,211,77,0.42)]"
+              : declaredUno
+                ? "ring-2 ring-yellow-200/65 shadow-[0_0_18px_rgba(250,204,21,0.32)]"
+                : isYou
+                  ? "ring-2 ring-sky-200/55 shadow-[0_0_18px_rgba(125,211,252,0.24)]"
+                  : "ring-1 ring-white/14"
 
         return (
           <div
             key={candidate.id}
             data-seat-player-id={candidate.id}
+            onClick={() => {
+              if (canSpectate) {
+                onSpectatePlayer(candidate.id)
+              }
+            }}
             className={
               "absolute flex -translate-x-1/2 -translate-y-1/2 flex-col items-center transition-[opacity,transform] duration-300 " +
               (dense ? "w-[52px]" : "w-[60px]") +
               " " +
-              (fadedOpacity ? "opacity-55" : "opacity-100")
+              (fadedOpacity ? "opacity-55" : "opacity-100") +
+              " " +
+              (canSpectate ? "pointer-events-auto cursor-pointer hover:scale-105" : "")
             }
             style={{
               left: `${seat.left}%`,
@@ -2743,6 +2829,9 @@ function TableSeatRing({
   onTakeDrawPenalty,
   compact,
   voiceStates,
+  isSelfEliminated,
+  spectatingPlayerId,
+  onSpectatePlayer,
 }: {
   room: RoomSnapshot
   game: RoomSnapshot["game"]
@@ -2751,6 +2840,9 @@ function TableSeatRing({
   onTakeDrawPenalty: () => void
   compact: boolean
   voiceStates: RoomVoiceController["voiceStates"]
+  isSelfEliminated: boolean
+  spectatingPlayerId: string | null
+  onSpectatePlayer: (targetPlayerId: string) => void
 }) {
   const players = orderPlayersAroundSelf(room.players, selfPlayerId)
 
@@ -2787,6 +2879,9 @@ function TableSeatRing({
             onTakeDrawPenalty={onTakeDrawPenalty}
             left={seat.left}
             top={seat.top}
+            isSelfEliminated={isSelfEliminated}
+            isSpectated={spectatingPlayerId === candidate.id}
+            onSpectatePlayer={onSpectatePlayer}
           />
         )
       })}
@@ -2810,6 +2905,9 @@ function TableAvatarSeat({
   onTakeDrawPenalty,
   left,
   top,
+  isSelfEliminated,
+  isSpectated,
+  onSpectatePlayer,
 }: {
   player: Player
   handCount: number
@@ -2828,6 +2926,9 @@ function TableAvatarSeat({
   onTakeDrawPenalty: () => void
   left: number
   top: number
+  isSelfEliminated?: boolean
+  isSpectated?: boolean
+  onSpectatePlayer?: (targetPlayerId: string) => void
 }) {
   const placementText = winnerPlacement
     ? `${ordinalLabel(winnerPlacement.position)} place`
@@ -2838,16 +2939,25 @@ function TableAvatarSeat({
   const isMuted = !hasVoiceOn || Boolean(voiceState?.muted)
   const isSpeaking = Boolean(voiceState?.speaking && !isMuted)
 
+  const canSpectate = isSelfEliminated && !isYou && !eliminated && !winnerPlacement
+
   return (
     <div
       data-seat-player-id={player.id}
+      onClick={() => {
+        if (canSpectate) {
+          onSpectatePlayer?.(player.id)
+        }
+      }}
       className={
         "absolute flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-1 transition-[opacity,transform,filter] duration-300 " +
         (winnerPlacement
           ? "opacity-100"
           : eliminated || !connected
             ? "opacity-45"
-            : "opacity-100")
+            : "opacity-100") +
+        " " +
+        (canSpectate ? "pointer-events-auto cursor-pointer hover:scale-[1.03]" : "")
       }
       style={{ left: `${left}%`, top: `${top}%` }}
     >
@@ -2858,13 +2968,15 @@ function TableAvatarSeat({
             ? isFirstPlace
               ? "border-amber-200/80 bg-amber-200/20 shadow-[0_0_0_1px_rgba(252,211,77,0.3),0_0_46px_rgba(252,211,77,0.34),0_18px_38px_rgba(0,0,0,0.34)]"
               : "border-white/18 bg-white/[0.075]"
-            : isUno
-              ? "scale-[1.03] border-yellow-200/75 bg-red-500/[0.14] shadow-[0_0_0_1px_rgba(250,204,21,0.26),0_0_44px_rgba(239,68,68,0.28),0_18px_38px_rgba(0,0,0,0.34)]"
-              : active
-                ? "scale-[1.03] border-amber-200/70 bg-amber-200/16 shadow-[0_0_0_1px_rgba(252,211,77,0.25),0_0_42px_rgba(252,211,77,0.36),0_18px_38px_rgba(0,0,0,0.34)]"
-                : isStaging
-                  ? "border-sky-200/45 bg-sky-300/12"
-                  : "border-white/12 bg-black/38")
+            : isSpectated
+              ? "scale-[1.03] border-cyan-400 bg-cyan-950/20 shadow-[0_0_0_1px_rgba(34,211,238,0.3),0_0_42px_rgba(34,211,238,0.4),0_18px_38px_rgba(0,0,0,0.34)]"
+              : isUno
+                ? "scale-[1.03] border-yellow-200/75 bg-red-500/[0.14] shadow-[0_0_0_1px_rgba(250,204,21,0.26),0_0_44px_rgba(239,68,68,0.28),0_18px_38px_rgba(0,0,0,0.34)]"
+                : active
+                  ? "scale-[1.03] border-amber-200/70 bg-amber-200/16 shadow-[0_0_0_1px_rgba(252,211,77,0.25),0_0_42px_rgba(252,211,77,0.36),0_18px_38px_rgba(0,0,0,0.34)]"
+                  : isStaging
+                    ? "border-sky-200/45 bg-sky-300/12"
+                    : "border-white/12 bg-black/38")
         }
       >
         {winnerPlacement && (

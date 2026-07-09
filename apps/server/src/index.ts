@@ -349,6 +349,24 @@ io.on("connection", (socket) => {
     if (result.ok) void emitRoomState(result.data.code, result.data)
   })
 
+  socket.on("game:spectatePlayer", (input, ack) => {
+    const roomCode = socket.data.roomCode
+    const playerId = socket.data.playerId
+    if (!roomCode || !playerId) {
+      ack({
+        ok: false,
+        error: { code: "not-joined", message: "Join a room first." },
+      })
+      return
+    }
+    const spectatorView = rooms.getSpectatorView(
+      roomCode,
+      playerId,
+      input.targetPlayerId
+    )
+    ack({ ok: true, data: spectatorView })
+  })
+
   socket.on("disconnect", () => {
     const roomCode = socket.data.roomCode
     const playerId = socket.data.playerId

@@ -20,6 +20,7 @@ export {
   playCards,
   projectPlayerGame,
   projectPublicGame,
+  projectSpectatorView,
   stageCards,
   takeDrawPenalty,
 } from "./engine"
@@ -66,6 +67,7 @@ export type {
   RoomEvent,
   ServerToClientEvents,
   SocketData,
+  SpectatePlayerInput,
   VoiceSignal,
   VoiceSignalEvent,
   VoiceSignalInput,

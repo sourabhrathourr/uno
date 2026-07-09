@@ -4,6 +4,10 @@ import type {
   PlayCardsInput,
   StageCardsInput,
 } from "./game"
+
+export type SpectatePlayerInput = {
+  targetPlayerId: string
+}
 import type { SendChatMessageInput } from "./chat"
 import type { HouseRules, Player, RoomSnapshot } from "./rooms"
 
@@ -140,6 +144,10 @@ export type ClientToServerEvents = {
   "game:catchUno": (
     input: CatchUnoInput,
     ack: (result: CommandResult<RoomSnapshot>) => void,
+  ) => void
+  "game:spectatePlayer": (
+    input: SpectatePlayerInput,
+    ack: (result: CommandResult<PlayerGameSnapshot | null>) => void,
   ) => void
 }
 
