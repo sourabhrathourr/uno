@@ -147,6 +147,32 @@ export function projectPlayerGame(
   }
 }
 
+export function projectSpectatorView(
+  game: GameState,
+  context: GameContext,
+  spectatorPlayerId: string,
+  targetPlayerId: string,
+): PlayerGameSnapshot | null {
+  void context
+  // Only eliminated/won (inactive) players can spectate
+  if (isPlayerActive(game, spectatorPlayerId)) return null
+  // Target must be in the game
+  if (!game.playerOrder.includes(targetPlayerId)) return null
+  // Target must be active (non-eliminated, non-won)
+  if (!isPlayerActive(game, targetPlayerId)) return null
+
+  const hand = game.handsByPlayerId[targetPlayerId] ?? []
+  return {
+    playerId: targetPlayerId,
+    hand: hand.map((card) => ({ ...card })),
+    playableCardIds: [],
+    catchablePlayerIds: [],
+    canDraw: false,
+    canEndTurn: false,
+    canTakeDrawPenalty: false,
+  }
+}
+
 export function stageCards(
   game: GameState,
   context: GameContext,
