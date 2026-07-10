@@ -3306,6 +3306,25 @@ function ChatMessageBubble({
   isSelf: boolean
   isMentioned: boolean
 }) {
+  if (message.kind === "gif") {
+    return (
+      <div className={"flex " + (isSelf ? "justify-end" : "justify-start")}>
+        <div
+          role="img"
+          aria-label={`${isSelf ? "You" : message.playerName} sent ${message.label ?? "a GIF reaction"}`}
+          className="w-[180px] max-w-[88%] overflow-hidden rounded-xl"
+        >
+          <img
+            src={message.body}
+            alt=""
+            className="h-28 w-full object-cover"
+            loading="lazy"
+          />
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className={"flex " + (isSelf ? "justify-end" : "justify-start")}>
       <div className={"max-w-[88%] " + (isSelf ? "items-end" : "items-start")}>
@@ -3331,16 +3350,7 @@ function ChatMessageBubble({
             (isMentioned ? " ring-1 ring-pink-300/55" : "")
           }
         >
-          {message.kind === "gif" ? (
-            <div className="-m-1 w-[min(180px,100%)]">
-              <img
-                src={message.body}
-                alt={message.label ?? "GIF reaction"}
-                className="h-28 w-full rounded-xl object-cover outline outline-1 outline-white/10"
-                loading="lazy"
-              />
-            </div>
-          ) : message.kind === "emoji" ? (
+          {message.kind === "emoji" ? (
             <p className="text-3xl leading-none">{message.body}</p>
           ) : (
             <p className="text-sm leading-relaxed text-pretty">
