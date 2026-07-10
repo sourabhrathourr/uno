@@ -87,25 +87,24 @@ describe("RoomManager support squads", () => {
     expect(manager.supportPlayer(code, hostId, playerCId).ok).toBe(true)
   })
 
-  it("accepts table reactions from active and inactive players with a spam cooldown", () => {
+  it("accepts avatar emoji reactions from active and inactive players with a spam cooldown", () => {
     const { manager, code, hostId, playerBId } = startedRoomWithInactiveHost()
 
     expect(
-      manager.sendTableReaction(code, hostId, { kind: "emoji", body: "🔥" }).ok
+      manager.sendAvatarEmojiReaction(code, hostId, { body: "🔥" }).ok
     ).toBe(true)
     expect(
-      manager.sendTableReaction(code, hostId, { kind: "emoji", body: "😂" })
-    ).toMatchObject({ ok: false, error: { code: "reaction-too-fast" } })
+      manager.sendAvatarEmojiReaction(code, hostId, { body: "😂" })
+    ).toMatchObject({
+      ok: false,
+      error: { code: "avatar-emoji-reaction-too-fast" },
+    })
     expect(
-      manager.sendTableReaction(code, playerBId, {
-        kind: "preset",
-        body: "BIG MOVE",
-      }).ok
+      manager.sendAvatarEmojiReaction(code, playerBId, { body: "👀" }).ok
     ).toBe(true)
 
     const room = manager.getRoom(code)
-    expect(room.ok && room.data.game?.hypeMeter.value).toBe(20)
-    expect(room.ok && room.data.game?.tableReactions).toHaveLength(2)
+    expect(room.ok && room.data.game?.avatarEmojiReactions).toHaveLength(2)
   })
 })
 

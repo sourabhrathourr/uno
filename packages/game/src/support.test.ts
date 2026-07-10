@@ -7,11 +7,12 @@ import {
   projectPublicGame,
   projectSupportView,
   releaseInactiveSupportLinks,
-  sendTableReaction,
+  sendAvatarEmojiReaction,
   stageCards,
   supportPlayer,
   supportSquadMemberIds,
   supportSquadPlayerIdFor,
+  type AvatarReactionEmoji,
   type GameContext,
   type GameState,
 } from "./index"
@@ -133,34 +134,40 @@ describe("support links", () => {
   })
 })
 
-describe("table energy and support recap", () => {
-  it("lets every player react and directs supporter reactions to their player", () => {
+describe("avatar reactions and support recap", () => {
+  it("lets every player react and directs supporter emoji to their player", () => {
     const game = inactiveGame("a")
     expect(supportPlayer(game, context, "a", "b").ok).toBe(true)
 
-    expect(
-      sendTableReaction(game, context, "a", { kind: "emoji", body: "🔥" }).ok
-    ).toBe(true)
-    expect(
-      sendTableReaction(game, context, "c", {
-        kind: "preset",
-        body: "BIG MOVE",
-      }).ok
-    ).toBe(true)
+    expect(sendAvatarEmojiReaction(game, context, "a", { body: "🔥" }).ok).toBe(
+      true
+    )
+    expect(sendAvatarEmojiReaction(game, context, "c", { body: "👀" }).ok).toBe(
+      true
+    )
 
-    expect(game.tableReactions).toMatchObject([
+    expect(game.avatarEmojiReactions).toMatchObject([
       { playerId: "a", supportedPlayerId: "b", body: "🔥" },
-      { playerId: "c", supportedPlayerId: null, body: "BIG MOVE" },
+      { playerId: "c", supportedPlayerId: null, body: "👀" },
     ])
-    expect(game.hypeMeter.value).toBe(20)
+  })
+
+  it("rejects the removed quick-taunt phrases", () => {
+    const game = inactiveGame("a")
+
+    const result = sendAvatarEmojiReaction(game, context, "c", {
+      body: "BIG MOVE" as AvatarReactionEmoji,
+    })
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "invalid-avatar-emoji-reaction" },
+    })
   })
 
   it("publishes the support journey and cosmetic titles when the match finishes", () => {
     const game = inactiveGame("a")
     expect(supportPlayer(game, context, "a", "b").ok).toBe(true)
-    expect(
-      sendTableReaction(game, context, "a", { kind: "emoji", body: "🔥" }).ok
-    ).toBe(true)
 
     game.winnerPlacements = [
       { playerId: "b", position: 1, createdAt: "2026-07-10T00:01:00.000Z" },
@@ -176,7 +183,7 @@ describe("table energy and support recap", () => {
     expect(recap?.titles).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ label: "Early Believer", playerId: "a" }),
-        expect.objectContaining({ label: "Hype Captain", playerId: "a" }),
+        expect.objectContaining({ label: "Crowd Favorite", playerId: "b" }),
       ])
     )
   })

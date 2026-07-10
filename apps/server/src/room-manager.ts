@@ -18,7 +18,7 @@ import {
   projectSupportView,
   kickSupporter as kickSupportLink,
   releaseInactiveSupportLinks,
-  sendTableReaction as applyTableReaction,
+  sendAvatarEmojiReaction as applyAvatarEmojiReaction,
   stageCards,
   supportPlayer as createSupportLink,
   supportSquadMemberIds,
@@ -38,7 +38,7 @@ import {
   type PlayCardsInput,
   type RoomSnapshot,
   type SendChatMessageInput,
-  type SendTableReactionInput,
+  type SendAvatarEmojiReactionInput,
   type StageCardsInput,
 } from "@workspace/game"
 
@@ -47,7 +47,7 @@ type ManagedRoom = RoomSnapshot & {
   sessionToPlayerId: Map<string, string>
   connectionIdsByPlayerId: Map<string, Set<string>>
   lastChatAtByPlayerId: Map<string, number>
-  lastReactionAtByPlayerId: Map<string, number>
+  lastAvatarEmojiReactionAtByPlayerId: Map<string, number>
 }
 
 type JoinRoomResult = {
@@ -59,7 +59,7 @@ type JoinRoomResult = {
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 const CHAT_HISTORY_LIMIT = 250
 const CHAT_RATE_LIMIT_MS = 650
-const REACTION_RATE_LIMIT_MS = 1_200
+const AVATAR_EMOJI_REACTION_RATE_LIMIT_MS = 1_200
 
 export class RoomManager {
   private readonly rooms = new Map<string, ManagedRoom>()
@@ -103,7 +103,7 @@ export class RoomManager {
       sessionToPlayerId: new Map([[sessionId, host.id]]),
       connectionIdsByPlayerId: new Map(),
       lastChatAtByPlayerId: new Map(),
-      lastReactionAtByPlayerId: new Map(),
+      lastAvatarEmojiReactionAtByPlayerId: new Map(),
     }
 
     this.rooms.set(code, room)
@@ -254,7 +254,7 @@ export class RoomManager {
       players: room.players,
       houseRules: room.houseRules,
     })
-    room.lastReactionAtByPlayerId.clear()
+    room.lastAvatarEmojiReactionAtByPlayerId.clear()
     touch(room)
 
     return ok(snapshot(room))
@@ -289,7 +289,7 @@ export class RoomManager {
       players: room.players,
       houseRules: room.houseRules,
     })
-    room.lastReactionAtByPlayerId.clear()
+    room.lastAvatarEmojiReactionAtByPlayerId.clear()
     touch(room)
 
     return ok(snapshot(room))
@@ -565,33 +565,34 @@ export class RoomManager {
     })
   }
 
-  sendTableReaction(
+  sendAvatarEmojiReaction(
     code: string,
     playerId: string,
-    input: SendTableReactionInput
+    input: SendAvatarEmojiReactionInput
   ): CommandResult<RoomSnapshot> {
     return this.applyGameCommand(code, (room) => {
       if (!room.gameState)
         return fail("game-not-started", "Start the match first.")
       const nowMs = Date.now()
-      const lastReactionAt = room.lastReactionAtByPlayerId.get(playerId)
+      const lastAvatarEmojiReactionAt =
+        room.lastAvatarEmojiReactionAtByPlayerId.get(playerId)
       if (
-        lastReactionAt !== undefined &&
-        nowMs - lastReactionAt < REACTION_RATE_LIMIT_MS
+        lastAvatarEmojiReactionAt !== undefined &&
+        nowMs - lastAvatarEmojiReactionAt < AVATAR_EMOJI_REACTION_RATE_LIMIT_MS
       ) {
         return fail(
-          "reaction-too-fast",
-          "Give the table reaction a moment to land."
+          "avatar-emoji-reaction-too-fast",
+          "Give the avatar emoji reaction a moment to land."
         )
       }
-      const result = applyTableReaction(
+      const result = applyAvatarEmojiReaction(
         room.gameState,
         gameContext(room),
         playerId,
         input
       )
       if (!result.ok) return result
-      room.lastReactionAtByPlayerId.set(playerId, nowMs)
+      room.lastAvatarEmojiReactionAtByPlayerId.set(playerId, nowMs)
       touch(room)
       return ok(snapshot(room))
     })

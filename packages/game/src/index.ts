@@ -1,11 +1,5 @@
 export type { Card, CardColor, CardFace, NumberValue } from "./cards"
-export {
-  CHAT_EMOJIS,
-  CHAT_GIFS,
-  CHAT_PRESETS,
-  TABLE_REACTION_EMOJIS,
-  TABLE_REACTION_PRESETS,
-} from "./chat"
+export { CHAT_EMOJIS, CHAT_GIFS, CHAT_PRESETS } from "./chat"
 export type {
   ChatGifPreset,
   ChatChannel,
@@ -27,7 +21,7 @@ export {
   projectSupportView,
   kickSupporter,
   releaseInactiveSupportLinks,
-  sendTableReaction,
+  sendAvatarEmojiReaction,
   stageCards,
   supportPlayer,
   supportSquadMemberIds,
@@ -55,14 +49,14 @@ export type {
   SupportEndReason,
   SupportHistoryEntry,
   SupportLink,
-  HypeMeter,
-  SendTableReactionInput,
+  AvatarEmojiReaction,
+  SendAvatarEmojiReactionInput,
   SupportRecap,
   SupportRecapTitle,
-  TableReaction,
-  TableReactionKind,
   WinnerPlacement,
 } from "./game"
+export { AVATAR_REACTION_EMOJIS } from "./reactions"
+export type { AvatarReactionEmoji } from "./reactions"
 export type { HouseRules, Player, RoomSnapshot, RoomStatus } from "./rooms"
 export {
   ROOM_CODE_LENGTH,

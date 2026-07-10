@@ -1,5 +1,4 @@
 import type { Card, CardFace } from "./cards"
-import { TABLE_REACTION_EMOJIS, TABLE_REACTION_PRESETS } from "./chat"
 import { createNoMercyDeck, shuffleCards } from "./deck"
 import type {
   CatchUnoInput,
@@ -12,9 +11,10 @@ import type {
   PublicGameSnapshot,
   StageCardsInput,
   SupportEndReason,
-  SendTableReactionInput,
+  SendAvatarEmojiReactionInput,
   SupportRecap,
 } from "./game"
+import { AVATAR_REACTION_EMOJIS } from "./reactions"
 import type { CommandResult } from "./realtime"
 
 export function createGame(context: GameContext): GameState {
@@ -68,9 +68,7 @@ export function createGame(context: GameContext): GameState {
     supportLinks: [],
     supportHistory: [],
     supportBlocks: [],
-    tableReactions: [],
-    hypeMeter: { value: 0, threshold: 100, celebrationCount: 0 },
-    reactionCountsByPlayerId: {},
+    avatarEmojiReactions: [],
     events: [],
   }
 
@@ -123,8 +121,9 @@ export function projectPublicGame(
     })),
     winnerPlayerId: game.winnerPlayerId,
     supportLinks: game.supportLinks.map((link) => ({ ...link })),
-    tableReactions: game.tableReactions.map((reaction) => ({ ...reaction })),
-    hypeMeter: { ...game.hypeMeter },
+    avatarEmojiReactions: game.avatarEmojiReactions.map((reaction) => ({
+      ...reaction,
+    })),
     supportRecap: isGameFinished(game) ? buildSupportRecap(game) : null,
   }
 }
@@ -345,11 +344,11 @@ export function releaseInactiveSupportLinks(
   return game
 }
 
-export function sendTableReaction(
+export function sendAvatarEmojiReaction(
   game: GameState,
   context: GameContext,
   playerId: string,
-  input: SendTableReactionInput
+  input: SendAvatarEmojiReactionInput
 ): CommandResult<GameState> {
   void context
   if (isGameFinished(game))
@@ -358,39 +357,27 @@ export function sendTableReaction(
     return fail("player-not-found", "You are not part of this match.")
   }
 
-  const validBody =
-    input.kind === "emoji"
-      ? TABLE_REACTION_EMOJIS.includes(
-          input.body as (typeof TABLE_REACTION_EMOJIS)[number]
-        )
-      : input.kind === "preset"
-        ? TABLE_REACTION_PRESETS.includes(
-            input.body as (typeof TABLE_REACTION_PRESETS)[number]
-          )
-        : false
-  if (!validBody) return fail("invalid-reaction", "Choose a table reaction.")
+  const validBody = AVATAR_REACTION_EMOJIS.includes(input.body)
+  if (!validBody) {
+    return fail(
+      "invalid-avatar-emoji-reaction",
+      "Choose an avatar emoji reaction."
+    )
+  }
 
   const supportedPlayerId =
     game.supportLinks.find((link) => link.supporterPlayerId === playerId)
       ?.supportedPlayerId ?? null
   const createdAt = new Date().toISOString()
-  game.tableReactions.push({
-    id: `${Date.now()}:${game.tableReactions.length}:${Math.random().toString(36).slice(2, 8)}`,
+  game.avatarEmojiReactions.push({
+    id: `${Date.now()}:${game.avatarEmojiReactions.length}:${Math.random().toString(36).slice(2, 8)}`,
     playerId,
     supportedPlayerId,
-    kind: input.kind,
     body: input.body,
     createdAt,
   })
-  if (game.tableReactions.length > 24) {
-    game.tableReactions = game.tableReactions.slice(-24)
-  }
-  game.reactionCountsByPlayerId[playerId] =
-    (game.reactionCountsByPlayerId[playerId] ?? 0) + 1
-  game.hypeMeter.value += 10
-  if (game.hypeMeter.value >= game.hypeMeter.threshold) {
-    game.hypeMeter.value -= game.hypeMeter.threshold
-    game.hypeMeter.celebrationCount += 1
+  if (game.avatarEmojiReactions.length > 24) {
+    game.avatarEmojiReactions = game.avatarEmojiReactions.slice(-24)
   }
   return ok(game)
 }
@@ -785,15 +772,6 @@ function buildSupportRecap(game: GameState): SupportRecap {
       label: "Early Believer",
       playerId: earlyBeliever.supporterPlayerId,
       description: "Backed the match winner first.",
-    })
-  }
-
-  const hypeCaptain = maxCountEntry(game.reactionCountsByPlayerId)
-  if (hypeCaptain) {
-    titles.push({
-      label: "Hype Captain",
-      playerId: hypeCaptain[0],
-      description: "Brought the most table energy.",
     })
   }
 

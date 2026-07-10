@@ -63,23 +63,6 @@ export const CHAT_PRESETS = [
   "I respect the chaos.",
 ] as const
 
-export const TABLE_REACTION_EMOJIS = [
-  "🔥",
-  "😱",
-  "😂",
-  "🙌",
-  "💀",
-  "👀",
-] as const
-
-export const TABLE_REACTION_PRESETS = [
-  "BIG MOVE",
-  "NO WAY",
-  "YOU'RE COOKED",
-  "CLUTCH",
-  "ABSOLUTE CHAOS",
-] as const
-
 export const CHAT_GIFS = [
   {
     label: "Applause",

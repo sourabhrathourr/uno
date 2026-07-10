@@ -25,10 +25,10 @@ import { createPortal } from "react-dom"
 import { useWebHaptics } from "web-haptics/react"
 
 import {
+  AVATAR_REACTION_EMOJIS,
   CHAT_EMOJIS,
   CHAT_GIFS,
   CHAT_PRESETS,
-  TABLE_REACTION_EMOJIS,
 } from "@workspace/game"
 import { Button } from "@workspace/ui/components/button"
 import { Checkbox } from "@workspace/ui/components/checkbox"
@@ -46,8 +46,8 @@ import type {
   PlayerGameSnapshot,
   PlayerSocialSnapshot,
   RoomSnapshot,
+  SendAvatarEmojiReactionInput,
   SendChatMessageInput,
-  SendTableReactionInput,
   StageCardsInput,
 } from "@workspace/game"
 import type { PointerEvent, ReactNode } from "react"
@@ -605,9 +605,9 @@ function RoomPage() {
     })
   }
 
-  function sendTableReaction(input: SendTableReactionInput) {
+  function sendAvatarEmojiReaction(input: SendAvatarEmojiReactionInput) {
     if (!socket) return
-    socket.emit("game:sendReaction", input, (result) => {
+    socket.emit("game:sendAvatarEmojiReaction", input, (result) => {
       if (!result.ok) return applyCommandError(result.error)
       applyRoomSnapshot(result.data)
     })
@@ -765,7 +765,7 @@ function RoomPage() {
           onCatchUno={catchUno}
           onSupportPlayer={supportPlayer}
           onKickSupporter={kickSupporter}
-          onSendReaction={sendTableReaction}
+          onSendAvatarEmojiReaction={sendAvatarEmojiReaction}
           onSendChatMessage={sendChatMessage}
           onRestartGame={restartGame}
           voice={voice}
@@ -819,7 +819,7 @@ function GameTable({
   onCatchUno,
   onSupportPlayer,
   onKickSupporter,
-  onSendReaction,
+  onSendAvatarEmojiReaction,
   onSendChatMessage,
   onRestartGame,
   voice,
@@ -841,7 +841,7 @@ function GameTable({
   onCatchUno: (targetPlayerId: string) => void
   onSupportPlayer: (supportedPlayerId: string) => void
   onKickSupporter: (supporterPlayerId: string) => void
-  onSendReaction: (input: SendTableReactionInput) => void
+  onSendAvatarEmojiReaction: (input: SendAvatarEmojiReactionInput) => void
   onSendChatMessage: (input: SendChatMessageInput) => void
   onRestartGame: () => void
   voice: RoomVoiceController
@@ -887,7 +887,6 @@ function GameTable({
   )
   const celebratedWinnerIdsRef = useRef(new Set<string>())
   const acknowledgedWinnerIdsRef = useRef<Set<string> | null>(null)
-  const lastHypeCelebrationRef = useRef(game?.hypeMeter.celebrationCount ?? 0)
   const [rouletteFly, setRouletteFly] = useState<{
     sessionId: string
     cards: Array<Card>
@@ -1050,21 +1049,6 @@ function GameTable({
   const visibleError = error ?? voice.error
   const visibleSupportView =
     supportView?.playerId === spectatingPlayerId ? supportView : null
-
-  useEffect(() => {
-    const celebrationCount = game?.hypeMeter.celebrationCount ?? 0
-    if (celebrationCount > lastHypeCelebrationRef.current) {
-      playFx("successBlip", { volume: 0.34, playbackRate: 1.08 })
-      void confetti({
-        particleCount: 70,
-        spread: 88,
-        startVelocity: 34,
-        origin: { y: 0.64 },
-        colors: ["#f472b6", "#fbbf24", "#ffffff"],
-      })
-    }
-    lastHypeCelebrationRef.current = celebrationCount
-  }, [game?.hypeMeter.celebrationCount])
 
   useEffect(() => {
     const requestId = ++supportViewRequestRef.current
@@ -1736,7 +1720,11 @@ function GameTable({
                   />
                 )}
 
-              <TableEnergyBar game={game} onReact={onSendReaction} compact />
+              <AvatarEmojiReactionBar
+                game={game}
+                onReact={onSendAvatarEmojiReaction}
+                compact
+              />
 
               {gameFinished && game?.supportRecap && (
                 <SupportRecapPanel
@@ -2094,7 +2082,10 @@ function GameTable({
                     />
                   )}
 
-                <TableEnergyBar game={game} onReact={onSendReaction} />
+                <AvatarEmojiReactionBar
+                  game={game}
+                  onReact={onSendAvatarEmojiReaction}
+                />
 
                 {gameFinished && game?.supportRecap && (
                   <SupportRecapPanel
@@ -2171,13 +2162,13 @@ function GameTable({
   )
 }
 
-function TableEnergyBar({
+function AvatarEmojiReactionBar({
   game,
   onReact,
   compact = false,
 }: {
   game: RoomSnapshot["game"]
-  onReact: (input: SendTableReactionInput) => void
+  onReact: (input: SendAvatarEmojiReactionInput) => void
   compact?: boolean
 }) {
   if (!game || game.turnPlayerId === null) return null
@@ -2189,11 +2180,11 @@ function TableEnergyBar({
       }
     >
       <div className="flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-black/30 p-1">
-        {TABLE_REACTION_EMOJIS.map((emoji) => (
+        {AVATAR_REACTION_EMOJIS.map((emoji) => (
           <button
             key={emoji}
             type="button"
-            onClick={() => onReact({ kind: "emoji", body: emoji })}
+            onClick={() => onReact({ body: emoji })}
             className="grid size-7 place-items-center rounded-full text-sm hover:bg-white/10 active:scale-90"
             aria-label={`React ${emoji}`}
           >
@@ -2713,7 +2704,7 @@ function MobileSeatingRing({
                 )?.name
             )
             .filter((name): name is string => Boolean(name)) ?? []
-        const latestReaction = game?.tableReactions
+        const latestReaction = game?.avatarEmojiReactions
           .slice()
           .reverse()
           .find(
@@ -3587,7 +3578,7 @@ function TableSeatRing({
                 .filter((name): name is string => Boolean(name)) ?? []
             }
             latestReaction={
-              game?.tableReactions
+              game?.avatarEmojiReactions
                 .slice()
                 .reverse()
                 .find(
@@ -3633,7 +3624,7 @@ function ReactionAvatarContent({
   fallback,
 }: {
   reaction:
-    | NonNullable<RoomSnapshot["game"]>["tableReactions"][number]
+    | NonNullable<RoomSnapshot["game"]>["avatarEmojiReactions"][number]
     | null
   emojiClassName: string
   fallback: ReactNode
@@ -3643,15 +3634,13 @@ function ReactionAvatarContent({
   )
   const [fading, setFading] = useState(false)
   // Reactions persist in the snapshot; skip whatever was already there on mount
-  const seenIdRef = useRef<string | null>(
-    reaction?.kind === "emoji" ? reaction.id : null
-  )
+  const seenIdRef = useRef<string | null>(reaction?.id ?? null)
   const lastShownAtRef = useRef(0)
   const holdTimerRef = useRef<number | null>(null)
   const fadeTimerRef = useRef<number | null>(null)
 
   useEffect(() => {
-    if (!reaction || reaction.kind !== "emoji") return
+    if (!reaction) return
     if (seenIdRef.current === reaction.id) return
     seenIdRef.current = reaction.id
 
@@ -3690,7 +3679,7 @@ function ReactionAvatarContent({
     <span
       key={display.id}
       className={
-        "pointer-events-none leading-none transition-opacity duration-500 animate-[seat-reaction-pop_0.35s_cubic-bezier(0.2,0,0,1)] " +
+        "pointer-events-none animate-[seat-reaction-pop_0.35s_cubic-bezier(0.2,0,0,1)] leading-none transition-opacity duration-500 " +
         (fading ? "opacity-0" : "opacity-100") +
         " " +
         emojiClassName
@@ -3733,7 +3722,7 @@ function TableAvatarSeat({
   supporterCount: number
   supporterNames: Array<string>
   latestReaction:
-    | NonNullable<RoomSnapshot["game"]>["tableReactions"][number]
+    | NonNullable<RoomSnapshot["game"]>["avatarEmojiReactions"][number]
     | null
   active: boolean
   declaredUno: boolean

@@ -367,9 +367,9 @@ io.on("connection", (socket) => {
     if (result.ok) void emitRoomState(result.data.code, result.data)
   })
 
-  socket.on("game:sendReaction", (input, ack) => {
+  socket.on("game:sendAvatarEmojiReaction", (input, ack) => {
     const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
-      rooms.sendTableReaction(roomCode, playerId, input)
+      rooms.sendAvatarEmojiReaction(roomCode, playerId, input)
     )
     ack(result)
     if (result.ok) void emitRoomState(result.data.code, result.data)

@@ -48,13 +48,9 @@ _Avoid_: Team chat, supporter chat
 A reference in a chat message to one or more players by identity, displayed with `@` and accompanied by a subtle notification for each recipient. Public Chat may mention anyone in the room, while Squad Chat may mention only current squad members.
 _Avoid_: Tag, label
 
-**Table Reaction**:
-A public, cosmetic emoji or preset phrase that any player may send during a match. A supporter's reaction is visually directed toward their supported player.
-_Avoid_: Chat message, supporter power
-
-**Hype Meter**:
-A table-wide cosmetic celebration meter built through reactions from all players. It never changes cards, turns, penalties, or match outcomes.
-_Avoid_: Power meter, supporter meter
+**Avatar Emoji Reaction**:
+A public, cosmetic emoji that any player may send during a match. It briefly replaces the sender's animal avatar, or the supported player's avatar when sent by a supporter.
+_Avoid_: Chat message, supporter power, taunt
 
 **Support Recap**:
 The end-of-match summary of how supporters moved between supported players, together with cosmetic titles earned from that activity.

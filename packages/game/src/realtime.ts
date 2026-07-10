@@ -2,7 +2,7 @@ import type {
   CatchUnoInput,
   PlayerGameSnapshot,
   PlayCardsInput,
-  SendTableReactionInput,
+  SendAvatarEmojiReactionInput,
   StageCardsInput,
 } from "./game"
 
@@ -160,8 +160,8 @@ export type ClientToServerEvents = {
     input: KickSupporterInput,
     ack: (result: CommandResult<RoomSnapshot>) => void
   ) => void
-  "game:sendReaction": (
-    input: SendTableReactionInput,
+  "game:sendAvatarEmojiReaction": (
+    input: SendAvatarEmojiReactionInput,
     ack: (result: CommandResult<RoomSnapshot>) => void
   ) => void
   "game:getSupportView": (

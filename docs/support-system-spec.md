@@ -4,7 +4,7 @@
 
 - A match is one deal from its start until no player can make another play.
 - A hand is the set of cards currently held by one player.
-- Starting a new match resets support links, support blocks, reactions, hype, and the support recap source data.
+- Starting a new match resets support links, support blocks, avatar emoji reactions, and the support recap source data.
 
 ## Support links
 
@@ -37,9 +37,9 @@
 - Public Chat can mention any room player; Squad Chat can mention only current squad members.
 - Mentions bind to player IDs, support multiple recipients, display an unread `@` badge, and play one subtle sound distinct from gameplay audio.
 
-## Table energy and results
+## Avatar reactions and results
 
-- Every player may send curated emoji reactions and preset taunts.
+- Every player may send a curated emoji reaction.
 - A supporter’s reaction is visually directed toward their supported player; other reactions originate from the sender.
-- Reactions build a table-wide cosmetic Hype Meter with a short anti-spam cooldown and no gameplay effect.
+- Emoji reactions use a short anti-spam cooldown and never affect gameplay.
 - The finished match displays a Support Recap with the allegiance journey and cosmetic titles.
