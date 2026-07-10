@@ -1,18 +1,31 @@
 export type ChatMessageKind = "text" | "emoji" | "gif" | "preset"
+export type ChatChannel = "public" | "squad"
 
 export type SendChatMessageInput = {
+  channel?: ChatChannel
   kind: ChatMessageKind
   body: string
+  mentionPlayerIds?: string[]
 }
 
 export type ChatMessage = {
   id: string
   playerId: string
   playerName: string
+  channel: ChatChannel
+  squadPlayerId?: string
+  matchId?: string
   kind: ChatMessageKind
   body: string
+  mentionPlayerIds: string[]
   label?: string
   createdAt: string
+}
+
+export type PlayerSocialSnapshot = {
+  squadPlayerId: string | null
+  squadChatMessages: ChatMessage[]
+  blockedSupportedPlayerIds: string[]
 }
 
 export type ChatGifPreset = {
@@ -48,6 +61,23 @@ export const CHAT_PRESETS = [
   "+10 is a lifestyle.",
   "Caught you slipping.",
   "I respect the chaos.",
+] as const
+
+export const TABLE_REACTION_EMOJIS = [
+  "🔥",
+  "😱",
+  "😂",
+  "🙌",
+  "💀",
+  "👀",
+] as const
+
+export const TABLE_REACTION_PRESETS = [
+  "BIG MOVE",
+  "NO WAY",
+  "YOU'RE COOKED",
+  "CLUTCH",
+  "ABSOLUTE CHAOS",
 ] as const
 
 export const CHAT_GIFS = [

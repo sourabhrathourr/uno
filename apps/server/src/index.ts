@@ -148,6 +148,7 @@ io.on("connection", (socket) => {
 
     const room = snapshot ?? result.data.room
     const playerGame = rooms.getPlayerGame(room.code, result.data.player.id)
+    const playerSocial = rooms.getPlayerSocial(room.code, result.data.player.id)
     emitVoiceStates(socket, room.code)
     ack({
       ok: true,
@@ -156,6 +157,7 @@ io.on("connection", (socket) => {
         player: result.data.player,
         isNewPlayer: result.data.isNewPlayer,
         playerGame,
+        playerSocial,
       },
     })
     void emitRoomState(room.code, room)
@@ -349,7 +351,31 @@ io.on("connection", (socket) => {
     if (result.ok) void emitRoomState(result.data.code, result.data)
   })
 
-  socket.on("game:spectatePlayer", (input, ack) => {
+  socket.on("game:supportPlayer", (input, ack) => {
+    const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
+      rooms.supportPlayer(roomCode, playerId, input.supportedPlayerId)
+    )
+    ack(result)
+    if (result.ok) void emitRoomState(result.data.code, result.data)
+  })
+
+  socket.on("game:kickSupporter", (input, ack) => {
+    const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
+      rooms.kickSupporter(roomCode, playerId, input.supporterPlayerId)
+    )
+    ack(result)
+    if (result.ok) void emitRoomState(result.data.code, result.data)
+  })
+
+  socket.on("game:sendReaction", (input, ack) => {
+    const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
+      rooms.sendTableReaction(roomCode, playerId, input)
+    )
+    ack(result)
+    if (result.ok) void emitRoomState(result.data.code, result.data)
+  })
+
+  socket.on("game:getSupportView", (ack) => {
     const roomCode = socket.data.roomCode
     const playerId = socket.data.playerId
     if (!roomCode || !playerId) {
@@ -359,12 +385,7 @@ io.on("connection", (socket) => {
       })
       return
     }
-    const spectatorView = rooms.getSpectatorView(
-      roomCode,
-      playerId,
-      input.targetPlayerId
-    )
-    ack({ ok: true, data: spectatorView })
+    ack({ ok: true, data: rooms.getSupportView(roomCode, playerId) })
   })
 
   socket.on("disconnect", () => {
@@ -463,6 +484,8 @@ async function emitRoomState(roomCode: string, room?: RoomSnapshot) {
 
     const playerGame = rooms.getPlayerGame(roomCode, playerId)
     if (playerGame) client.emit("game:playerState", playerGame)
+    const playerSocial = rooms.getPlayerSocial(roomCode, playerId)
+    if (playerSocial) client.emit("room:playerSocial", playerSocial)
   }
 }
 
@@ -610,7 +633,8 @@ function normalizeIceServers(value: unknown): IceServerConfig[] {
         : undefined
     const credentialType =
       "credentialType" in server &&
-      (server.credentialType === "password" || server.credentialType === "oauth")
+      (server.credentialType === "password" ||
+        server.credentialType === "oauth")
         ? server.credentialType
         : undefined
 

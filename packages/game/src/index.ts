@@ -3,11 +3,15 @@ export {
   CHAT_EMOJIS,
   CHAT_GIFS,
   CHAT_PRESETS,
+  TABLE_REACTION_EMOJIS,
+  TABLE_REACTION_PRESETS,
 } from "./chat"
 export type {
   ChatGifPreset,
+  ChatChannel,
   ChatMessage,
   ChatMessageKind,
+  PlayerSocialSnapshot,
   SendChatMessageInput,
 } from "./chat"
 export { createNoMercyDeck, shuffleCards } from "./deck"
@@ -20,8 +24,14 @@ export {
   playCards,
   projectPlayerGame,
   projectPublicGame,
-  projectSpectatorView,
+  projectSupportView,
+  kickSupporter,
+  releaseInactiveSupportLinks,
+  sendTableReaction,
   stageCards,
+  supportPlayer,
+  supportSquadMemberIds,
+  supportSquadPlayerIdFor,
   takeDrawPenalty,
 } from "./engine"
 export type {
@@ -30,8 +40,10 @@ export type {
   DrawStack,
   GameEvent,
   GameState,
+  GameContext,
   PendingChoice,
   PlayerGameSnapshot,
+  PlayDecision,
   PlayCardsInput,
   PlayColor,
   PlayerGamePublic,
@@ -39,14 +51,19 @@ export type {
   StageCardsInput,
   StagedPlayPublic,
   StagedPlayState,
+  SupportBlock,
+  SupportEndReason,
+  SupportHistoryEntry,
+  SupportLink,
+  HypeMeter,
+  SendTableReactionInput,
+  SupportRecap,
+  SupportRecapTitle,
+  TableReaction,
+  TableReactionKind,
   WinnerPlacement,
 } from "./game"
-export type {
-  HouseRules,
-  Player,
-  RoomSnapshot,
-  RoomStatus,
-} from "./rooms"
+export type { HouseRules, Player, RoomSnapshot, RoomStatus } from "./rooms"
 export {
   ROOM_CODE_LENGTH,
   ROOM_CODE_PATTERN,
@@ -63,11 +80,12 @@ export type {
   InterServerEvents,
   JoinRoomInput,
   JoinRoomResponse,
+  KickSupporterInput,
   ReadyInput,
   RoomEvent,
   ServerToClientEvents,
   SocketData,
-  SpectatePlayerInput,
+  SupportPlayerInput,
   VoiceSignal,
   VoiceSignalEvent,
   VoiceSignalInput,

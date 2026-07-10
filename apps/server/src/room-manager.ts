@@ -15,8 +15,14 @@ import {
   playCards,
   projectPlayerGame,
   projectPublicGame,
-  projectSpectatorView,
+  projectSupportView,
+  kickSupporter as kickSupportLink,
+  releaseInactiveSupportLinks,
+  sendTableReaction as applyTableReaction,
   stageCards,
+  supportPlayer as createSupportLink,
+  supportSquadMemberIds,
+  supportSquadPlayerIdFor,
   takeDrawPenalty,
   type CatchUnoInput,
   type ChatMessage,
@@ -28,9 +34,11 @@ import {
   type JoinRoomInput,
   type Player,
   type PlayerGameSnapshot,
+  type PlayerSocialSnapshot,
   type PlayCardsInput,
   type RoomSnapshot,
   type SendChatMessageInput,
+  type SendTableReactionInput,
   type StageCardsInput,
 } from "@workspace/game"
 
@@ -39,6 +47,7 @@ type ManagedRoom = RoomSnapshot & {
   sessionToPlayerId: Map<string, string>
   connectionIdsByPlayerId: Map<string, Set<string>>
   lastChatAtByPlayerId: Map<string, number>
+  lastReactionAtByPlayerId: Map<string, number>
 }
 
 type JoinRoomResult = {
@@ -50,6 +59,7 @@ type JoinRoomResult = {
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 const CHAT_HISTORY_LIMIT = 250
 const CHAT_RATE_LIMIT_MS = 650
+const REACTION_RATE_LIMIT_MS = 1_200
 
 export class RoomManager {
   private readonly rooms = new Map<string, ManagedRoom>()
@@ -57,7 +67,10 @@ export class RoomManager {
   createRoom(input: CreateRoomRequest): CommandResult<CreateRoomResponse> {
     const playerName = cleanPlayerName(input.playerName)
     if (!playerName) {
-      return fail("invalid-player-name", "Enter a player name to create a room.")
+      return fail(
+        "invalid-player-name",
+        "Enter a player name to create a room."
+      )
     }
 
     const sessionId = cleanSessionId(input.sessionId)
@@ -90,6 +103,7 @@ export class RoomManager {
       sessionToPlayerId: new Map([[sessionId, host.id]]),
       connectionIdsByPlayerId: new Map(),
       lastChatAtByPlayerId: new Map(),
+      lastReactionAtByPlayerId: new Map(),
     }
 
     this.rooms.set(code, room)
@@ -118,7 +132,10 @@ export class RoomManager {
 
     const playerName = cleanPlayerName(input.playerName)
     if (!playerName) {
-      return fail("invalid-player-name", "Enter a player name to join the room.")
+      return fail(
+        "invalid-player-name",
+        "Enter a player name to join the room."
+      )
     }
 
     const sessionId = cleanSessionId(input.sessionId)
@@ -128,7 +145,9 @@ export class RoomManager {
 
     const existingPlayerId = room.sessionToPlayerId.get(sessionId)
     if (existingPlayerId) {
-      const player = room.players.find((candidate) => candidate.id === existingPlayerId)
+      const player = room.players.find(
+        (candidate) => candidate.id === existingPlayerId
+      )
       if (!player) {
         return fail("player-not-found", "Your seat could not be restored.")
       }
@@ -176,7 +195,7 @@ export class RoomManager {
   setReady(
     code: string,
     playerId: string,
-    ready: boolean,
+    ready: boolean
   ): CommandResult<RoomSnapshot> {
     const room = this.rooms.get(normalizeRoomCode(code))
     if (!room) {
@@ -184,7 +203,10 @@ export class RoomManager {
     }
 
     if (room.status !== "lobby") {
-      return fail("room-not-lobby", "Readiness can only change before the game starts.")
+      return fail(
+        "room-not-lobby",
+        "Readiness can only change before the game starts."
+      )
     }
 
     const player = findPlayer(room, playerId)
@@ -214,18 +236,25 @@ export class RoomManager {
     }
 
     if (room.players.length < 2) {
-      return fail("not-enough-players", "At least two players are needed to start.")
+      return fail(
+        "not-enough-players",
+        "At least two players are needed to start."
+      )
     }
 
     const everyoneReady = room.players.every(
-      (player) => player.id === room.hostPlayerId || player.ready,
+      (player) => player.id === room.hostPlayerId || player.ready
     )
     if (!everyoneReady) {
       return fail("players-not-ready", "Every non-host player must be ready.")
     }
 
     room.status = "playing"
-    room.gameState = createGame({ players: room.players, houseRules: room.houseRules })
+    room.gameState = createGame({
+      players: room.players,
+      houseRules: room.houseRules,
+    })
+    room.lastReactionAtByPlayerId.clear()
     touch(room)
 
     return ok(snapshot(room))
@@ -242,15 +271,25 @@ export class RoomManager {
     }
 
     if (room.status !== "finished" || room.gameState?.turnPlayerId !== null) {
-      return fail("game-not-finished", "Finish this hand before starting another.")
+      return fail(
+        "game-not-finished",
+        "Finish this match before starting another."
+      )
     }
 
     if (room.players.length < 2) {
-      return fail("not-enough-players", "At least two players are needed to restart.")
+      return fail(
+        "not-enough-players",
+        "At least two players are needed to restart."
+      )
     }
 
     room.status = "playing"
-    room.gameState = createGame({ players: room.players, houseRules: room.houseRules })
+    room.gameState = createGame({
+      players: room.players,
+      houseRules: room.houseRules,
+    })
+    room.lastReactionAtByPlayerId.clear()
     touch(room)
 
     return ok(snapshot(room))
@@ -259,7 +298,7 @@ export class RoomManager {
   sendChatMessage(
     code: string,
     playerId: string,
-    input: SendChatMessageInput,
+    input: SendChatMessageInput
   ): CommandResult<RoomSnapshot> {
     const room = this.rooms.get(normalizeRoomCode(code))
     if (!room) {
@@ -274,24 +313,81 @@ export class RoomManager {
     const nowMs = Date.now()
     const lastSentAt = room.lastChatAtByPlayerId.get(playerId) ?? 0
     if (nowMs - lastSentAt < CHAT_RATE_LIMIT_MS) {
-      return fail("chat-too-fast", "Give the table a beat before sending again.")
+      return fail(
+        "chat-too-fast",
+        "Give the table a beat before sending again."
+      )
     }
 
     const prepared = prepareChatMessage(input)
     if (!prepared.ok) return prepared
+
+    const channel = input.channel ?? "public"
+    const squadPlayerId =
+      channel === "squad" && room.gameState
+        ? supportSquadPlayerIdFor(room.gameState, playerId)
+        : null
+    if (channel === "squad" && !squadPlayerId) {
+      return fail(
+        "squad-chat-unavailable",
+        "Join or receive a support squad first."
+      )
+    }
+
+    const mentionPlayerIds = uniquePlayerIds(input.mentionPlayerIds ?? [])
+    const eligibleMentionPlayerIds =
+      channel === "public"
+        ? new Set(room.players.map((candidate) => candidate.id))
+        : new Set(
+            supportSquadMemberIds(
+              room.gameState as GameState,
+              squadPlayerId as string
+            )
+          )
+    if (
+      mentionPlayerIds.some(
+        (mentionedId) => !eligibleMentionPlayerIds.has(mentionedId)
+      )
+    ) {
+      return fail(
+        "mention-not-in-channel",
+        "You can only mention players who can read this chat."
+      )
+    }
+    if (
+      mentionPlayerIds.length > 0 &&
+      (input.kind !== "text" ||
+        mentionPlayerIds.some((mentionedId) => {
+          const mentioned = findPlayer(room, mentionedId)
+          return (
+            !mentioned || !prepared.data.body.includes(`@${mentioned.name}`)
+          )
+        }))
+    ) {
+      return fail(
+        "invalid-mention",
+        "Every mention must appear in the message."
+      )
+    }
 
     const now = new Date(nowMs).toISOString()
     const message: ChatMessage = {
       id: randomUUID(),
       playerId,
       playerName: player.name,
+      channel,
+      squadPlayerId: squadPlayerId ?? undefined,
+      matchId: channel === "squad" ? room.gameState?.matchId : undefined,
       kind: input.kind,
       body: prepared.data.body,
+      mentionPlayerIds,
       label: prepared.data.label,
       createdAt: now,
     }
 
-    room.chatMessages = [...room.chatMessages, message].slice(-CHAT_HISTORY_LIMIT)
+    room.chatMessages = [...room.chatMessages, message].slice(
+      -CHAT_HISTORY_LIMIT
+    )
     room.lastChatAtByPlayerId.set(playerId, nowMs)
     touch(room, now)
 
@@ -301,11 +397,17 @@ export class RoomManager {
   playCards(
     code: string,
     playerId: string,
-    input: PlayCardsInput,
+    input: PlayCardsInput
   ): CommandResult<RoomSnapshot> {
     return this.applyGameCommand(code, (room) => {
-      if (!room.gameState) return fail("game-not-started", "Start the game first.")
-      const result = playCards(room.gameState, gameContext(room), playerId, input)
+      if (!room.gameState)
+        return fail("game-not-started", "Start the game first.")
+      const result = playCards(
+        room.gameState,
+        gameContext(room),
+        playerId,
+        input
+      )
       if (!result.ok) return result
       syncRoomStatus(room)
       touch(room)
@@ -316,11 +418,17 @@ export class RoomManager {
   stageCards(
     code: string,
     playerId: string,
-    input: StageCardsInput,
+    input: StageCardsInput
   ): CommandResult<RoomSnapshot> {
     return this.applyGameCommand(code, (room) => {
-      if (!room.gameState) return fail("game-not-started", "Start the game first.")
-      const result = stageCards(room.gameState, gameContext(room), playerId, input)
+      if (!room.gameState)
+        return fail("game-not-started", "Start the game first.")
+      const result = stageCards(
+        room.gameState,
+        gameContext(room),
+        playerId,
+        input
+      )
       if (!result.ok) return result
       touch(room)
       return ok(snapshot(room))
@@ -329,7 +437,8 @@ export class RoomManager {
 
   drawOne(code: string, playerId: string): CommandResult<RoomSnapshot> {
     return this.applyGameCommand(code, (room) => {
-      if (!room.gameState) return fail("game-not-started", "Start the game first.")
+      if (!room.gameState)
+        return fail("game-not-started", "Start the game first.")
       const result = drawOne(room.gameState, gameContext(room), playerId)
       if (!result.ok) return result
       syncRoomStatus(room)
@@ -340,7 +449,8 @@ export class RoomManager {
 
   endTurn(code: string, playerId: string): CommandResult<RoomSnapshot> {
     return this.applyGameCommand(code, (room) => {
-      if (!room.gameState) return fail("game-not-started", "Start the game first.")
+      if (!room.gameState)
+        return fail("game-not-started", "Start the game first.")
       const result = endTurn(room.gameState, gameContext(room), playerId)
       if (!result.ok) return result
       syncRoomStatus(room)
@@ -351,8 +461,13 @@ export class RoomManager {
 
   takeDrawPenalty(code: string, playerId: string): CommandResult<RoomSnapshot> {
     return this.applyGameCommand(code, (room) => {
-      if (!room.gameState) return fail("game-not-started", "Start the game first.")
-      const result = takeDrawPenalty(room.gameState, gameContext(room), playerId)
+      if (!room.gameState)
+        return fail("game-not-started", "Start the game first.")
+      const result = takeDrawPenalty(
+        room.gameState,
+        gameContext(room),
+        playerId
+      )
       if (!result.ok) return result
       syncRoomStatus(room)
       touch(room)
@@ -360,10 +475,18 @@ export class RoomManager {
     })
   }
 
-  drawRouletteCard(code: string, playerId: string): CommandResult<RoomSnapshot> {
+  drawRouletteCard(
+    code: string,
+    playerId: string
+  ): CommandResult<RoomSnapshot> {
     return this.applyGameCommand(code, (room) => {
-      if (!room.gameState) return fail("game-not-started", "Start the game first.")
-      const result = drawRouletteCard(room.gameState, gameContext(room), playerId)
+      if (!room.gameState)
+        return fail("game-not-started", "Start the game first.")
+      const result = drawRouletteCard(
+        room.gameState,
+        gameContext(room),
+        playerId
+      )
       if (!result.ok) return result
       syncRoomStatus(room)
       touch(room)
@@ -374,11 +497,17 @@ export class RoomManager {
   catchUno(
     code: string,
     playerId: string,
-    input: CatchUnoInput,
+    input: CatchUnoInput
   ): CommandResult<RoomSnapshot> {
     return this.applyGameCommand(code, (room) => {
-      if (!room.gameState) return fail("game-not-started", "Start the game first.")
-      const result = catchUno(room.gameState, gameContext(room), playerId, input)
+      if (!room.gameState)
+        return fail("game-not-started", "Start the game first.")
+      const result = catchUno(
+        room.gameState,
+        gameContext(room),
+        playerId,
+        input
+      )
       if (!result.ok) return result
       syncRoomStatus(room)
       touch(room)
@@ -396,28 +525,126 @@ export class RoomManager {
     }
   }
 
-  getSpectatorView(
+  supportPlayer(
     code: string,
-    spectatorPlayerId: string,
-    targetPlayerId: string,
+    supporterPlayerId: string,
+    supportedPlayerId: string
+  ): CommandResult<RoomSnapshot> {
+    return this.applyGameCommand(code, (room) => {
+      if (!room.gameState)
+        return fail("game-not-started", "Start the match first.")
+      const result = createSupportLink(
+        room.gameState,
+        gameContext(room),
+        supporterPlayerId,
+        supportedPlayerId
+      )
+      if (!result.ok) return result
+      touch(room)
+      return ok(snapshot(room))
+    })
+  }
+
+  kickSupporter(
+    code: string,
+    supportedPlayerId: string,
+    supporterPlayerId: string
+  ): CommandResult<RoomSnapshot> {
+    return this.applyGameCommand(code, (room) => {
+      if (!room.gameState)
+        return fail("game-not-started", "Start the match first.")
+      const result = kickSupportLink(
+        room.gameState,
+        gameContext(room),
+        supportedPlayerId,
+        supporterPlayerId
+      )
+      if (!result.ok) return result
+      touch(room)
+      return ok(snapshot(room))
+    })
+  }
+
+  sendTableReaction(
+    code: string,
+    playerId: string,
+    input: SendTableReactionInput
+  ): CommandResult<RoomSnapshot> {
+    return this.applyGameCommand(code, (room) => {
+      if (!room.gameState)
+        return fail("game-not-started", "Start the match first.")
+      const nowMs = Date.now()
+      const lastReactionAt = room.lastReactionAtByPlayerId.get(playerId)
+      if (
+        lastReactionAt !== undefined &&
+        nowMs - lastReactionAt < REACTION_RATE_LIMIT_MS
+      ) {
+        return fail(
+          "reaction-too-fast",
+          "Give the table reaction a moment to land."
+        )
+      }
+      const result = applyTableReaction(
+        room.gameState,
+        gameContext(room),
+        playerId,
+        input
+      )
+      if (!result.ok) return result
+      room.lastReactionAtByPlayerId.set(playerId, nowMs)
+      touch(room)
+      return ok(snapshot(room))
+    })
+  }
+
+  getSupportView(
+    code: string,
+    supporterPlayerId: string
   ): PlayerGameSnapshot | null {
     const room = this.rooms.get(normalizeRoomCode(code))
-    if (!room?.gameState) return null
-    if (!findPlayer(room, spectatorPlayerId)) return null
-    if (!findPlayer(room, targetPlayerId)) return null
-    return projectSpectatorView(
+    if (!room?.gameState || !findPlayer(room, supporterPlayerId)) return null
+    return projectSupportView(
       room.gameState,
       gameContext(room),
-      spectatorPlayerId,
-      targetPlayerId,
+      supporterPlayerId
     )
   }
 
-  registerConnection(code: string, playerId: string, socketId: string): RoomSnapshot | null {
+  getPlayerSocial(code: string, playerId: string): PlayerSocialSnapshot | null {
+    const room = this.rooms.get(normalizeRoomCode(code))
+    if (!room || !findPlayer(room, playerId)) return null
+    const squadPlayerId = room.gameState
+      ? supportSquadPlayerIdFor(room.gameState, playerId)
+      : null
+    return {
+      squadPlayerId,
+      squadChatMessages: squadPlayerId
+        ? room.chatMessages
+            .filter(
+              (message) =>
+                message.channel === "squad" &&
+                message.squadPlayerId === squadPlayerId &&
+                message.matchId === room.gameState?.matchId
+            )
+            .map(cloneChatMessage)
+        : [],
+      blockedSupportedPlayerIds:
+        room.gameState?.supportBlocks
+          .filter((block) => block.supporterPlayerId === playerId)
+          .map((block) => block.supportedPlayerId) ?? [],
+    }
+  }
+
+  registerConnection(
+    code: string,
+    playerId: string,
+    socketId: string
+  ): RoomSnapshot | null {
     const room = this.rooms.get(normalizeRoomCode(code))
     if (!room || !findPlayer(room, playerId)) return null
 
-    const connectionIds = room.connectionIdsByPlayerId.get(playerId) ?? new Set<string>()
+    const connectionIds =
+      room.connectionIdsByPlayerId.get(playerId) ?? new Set<string>()
     connectionIds.add(socketId)
     room.connectionIdsByPlayerId.set(playerId, connectionIds)
 
@@ -434,7 +661,7 @@ export class RoomManager {
   unregisterConnection(
     code: string,
     playerId: string,
-    socketId: string,
+    socketId: string
   ): RoomSnapshot | null {
     const room = this.rooms.get(normalizeRoomCode(code))
     if (!room) return null
@@ -468,7 +695,7 @@ export class RoomManager {
 
   private applyGameCommand(
     code: string,
-    command: (room: ManagedRoom) => CommandResult<RoomSnapshot>,
+    command: (room: ManagedRoom) => CommandResult<RoomSnapshot>
   ): CommandResult<RoomSnapshot> {
     const room = this.rooms.get(normalizeRoomCode(code))
     if (!room) return fail("room-not-found", "That room code does not exist.")
@@ -505,7 +732,9 @@ function createPlayer(input: {
   }
 }
 
-function mergeHouseRules(overrides: Partial<HouseRules> | undefined): HouseRules {
+function mergeHouseRules(
+  overrides: Partial<HouseRules> | undefined
+): HouseRules {
   const defaults = createDefaultHouseRules()
   return {
     ...defaults,
@@ -515,13 +744,13 @@ function mergeHouseRules(overrides: Partial<HouseRules> | undefined): HouseRules
       overrides?.startingHandSize,
       1,
       20,
-      defaults.startingHandSize,
+      defaults.startingHandSize
     ),
     mercyHandLimit: clampInteger(
       overrides?.mercyHandLimit,
       5,
       50,
-      defaults.mercyHandLimit,
+      defaults.mercyHandLimit
     ),
   }
 }
@@ -530,7 +759,7 @@ function clampInteger(
   value: number | undefined,
   min: number,
   max: number,
-  fallback: number,
+  fallback: number
 ): number {
   if (typeof value !== "number" || !Number.isInteger(value)) return fallback
   return Math.min(max, Math.max(min, value))
@@ -545,7 +774,7 @@ function nextSeat(room: ManagedRoom): number {
 }
 
 function prepareChatMessage(
-  input: SendChatMessageInput,
+  input: SendChatMessageInput
 ): CommandResult<{ body: string; label?: string }> {
   if (!input || typeof input.body !== "string") {
     return fail("invalid-chat-message", "Send a valid chat message.")
@@ -573,7 +802,10 @@ function prepareChatMessage(
       return ok({ body: gif.url, label: gif.label })
     }
     default:
-      return fail("invalid-chat-kind", "That chat message type is not supported.")
+      return fail(
+        "invalid-chat-kind",
+        "That chat message type is not supported."
+      )
   }
 }
 
@@ -592,9 +824,13 @@ function snapshot(room: ManagedRoom): RoomSnapshot {
     status: room.status,
     hostPlayerId: room.hostPlayerId,
     players: room.players.map((player) => ({ ...player })),
-    chatMessages: room.chatMessages.map((message) => ({ ...message })),
+    chatMessages: room.chatMessages
+      .filter((message) => message.channel === "public")
+      .map(cloneChatMessage),
     houseRules: { ...room.houseRules },
-    game: room.gameState ? projectPublicGame(room.gameState, gameContext(room)) : null,
+    game: room.gameState
+      ? projectPublicGame(room.gameState, gameContext(room))
+      : null,
     version: room.version,
     createdAt: room.createdAt,
     updatedAt: room.updatedAt,
@@ -609,9 +845,23 @@ function gameContext(room: ManagedRoom) {
 }
 
 function syncRoomStatus(room: ManagedRoom) {
+  if (room.gameState) {
+    releaseInactiveSupportLinks(room.gameState, gameContext(room))
+  }
   if (room.gameState?.turnPlayerId === null) {
     room.status = "finished"
   }
+}
+
+function cloneChatMessage(message: ChatMessage): ChatMessage {
+  return {
+    ...message,
+    mentionPlayerIds: [...message.mentionPlayerIds],
+  }
+}
+
+function uniquePlayerIds(playerIds: string[]): string[] {
+  return Array.from(new Set(playerIds.filter(Boolean)))
 }
 
 function cleanPlayerName(value: string): string {

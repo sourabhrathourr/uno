@@ -1,4 +1,5 @@
 import type { Card, CardFace } from "./cards"
+import { TABLE_REACTION_EMOJIS, TABLE_REACTION_PRESETS } from "./chat"
 import { createNoMercyDeck, shuffleCards } from "./deck"
 import type {
   CatchUnoInput,
@@ -10,6 +11,9 @@ import type {
   PlayerGameSnapshot,
   PublicGameSnapshot,
   StageCardsInput,
+  SupportEndReason,
+  SendTableReactionInput,
+  SupportRecap,
 } from "./game"
 import type { CommandResult } from "./realtime"
 
@@ -23,7 +27,10 @@ export function createGame(context: GameContext): GameState {
   const handsByPlayerId: Record<string, Card[]> = {}
 
   for (const playerId of playerOrder) {
-    handsByPlayerId[playerId] = deck.splice(0, context.houseRules.startingHandSize)
+    handsByPlayerId[playerId] = deck.splice(
+      0,
+      context.houseRules.startingHandSize
+    )
   }
 
   const discardPile: Card[] = []
@@ -40,6 +47,7 @@ export function createGame(context: GameContext): GameState {
   discardPile.push(firstDiscard)
 
   const game: GameState = {
+    matchId: `${Date.now()}:${Math.random().toString(36).slice(2, 10)}`,
     playerOrder,
     direction: 1,
     currentColor: colorFor(firstDiscard),
@@ -57,6 +65,12 @@ export function createGame(context: GameContext): GameState {
     stagedPlay: null,
     winnerPlacements: [],
     winnerPlayerId: null,
+    supportLinks: [],
+    supportHistory: [],
+    supportBlocks: [],
+    tableReactions: [],
+    hypeMeter: { value: 0, threshold: 100, celebrationCount: 0 },
+    reactionCountsByPlayerId: {},
     events: [],
   }
 
@@ -70,9 +84,10 @@ export function createGame(context: GameContext): GameState {
 
 export function projectPublicGame(
   game: GameState,
-  context: GameContext,
+  context: GameContext
 ): PublicGameSnapshot {
   return {
+    matchId: game.matchId,
     direction: game.direction,
     currentColor: game.currentColor,
     turnPlayerId: game.turnPlayerId,
@@ -94,7 +109,8 @@ export function projectPublicGame(
           playerId: player.id,
           handCount,
           declaredUno:
-            handCount === 1 && (game.unoDeclaredPlayerIds ?? []).includes(player.id),
+            handCount === 1 &&
+            (game.unoDeclaredPlayerIds ?? []).includes(player.id),
           eliminated: game.eliminatedPlayerIds.includes(player.id),
           winnerPlacement: winnerPlacement ? { ...winnerPlacement } : null,
           connected: player.connected,
@@ -102,15 +118,53 @@ export function projectPublicGame(
         }
       }),
     events: game.events.slice(-16).map((event) => ({ ...event })),
-    winnerPlacements: game.winnerPlacements.map((placement) => ({ ...placement })),
+    winnerPlacements: game.winnerPlacements.map((placement) => ({
+      ...placement,
+    })),
     winnerPlayerId: game.winnerPlayerId,
+    supportLinks: game.supportLinks.map((link) => ({ ...link })),
+    tableReactions: game.tableReactions.map((reaction) => ({ ...reaction })),
+    hypeMeter: { ...game.hypeMeter },
+    supportRecap: isGameFinished(game) ? buildSupportRecap(game) : null,
   }
+}
+
+export function supportSquadPlayerIdFor(
+  game: GameState,
+  playerId: string
+): string | null {
+  const supportedLink = game.supportLinks.find(
+    (link) => link.supporterPlayerId === playerId
+  )
+  if (supportedLink) return supportedLink.supportedPlayerId
+
+  const hasSupporters = game.supportLinks.some(
+    (link) => link.supportedPlayerId === playerId
+  )
+  const hadSupporters = game.supportHistory.some(
+    (entry) => entry.supportedPlayerId === playerId
+  )
+  return isPlayerActive(game, playerId) && (hasSupporters || hadSupporters)
+    ? playerId
+    : null
+}
+
+export function supportSquadMemberIds(
+  game: GameState,
+  squadPlayerId: string
+): string[] {
+  return [
+    squadPlayerId,
+    ...game.supportLinks
+      .filter((link) => link.supportedPlayerId === squadPlayerId)
+      .map((link) => link.supporterPlayerId),
+  ]
 }
 
 export function projectPlayerGame(
   game: GameState,
   context: GameContext,
-  playerId: string,
+  playerId: string
 ): PlayerGameSnapshot {
   void context
   const hand =
@@ -124,14 +178,15 @@ export function projectPlayerGame(
     playableCardIds: hand
       .filter((card) => canPlaySingleCard(game, playerId, card))
       .map((card) => card.id),
-    catchablePlayerIds: game.unoVulnerablePlayerIds.filter(
-      (targetPlayerId) =>
-        targetPlayerId !== playerId &&
-        isPlayerActive(game, targetPlayerId) &&
-        (game.handsByPlayerId[targetPlayerId]?.length ?? 0) === 1,
-    ),
-    canDraw:
-      canDrawOneFromDeck(game, playerId),
+    catchablePlayerIds: isPlayerActive(game, playerId)
+      ? game.unoVulnerablePlayerIds.filter(
+          (targetPlayerId) =>
+            targetPlayerId !== playerId &&
+            isPlayerActive(game, targetPlayerId) &&
+            (game.handsByPlayerId[targetPlayerId]?.length ?? 0) === 1
+        )
+      : [],
+    canDraw: canDrawOneFromDeck(game, playerId),
     canEndTurn:
       !isGameFinished(game) &&
       game.turnPlayerId === playerId &&
@@ -147,25 +202,19 @@ export function projectPlayerGame(
   }
 }
 
-export function projectSpectatorView(
+export function projectSupportView(
   game: GameState,
   context: GameContext,
-  spectatorPlayerId: string,
-  targetPlayerId: string,
+  supporterPlayerId: string
 ): PlayerGameSnapshot | null {
-  void context
-  // Only eliminated/won (inactive) players can spectate
-  if (isPlayerActive(game, spectatorPlayerId)) return null
-  // Target must be in the game
-  if (!game.playerOrder.includes(targetPlayerId)) return null
-  // Target must be active (non-eliminated, non-won)
-  if (!isPlayerActive(game, targetPlayerId)) return null
+  const link = game.supportLinks.find(
+    (candidate) => candidate.supporterPlayerId === supporterPlayerId
+  )
+  if (!link || !isPlayerActive(game, link.supportedPlayerId)) return null
 
-  const hand = game.handsByPlayerId[targetPlayerId] ?? []
+  const view = projectPlayerGame(game, context, link.supportedPlayerId)
   return {
-    playerId: targetPlayerId,
-    hand: hand.map((card) => ({ ...card })),
-    playableCardIds: [],
+    ...view,
     catchablePlayerIds: [],
     canDraw: false,
     canEndTurn: false,
@@ -173,20 +222,195 @@ export function projectSpectatorView(
   }
 }
 
+export function supportPlayer(
+  game: GameState,
+  context: GameContext,
+  supporterPlayerId: string,
+  supportedPlayerId: string
+): CommandResult<GameState> {
+  if (isGameFinished(game))
+    return fail("game-finished", "This match is finished.")
+  if (!game.playerOrder.includes(supporterPlayerId)) {
+    return fail("player-not-found", "The supporter is not part of this match.")
+  }
+  if (!game.playerOrder.includes(supportedPlayerId)) {
+    return fail("player-not-found", "That player is not part of this match.")
+  }
+  if (supporterPlayerId === supportedPlayerId) {
+    return fail("cannot-support-self", "You cannot support yourself.")
+  }
+  if (isPlayerActive(game, supporterPlayerId)) {
+    return fail("player-active", "Only inactive players can become supporters.")
+  }
+  if (!isPlayerActive(game, supportedPlayerId)) {
+    return fail(
+      "supported-player-inactive",
+      "Choose an active player to support."
+    )
+  }
+  if (
+    game.supportLinks.some(
+      (link) => link.supporterPlayerId === supporterPlayerId
+    )
+  ) {
+    return fail(
+      "support-locked",
+      "You are already supporting an active player."
+    )
+  }
+  if (
+    game.supportBlocks.some(
+      (block) =>
+        block.supporterPlayerId === supporterPlayerId &&
+        block.supportedPlayerId === supportedPlayerId
+    )
+  ) {
+    return fail("support-blocked", "That player removed you from their squad.")
+  }
+
+  const createdAt = new Date().toISOString()
+  const link = { supporterPlayerId, supportedPlayerId, createdAt }
+  game.supportLinks.push(link)
+  game.supportHistory.push({ ...link, endedAt: null, endReason: null })
+  pushEvent(game, {
+    type: "support-started",
+    playerId: supporterPlayerId,
+    targetPlayerId: supportedPlayerId,
+    message: `${playerName(context, supporterPlayerId)} is backing ${playerName(
+      context,
+      supportedPlayerId
+    )}.`,
+  })
+  return ok(game)
+}
+
+export function kickSupporter(
+  game: GameState,
+  context: GameContext,
+  supportedPlayerId: string,
+  supporterPlayerId: string
+): CommandResult<GameState> {
+  if (!isPlayerActive(game, supportedPlayerId)) {
+    return fail(
+      "player-inactive",
+      "Only an active player can manage their squad."
+    )
+  }
+  const link = game.supportLinks.find(
+    (candidate) =>
+      candidate.supporterPlayerId === supporterPlayerId &&
+      candidate.supportedPlayerId === supportedPlayerId
+  )
+  if (!link)
+    return fail("support-link-not-found", "That player is not supporting you.")
+
+  endSupportLink(game, link, "supporter-kicked")
+  game.supportBlocks.push({
+    supporterPlayerId,
+    supportedPlayerId,
+    createdAt: new Date().toISOString(),
+  })
+  pushEvent(game, {
+    type: "support-kicked",
+    playerId: supportedPlayerId,
+    targetPlayerId: supporterPlayerId,
+    message: `${playerName(context, supportedPlayerId)} kicked ${playerName(
+      context,
+      supporterPlayerId
+    )} from their squad.`,
+  })
+  return ok(game)
+}
+
+export function releaseInactiveSupportLinks(
+  game: GameState,
+  context: GameContext
+): GameState {
+  for (const link of [...game.supportLinks]) {
+    const matchFinished = isGameFinished(game)
+    if (!matchFinished && isPlayerActive(game, link.supportedPlayerId)) continue
+    const reason: SupportEndReason = matchFinished
+      ? "match-finished"
+      : "supported-player-inactive"
+    endSupportLink(game, link, reason)
+    pushEvent(game, {
+      type: "support-ended",
+      playerId: link.supporterPlayerId,
+      targetPlayerId: link.supportedPlayerId,
+      message: matchFinished
+        ? `${playerName(context, link.supporterPlayerId)} supported ${playerName(context, link.supportedPlayerId)} through the end of the match.`
+        : `${playerName(context, link.supporterPlayerId)} can choose a new player to support.`,
+    })
+  }
+  return game
+}
+
+export function sendTableReaction(
+  game: GameState,
+  context: GameContext,
+  playerId: string,
+  input: SendTableReactionInput
+): CommandResult<GameState> {
+  void context
+  if (isGameFinished(game))
+    return fail("game-finished", "This match is finished.")
+  if (!game.playerOrder.includes(playerId)) {
+    return fail("player-not-found", "You are not part of this match.")
+  }
+
+  const validBody =
+    input.kind === "emoji"
+      ? TABLE_REACTION_EMOJIS.includes(
+          input.body as (typeof TABLE_REACTION_EMOJIS)[number]
+        )
+      : input.kind === "preset"
+        ? TABLE_REACTION_PRESETS.includes(
+            input.body as (typeof TABLE_REACTION_PRESETS)[number]
+          )
+        : false
+  if (!validBody) return fail("invalid-reaction", "Choose a table reaction.")
+
+  const supportedPlayerId =
+    game.supportLinks.find((link) => link.supporterPlayerId === playerId)
+      ?.supportedPlayerId ?? null
+  const createdAt = new Date().toISOString()
+  game.tableReactions.push({
+    id: `${Date.now()}:${game.tableReactions.length}:${Math.random().toString(36).slice(2, 8)}`,
+    playerId,
+    supportedPlayerId,
+    kind: input.kind,
+    body: input.body,
+    createdAt,
+  })
+  if (game.tableReactions.length > 24) {
+    game.tableReactions = game.tableReactions.slice(-24)
+  }
+  game.reactionCountsByPlayerId[playerId] =
+    (game.reactionCountsByPlayerId[playerId] ?? 0) + 1
+  game.hypeMeter.value += 10
+  if (game.hypeMeter.value >= game.hypeMeter.threshold) {
+    game.hypeMeter.value -= game.hypeMeter.threshold
+    game.hypeMeter.celebrationCount += 1
+  }
+  return ok(game)
+}
+
 export function stageCards(
   game: GameState,
   context: GameContext,
   playerId: string,
-  input: StageCardsInput,
+  input: StageCardsInput
 ): CommandResult<GameState> {
   void context
   if (isGameFinished(game)) {
     return fail("game-finished", "This game is already finished.")
   }
-  if (game.turnPlayerId !== playerId) return fail("not-your-turn", "It is not your turn.")
-  if (game.pendingChoice) return fail("pending-choice", "Resolve the pending choice first.")
+  if (game.turnPlayerId !== playerId)
+    return fail("not-your-turn", "It is not your turn.")
+  if (game.pendingChoice)
+    return fail("pending-choice", "Resolve the pending choice first.")
   if (!isPlayerActive(game, playerId)) {
-    return fail("player-inactive", "You are spectating this game.")
+    return fail("player-inactive", "Inactive players cannot play cards.")
   }
 
   if (input.cardIds.length === 0) {
@@ -204,6 +428,10 @@ export function stageCards(
     playerId,
     kind: "play",
     cardIds: unique(input.cardIds),
+    chosenColor: input.chosenColor,
+    declaredUno: input.declaredUno,
+    rotateHands: input.rotateHands,
+    swapWithPlayerId: input.swapWithPlayerId,
   }
 
   return ok(game)
@@ -213,7 +441,7 @@ export function playCards(
   game: GameState,
   context: GameContext,
   playerId: string,
-  input: PlayCardsInput,
+  input: PlayCardsInput
 ): CommandResult<GameState> {
   const cardsResult = getCardsFromHand(game, playerId, input.cardIds)
   if (!cardsResult.ok) return cardsResult
@@ -242,7 +470,7 @@ export function playCards(
 
   const finalCards = orderDiscardPileCards(
     [...discardExtras, ...cards],
-    input.topCardId ?? primaryCard.id,
+    input.topCardId ?? primaryCard.id
   )
   const topPlayedCard = finalCards[finalCards.length - 1] ?? primaryCard
   game.discardPile.push(...finalCards)
@@ -270,9 +498,12 @@ export function playCards(
     })
   } else if (context.houseRules.callUno && hand.length === 1) {
     game.unoDeclaredPlayerIds = game.unoDeclaredPlayerIds.filter(
-      (targetPlayerId) => targetPlayerId !== playerId,
+      (targetPlayerId) => targetPlayerId !== playerId
     )
-    game.unoVulnerablePlayerIds = unique([...game.unoVulnerablePlayerIds, playerId])
+    game.unoVulnerablePlayerIds = unique([
+      ...game.unoVulnerablePlayerIds,
+      playerId,
+    ])
   }
 
   if (hand.length === 0) {
@@ -291,22 +522,33 @@ export function playCards(
 export function drawOne(
   game: GameState,
   context: GameContext,
-  playerId: string,
+  playerId: string
 ): CommandResult<GameState> {
   if (isGameFinished(game)) {
     return fail("game-finished", "This game is already finished.")
   }
-  if (game.turnPlayerId !== playerId) return fail("not-your-turn", "It is not your turn.")
-  if (game.pendingChoice) return fail("pending-choice", "Resolve the pending choice first.")
-  const drawStackPowerEscape = canDrawBeforeStackingFinalPowerCard(game, playerId)
+  if (game.turnPlayerId !== playerId)
+    return fail("not-your-turn", "It is not your turn.")
+  if (game.pendingChoice)
+    return fail("pending-choice", "Resolve the pending choice first.")
+  const drawStackPowerEscape = canDrawBeforeStackingFinalPowerCard(
+    game,
+    playerId
+  )
   if (game.drawStack && !drawStackPowerEscape) {
-    return fail("draw-stack-active", "Stack a draw card or take the full penalty.")
+    return fail(
+      "draw-stack-active",
+      "Stack a draw card or take the full penalty."
+    )
   }
   if (!isPlayerActive(game, playerId)) {
-    return fail("player-inactive", "You are spectating this game.")
+    return fail("player-inactive", "Inactive players cannot draw cards.")
   }
   if (game.drawnThisTurnPlayerId === playerId) {
-    return fail("already-drew", "You already drew this turn. Play a card or pass.")
+    return fail(
+      "already-drew",
+      "You already drew this turn. Play a card or pass."
+    )
   }
 
   beginTurnAction(game, playerId)
@@ -333,21 +575,26 @@ export function drawOne(
 export function endTurn(
   game: GameState,
   context: GameContext,
-  playerId: string,
+  playerId: string
 ): CommandResult<GameState> {
   if (isGameFinished(game)) {
     return fail("game-finished", "This game is already finished.")
   }
-  if (game.turnPlayerId !== playerId) return fail("not-your-turn", "It is not your turn.")
-  if (game.pendingChoice) return fail("pending-choice", "Resolve the pending choice first.")
+  if (game.turnPlayerId !== playerId)
+    return fail("not-your-turn", "It is not your turn.")
+  if (game.pendingChoice)
+    return fail("pending-choice", "Resolve the pending choice first.")
   if (game.drawStack) {
-    return fail("draw-stack-active", "Stack a draw card or take the full penalty.")
+    return fail(
+      "draw-stack-active",
+      "Stack a draw card or take the full penalty."
+    )
   }
   if (game.drawnThisTurnPlayerId !== playerId) {
     return fail("draw-before-ending", "Draw a card before passing your turn.")
   }
   if (!isPlayerActive(game, playerId)) {
-    return fail("player-inactive", "You are spectating this game.")
+    return fail("player-inactive", "Inactive players cannot end turns.")
   }
 
   pushEvent(game, {
@@ -363,7 +610,7 @@ export function endTurn(
 export function takeDrawPenalty(
   game: GameState,
   context: GameContext,
-  playerId: string,
+  playerId: string
 ): CommandResult<GameState> {
   if (!game.drawStack || game.drawStack.targetPlayerId !== playerId) {
     return fail("no-draw-penalty", "There is no draw penalty waiting for you.")
@@ -391,7 +638,7 @@ export function takeDrawPenalty(
 export function drawRouletteCard(
   game: GameState,
   context: GameContext,
-  playerId: string,
+  playerId: string
 ): CommandResult<GameState> {
   if (game.pendingChoice?.type !== "roulette-draw") {
     return fail("no-roulette-draw", "There is no roulette pickup waiting.")
@@ -431,7 +678,7 @@ function completeRouletteDraw(
   game: GameState,
   context: GameContext,
   playerId: string,
-  pendingChoice: NonNullable<GameState["pendingChoice"]>,
+  pendingChoice: NonNullable<GameState["pendingChoice"]>
 ): CommandResult<GameState> {
   const drawnCards = pendingChoice.drawnCards
 
@@ -471,8 +718,11 @@ export function catchUno(
   game: GameState,
   context: GameContext,
   playerId: string,
-  input: CatchUnoInput,
+  input: CatchUnoInput
 ): CommandResult<GameState> {
+  if (!isPlayerActive(game, playerId)) {
+    return fail("player-inactive", "Inactive players cannot call UNO.")
+  }
   if (playerId === input.targetPlayerId) {
     return fail("cannot-catch-self", "You cannot catch yourself.")
   }
@@ -484,7 +734,7 @@ export function catchUno(
   const drawn = drawCards(game, 2)
   addCardsToHand(game, input.targetPlayerId, drawn)
   game.unoVulnerablePlayerIds = game.unoVulnerablePlayerIds.filter(
-    (targetPlayerId) => targetPlayerId !== input.targetPlayerId,
+    (targetPlayerId) => targetPlayerId !== input.targetPlayerId
   )
 
   pushEvent(game, {
@@ -493,7 +743,7 @@ export function catchUno(
     targetPlayerId: input.targetPlayerId,
     message: `${playerName(context, playerId)} caught ${playerName(
       context,
-      input.targetPlayerId,
+      input.targetPlayerId
     )}. +2 cards.`,
   })
 
@@ -501,12 +751,88 @@ export function catchUno(
   return ok(game)
 }
 
+function endSupportLink(
+  game: GameState,
+  link: GameState["supportLinks"][number],
+  reason: SupportEndReason
+) {
+  game.supportLinks = game.supportLinks.filter(
+    (candidate) => candidate.supporterPlayerId !== link.supporterPlayerId
+  )
+  const historyEntry = game.supportHistory.find(
+    (entry) =>
+      entry.supporterPlayerId === link.supporterPlayerId &&
+      entry.supportedPlayerId === link.supportedPlayerId &&
+      entry.endedAt === null
+  )
+  if (historyEntry) {
+    historyEntry.endedAt = new Date().toISOString()
+    historyEntry.endReason = reason
+  }
+}
+
+function buildSupportRecap(game: GameState): SupportRecap {
+  const journey = game.supportHistory.map((entry) => ({ ...entry }))
+  const titles: SupportRecap["titles"] = []
+  const firstWinnerId = game.winnerPlacements.find(
+    (placement) => placement.position === 1
+  )?.playerId
+  const earlyBeliever = firstWinnerId
+    ? journey.find((entry) => entry.supportedPlayerId === firstWinnerId)
+    : null
+  if (earlyBeliever) {
+    titles.push({
+      label: "Early Believer",
+      playerId: earlyBeliever.supporterPlayerId,
+      description: "Backed the match winner first.",
+    })
+  }
+
+  const hypeCaptain = maxCountEntry(game.reactionCountsByPlayerId)
+  if (hypeCaptain) {
+    titles.push({
+      label: "Hype Captain",
+      playerId: hypeCaptain[0],
+      description: "Brought the most table energy.",
+    })
+  }
+
+  const supportCounts = journey.reduce<Record<string, number>>(
+    (counts, entry) => {
+      counts[entry.supportedPlayerId] =
+        (counts[entry.supportedPlayerId] ?? 0) + 1
+      return counts
+    },
+    {}
+  )
+  const crowdFavorite = maxCountEntry(supportCounts)
+  if (crowdFavorite) {
+    titles.push({
+      label: "Crowd Favorite",
+      playerId: crowdFavorite[0],
+      description: "Drew the largest supporter crowd.",
+    })
+  }
+  return { journey, titles }
+}
+
+function maxCountEntry(
+  counts: Record<string, number>
+): [string, number] | null {
+  return (
+    Object.entries(counts).sort(
+      ([firstId, firstCount], [secondId, secondCount]) =>
+        secondCount - firstCount || firstId.localeCompare(secondId)
+    )[0] ?? null
+  )
+}
+
 function applyPlayedCardsEffect(
   game: GameState,
   context: GameContext,
   playerId: string,
   cards: Card[],
-  input: PlayCardsInput,
+  input: PlayCardsInput
 ) {
   const drawPlayedCards = cards.filter((card) => drawCount(card))
   if (drawPlayedCards.length > 0) {
@@ -522,9 +848,11 @@ function applyPlayedCardsEffect(
 
     const totalDrawAmount = drawPlayedCards.reduce(
       (total, card) => total + (drawCount(card) ?? 0),
-      0,
+      0
     )
-    const minimum = Math.max(...drawPlayedCards.map((card) => drawCount(card) ?? 0))
+    const minimum = Math.max(
+      ...drawPlayedCards.map((card) => drawCount(card) ?? 0)
+    )
     const targetPlayerId = nextPlayerId(game, playerId, 1)
 
     game.drawStack = {
@@ -541,7 +869,9 @@ function applyPlayedCardsEffect(
 
   switch (card.face.kind) {
     case "skip": {
-      const skipCount = cards.filter((played) => played.face.kind === "skip").length
+      const skipCount = cards.filter(
+        (played) => played.face.kind === "skip"
+      ).length
       pushEvent(game, {
         type: "turn-skipped",
         playerId,
@@ -562,7 +892,9 @@ function applyPlayedCardsEffect(
       game.turnPlayerId = playerId
       return
     case "reverse": {
-      const reverseCount = cards.filter((played) => played.face.kind === "reverse").length
+      const reverseCount = cards.filter(
+        (played) => played.face.kind === "reverse"
+      ).length
       if (reverseCount % 2 === 1) {
         game.direction = game.direction === 1 ? -1 : 1
         pushEvent(game, {
@@ -620,7 +952,7 @@ function applyPlayedCardsEffect(
           targetPlayerId,
           message: `${playerName(context, playerId)} swapped hands with ${playerName(
             context,
-            targetPlayerId,
+            targetPlayerId
           )}.`,
         })
       }
@@ -644,7 +976,7 @@ function applyPlayedCardsEffect(
         targetPlayerId,
         message: `${playerName(context, playerId)} called ${rouletteColor}. ${playerName(
           context,
-          targetPlayerId,
+          targetPlayerId
         )} must draw until ${rouletteColor}.`,
       })
       return
@@ -659,15 +991,17 @@ function validatePlay(
   context: GameContext,
   playerId: string,
   cards: Card[],
-  input: PlayCardsInput,
+  input: PlayCardsInput
 ): CommandResult<GameState> {
   if (isGameFinished(game)) {
     return fail("game-finished", "This game is already finished.")
   }
-  if (game.turnPlayerId !== playerId) return fail("not-your-turn", "It is not your turn.")
-  if (game.pendingChoice) return fail("pending-choice", "Resolve the pending choice first.")
+  if (game.turnPlayerId !== playerId)
+    return fail("not-your-turn", "It is not your turn.")
+  if (game.pendingChoice)
+    return fail("pending-choice", "Resolve the pending choice first.")
   if (!isPlayerActive(game, playerId)) {
-    return fail("player-inactive", "You are spectating this game.")
+    return fail("player-inactive", "Inactive players cannot play cards.")
   }
 
   if (cards.length === 0) return fail("no-cards", "Select at least one card.")
@@ -679,14 +1013,21 @@ function validatePlay(
     const drawStackValidation = validateDrawStackPlay(game, cards)
     if (!drawStackValidation.ok) return drawStackValidation
   } else if (cards.length > 1) {
-    if (!sameNumberGroup(cards) && !sameDrawGroup(cards) && !sameActionGroup(cards)) {
+    if (
+      !sameNumberGroup(cards) &&
+      !sameDrawGroup(cards) &&
+      !sameActionGroup(cards)
+    ) {
       return fail(
         "multi-card-group-mismatch",
-        "Grouped cards must share a number, draw, skip, or reverse symbol.",
+        "Grouped cards must share a number, draw, skip, or reverse symbol."
       )
     }
     if (!cards.some((card) => canPlaySingleCard(game, playerId, card))) {
-      return fail("not-playable", "At least one selected card must match the pile.")
+      return fail(
+        "not-playable",
+        "At least one selected card must match the pile."
+      )
     }
   } else if (!canPlaySingleCard(game, playerId, cards[0] as Card)) {
     return fail("not-playable", "That card does not match the pile.")
@@ -698,28 +1039,49 @@ function validatePlay(
   }
 
   const finalHandCount = handCountAfterPlay(game, playerId, cards, input)
-  if (finalHandCount === 0 && cards.some((card) => isForbiddenFinalCard(card))) {
-    return fail("power-card-finish", "House rule: you cannot go out on a power card.")
+  if (
+    finalHandCount === 0 &&
+    cards.some((card) => isForbiddenFinalCard(card))
+  ) {
+    return fail(
+      "power-card-finish",
+      "House rule: you cannot go out on a power card."
+    )
   }
 
   if (input.rotateHands) {
     if (!context.houseRules.zeroRotate) {
-      return fail("zero-rotate-disabled", "Hand cycling is disabled for this room.")
+      return fail(
+        "zero-rotate-disabled",
+        "Hand cycling is disabled for this room."
+      )
     }
     if (!isSingleNumberCardPlay(cards, 0)) {
-      return fail("invalid-zero-rotate", "You can only cycle hands with a single 0.")
+      return fail(
+        "invalid-zero-rotate",
+        "You can only cycle hands with a single 0."
+      )
     }
     if (finalHandCount === 0) {
-      return fail("invalid-zero-rotate", "You cannot cycle hands when going out.")
+      return fail(
+        "invalid-zero-rotate",
+        "You cannot cycle hands when going out."
+      )
     }
   }
 
   if (input.swapWithPlayerId) {
     if (!context.houseRules.sevenSwap) {
-      return fail("seven-swap-disabled", "Hand swapping is disabled for this room.")
+      return fail(
+        "seven-swap-disabled",
+        "Hand swapping is disabled for this room."
+      )
     }
     if (!isSingleNumberCardPlay(cards, 7)) {
-      return fail("invalid-swap-card", "You can only swap hands with a single 7.")
+      return fail(
+        "invalid-swap-card",
+        "You can only swap hands with a single 7."
+      )
     }
     if (finalHandCount === 0) {
       return fail("invalid-swap-card", "You cannot swap hands when going out.")
@@ -728,7 +1090,10 @@ function validatePlay(
       return fail("invalid-swap-target", "Choose another player to swap with.")
     }
     if (!activePlayerIds(game).includes(input.swapWithPlayerId)) {
-      return fail("invalid-swap-target", "That player is not active in this game.")
+      return fail(
+        "invalid-swap-target",
+        "That player is not active in this game."
+      )
     }
   }
 
@@ -738,7 +1103,7 @@ function validatePlay(
 function validateStage(
   game: GameState,
   playerId: string,
-  cards: Card[],
+  cards: Card[]
 ): CommandResult<GameState> {
   if (cards.length === 0) return fail("no-cards", "Select at least one card.")
 
@@ -753,14 +1118,21 @@ function validateStage(
   if (cards.some((card) => card.face.kind === "discard-color")) return ok(game)
 
   if (cards.length > 1) {
-    if (!sameNumberGroup(cards) && !sameDrawGroup(cards) && !sameActionGroup(cards)) {
+    if (
+      !sameNumberGroup(cards) &&
+      !sameDrawGroup(cards) &&
+      !sameActionGroup(cards)
+    ) {
       return fail(
         "multi-card-group-mismatch",
-        "Grouped cards must share a number, draw, skip, or reverse symbol.",
+        "Grouped cards must share a number, draw, skip, or reverse symbol."
       )
     }
     if (!cards.some((card) => canPlaySingleCard(game, playerId, card))) {
-      return fail("not-playable", "At least one selected card must match the pile.")
+      return fail(
+        "not-playable",
+        "At least one selected card must match the pile."
+      )
     }
     return ok(game)
   }
@@ -775,9 +1147,11 @@ function validateStage(
 function validateDiscardStage(
   game: GameState,
   playerId: string,
-  cards: Card[],
+  cards: Card[]
 ): CommandResult<GameState> {
-  const discardCards = cards.filter((card) => card.face.kind === "discard-color")
+  const discardCards = cards.filter(
+    (card) => card.face.kind === "discard-color"
+  )
   if (discardCards.length === 0) return ok(game)
 
   const firstCard = cards[0] as Card
@@ -786,7 +1160,10 @@ function validateDiscardStage(
   }
 
   if (discardCards.length > 1) {
-    return fail("multiple-discard-cards", "You can only play one discard card at a time.")
+    return fail(
+      "multiple-discard-cards",
+      "You can only play one discard card at a time."
+    )
   }
 
   if (!canPlaySingleCard(game, playerId, firstCard)) {
@@ -797,10 +1174,13 @@ function validateDiscardStage(
     .slice(1)
     .find(
       (card) =>
-        card.face.kind === "discard-color" || card.color !== firstCard.color,
+        card.face.kind === "discard-color" || card.color !== firstCard.color
     )
   if (invalidExtra) {
-    return fail("invalid-discard-card", "Discarded cards must match the discard card color.")
+    return fail(
+      "invalid-discard-card",
+      "Discarded cards must match the discard card color."
+    )
   }
 
   return ok(game)
@@ -810,34 +1190,51 @@ function validateDiscardPlay(
   game: GameState,
   playerId: string,
   cards: Card[],
-  input: PlayCardsInput,
+  input: PlayCardsInput
 ): CommandResult<GameState> {
-  const discardCards = cards.filter((card) => card.face.kind === "discard-color")
+  const discardCards = cards.filter(
+    (card) => card.face.kind === "discard-color"
+  )
   const discardCardIds = input.discardCardIds ?? []
 
   if (discardCards.length > 1) {
-    return fail("multiple-discard-cards", "You can only play one discard card at a time.")
+    return fail(
+      "multiple-discard-cards",
+      "You can only play one discard card at a time."
+    )
   }
 
   if (discardCards.length === 0) {
     if (discardCardIds.length > 0 || input.topCardId) {
-      return fail("discard-options-without-card", "Discard options require a discard card.")
+      return fail(
+        "discard-options-without-card",
+        "Discard options require a discard card."
+      )
     }
     return ok(game)
   }
 
   if (cards.length > 1) {
-    return fail("multiple-discard-cards", "You can only play one discard card at a time.")
+    return fail(
+      "multiple-discard-cards",
+      "You can only play one discard card at a time."
+    )
   }
 
   const discardCard = discardCards[0] as Card
   const uniqueDiscardIds = unique(discardCardIds)
   if (uniqueDiscardIds.length !== discardCardIds.length) {
-    return fail("duplicate-discard-card", "A discarded card can only be selected once.")
+    return fail(
+      "duplicate-discard-card",
+      "A discarded card can only be selected once."
+    )
   }
 
   if (uniqueDiscardIds.includes(discardCard.id)) {
-    return fail("invalid-discard-card", "The played discard card is already on the table.")
+    return fail(
+      "invalid-discard-card",
+      "The played discard card is already on the table."
+    )
   }
 
   const hand = game.handsByPlayerId[playerId] ?? []
@@ -845,14 +1242,20 @@ function validateDiscardPlay(
     const card = hand.find((candidate) => candidate.id === cardId)
     if (!card) return fail("card-not-found", "That card is not in your hand.")
     if (card.color !== discardCard.color) {
-      return fail("invalid-discard-card", "Discarded cards must match the discard card color.")
+      return fail(
+        "invalid-discard-card",
+        "Discarded cards must match the discard card color."
+      )
     }
   }
 
   if (input.topCardId) {
     const topCardIds = new Set([discardCard.id, ...uniqueDiscardIds])
     if (!topCardIds.has(input.topCardId)) {
-      return fail("invalid-top-card", "The top card must be one of the discarded cards.")
+      return fail(
+        "invalid-top-card",
+        "The top card must be one of the discarded cards."
+      )
     }
   }
 
@@ -861,18 +1264,21 @@ function validateDiscardPlay(
 
 function validateDrawStackPlay(
   game: GameState,
-  cards: Card[],
+  cards: Card[]
 ): CommandResult<GameState> {
   if (!game.drawStack) return ok(game)
 
   if (cards.some((card) => !drawCount(card))) {
-    return fail("draw-stack-card-required", "Stack draw cards or take the penalty.")
+    return fail(
+      "draw-stack-card-required",
+      "Stack draw cards or take the penalty."
+    )
   }
 
   if (!canStackDrawCards(game, cards)) {
     return fail(
       "draw-stack-too-low",
-      "Stack the same draw type, the current color, or a wild draw card.",
+      "Stack the same draw type, the current color, or a wild draw card."
     )
   }
 
@@ -884,7 +1290,7 @@ function sameNumberGroup(cards: Card[]): boolean {
   if (!first || first.face.kind !== "number") return false
   const firstValue = first.face.value
   return cards.every(
-    (card) => card.face.kind === "number" && card.face.value === firstValue,
+    (card) => card.face.kind === "number" && card.face.value === firstValue
   )
 }
 
@@ -943,9 +1349,10 @@ function canDrawOneFromDeck(game: GameState, playerId: string): boolean {
 
 function canDrawBeforeStackingFinalPowerCard(
   game: GameState,
-  playerId: string,
+  playerId: string
 ): boolean {
-  if (!game.drawStack || game.drawStack.targetPlayerId !== playerId) return false
+  if (!game.drawStack || game.drawStack.targetPlayerId !== playerId)
+    return false
   if (game.pendingChoice) return false
   if (game.drawnThisTurnPlayerId) return false
   if (!isPlayerActive(game, playerId)) return false
@@ -960,7 +1367,11 @@ function canDrawBeforeStackingFinalPowerCard(
   return canStackDrawCards(game, [finalCard])
 }
 
-function canPlaySingleCard(game: GameState, playerId: string, card: Card): boolean {
+function canPlaySingleCard(
+  game: GameState,
+  playerId: string,
+  card: Card
+): boolean {
   if (isGameFinished(game)) return false
   if (game.turnPlayerId !== playerId) return false
   if (game.pendingChoice) return false
@@ -993,10 +1404,10 @@ function canStackDrawCards(game: GameState, cards: Card[]): boolean {
       .filter(
         (card) =>
           (drawCount(card) ?? 0) >= minimum &&
-          canStackDrawCardAgainstPile(game, card, topDrawGroup),
+          canStackDrawCardAgainstPile(game, card, topDrawGroup)
       )
       .map((card) => drawGroupKey(card))
-      .filter((key): key is string => Boolean(key)),
+      .filter((key): key is string => Boolean(key))
   )
 
   return cards.every((card) => {
@@ -1005,10 +1416,10 @@ function canStackDrawCards(game: GameState, cards: Card[]): boolean {
 
     return Boolean(
       amount &&
-        amount >= minimum &&
-        group &&
-        (canStackDrawCardAgainstPile(game, card, topDrawGroup) ||
-          playableGroups.has(group)),
+      amount >= minimum &&
+      group &&
+      (canStackDrawCardAgainstPile(game, card, topDrawGroup) ||
+        playableGroups.has(group))
     )
   })
 }
@@ -1016,7 +1427,7 @@ function canStackDrawCards(game: GameState, cards: Card[]): boolean {
 function canStackDrawCardAgainstPile(
   game: GameState,
   card: Card,
-  topDrawGroup: string | null,
+  topDrawGroup: string | null
 ): boolean {
   const group = drawGroupKey(card)
   if (!group) return false
@@ -1027,7 +1438,7 @@ function canStackDrawCardAgainstPile(
 function getCardsFromHand(
   game: GameState,
   playerId: string,
-  cardIds: string[],
+  cardIds: string[]
 ): CommandResult<Card[]> {
   const uniqueCardIds = unique(cardIds)
   if (uniqueCardIds.length !== cardIds.length) {
@@ -1050,7 +1461,7 @@ function handCountAfterPlay(
   game: GameState,
   playerId: string,
   cards: Card[],
-  input: PlayCardsInput,
+  input: PlayCardsInput
 ) {
   const hand = [...(game.handsByPlayerId[playerId] ?? [])]
   for (const card of cards) removeCard(hand, card.id)
@@ -1114,7 +1525,7 @@ function checkMercyEliminations(game: GameState, context: GameContext) {
     game.knockedOutCards.push(...hand)
     game.handsByPlayerId[playerId] = []
     game.unoVulnerablePlayerIds = game.unoVulnerablePlayerIds.filter(
-      (targetPlayerId) => targetPlayerId !== playerId,
+      (targetPlayerId) => targetPlayerId !== playerId
     )
     clearUnoDeclaration(game, playerId)
     pushEvent(game, {
@@ -1134,7 +1545,10 @@ function checkMercyEliminations(game: GameState, context: GameContext) {
     game.drawStack = null
   }
 
-  if (game.pendingChoice && !isPlayerActive(game, game.pendingChoice.playerId)) {
+  if (
+    game.pendingChoice &&
+    !isPlayerActive(game, game.pendingChoice.playerId)
+  ) {
     game.pendingChoice = null
   }
 
@@ -1170,7 +1584,7 @@ function recordWinner(game: GameState, context: GameContext, playerId: string) {
   game.winnerPlacements.push(placement)
   game.winnerPlayerId ??= playerId
   game.unoVulnerablePlayerIds = game.unoVulnerablePlayerIds.filter(
-    (targetPlayerId) => targetPlayerId !== playerId,
+    (targetPlayerId) => targetPlayerId !== playerId
   )
   clearUnoDeclaration(game, playerId)
 
@@ -1208,15 +1622,23 @@ function advanceTurn(game: GameState, fromPlayerId: string, steps: number) {
 function advanceTurnAfterSkips(
   game: GameState,
   fromPlayerId: string,
-  skipCount: number,
+  skipCount: number
 ) {
   if (isGameFinished(game)) return
-  game.turnPlayerId = nextPlayerIdSkippingOpponents(game, fromPlayerId, skipCount)
+  game.turnPlayerId = nextPlayerIdSkippingOpponents(
+    game,
+    fromPlayerId,
+    skipCount
+  )
   game.drawnThisTurnPlayerId = null
   game.stagedPlay = null
 }
 
-function nextPlayerId(game: GameState, fromPlayerId: string, steps: number): string {
+function nextPlayerId(
+  game: GameState,
+  fromPlayerId: string,
+  steps: number
+): string {
   const active = activePlayerIds(game)
   if (active.length === 0) return fromPlayerId
   if (active.length === 1) return active[0] as string
@@ -1227,7 +1649,9 @@ function nextPlayerId(game: GameState, fromPlayerId: string, steps: number): str
   let remainingSteps = steps
   const activeSet = new Set(active)
   while (remainingSteps > 0) {
-    index = (index + game.direction + game.playerOrder.length) % game.playerOrder.length
+    index =
+      (index + game.direction + game.playerOrder.length) %
+      game.playerOrder.length
     const candidate = game.playerOrder[index] as string
     if (activeSet.has(candidate)) remainingSteps -= 1
   }
@@ -1238,7 +1662,7 @@ function nextPlayerId(game: GameState, fromPlayerId: string, steps: number): str
 function nextPlayerIdSkippingOpponents(
   game: GameState,
   fromPlayerId: string,
-  skipCount: number,
+  skipCount: number
 ): string {
   const active = activePlayerIds(game)
   if (active.length === 0) return fromPlayerId
@@ -1251,7 +1675,9 @@ function nextPlayerIdSkippingOpponents(
   const activeSet = new Set(active)
 
   while (true) {
-    index = (index + game.direction + game.playerOrder.length) % game.playerOrder.length
+    index =
+      (index + game.direction + game.playerOrder.length) %
+      game.playerOrder.length
     const candidate = game.playerOrder[index] as string
     if (!activeSet.has(candidate)) continue
 
@@ -1281,14 +1707,20 @@ function isPlayerActive(game: GameState, playerId: string): boolean {
 }
 
 function winnerPlacementFor(game: GameState, playerId: string) {
-  return game.winnerPlacements.find((placement) => placement.playerId === playerId) ?? null
+  return (
+    game.winnerPlacements.find(
+      (placement) => placement.playerId === playerId
+    ) ?? null
+  )
 }
 
 function isGameFinished(game: GameState): boolean {
   return game.turnPlayerId === null
 }
 
-function projectPendingChoice(game: GameState): PublicGameSnapshot["pendingChoice"] {
+function projectPendingChoice(
+  game: GameState
+): PublicGameSnapshot["pendingChoice"] {
   if (!game.pendingChoice) return null
 
   return {
@@ -1335,6 +1767,10 @@ function projectStagedPlay(game: GameState): PublicGameSnapshot["stagedPlay"] {
     playerId: staged.playerId,
     kind: staged.kind,
     cards: cards.map((card) => ({ ...card })),
+    chosenColor: staged.chosenColor,
+    declaredUno: staged.declaredUno,
+    rotateHands: staged.rotateHands,
+    swapWithPlayerId: staged.swapWithPlayerId,
   }
 }
 
@@ -1343,7 +1779,10 @@ function rotateHands(game: GameState) {
   if (active.length < 2) return
 
   const snapshot = new Map(
-    active.map((playerId) => [playerId, [...(game.handsByPlayerId[playerId] ?? [])]]),
+    active.map((playerId) => [
+      playerId,
+      [...(game.handsByPlayerId[playerId] ?? [])],
+    ])
   )
 
   for (const playerId of active) {
@@ -1373,7 +1812,7 @@ function beginTurnAction(game: GameState, playerId?: string) {
 
 function clearUnoDeclaration(game: GameState, playerId: string) {
   game.unoDeclaredPlayerIds = (game.unoDeclaredPlayerIds ?? []).filter(
-    (targetPlayerId) => targetPlayerId !== playerId,
+    (targetPlayerId) => targetPlayerId !== playerId
   )
 }
 
@@ -1424,9 +1863,14 @@ function faceSymbol(face: CardFace): string {
   }
 }
 
-function playedMessage(context: GameContext, playerId: string, cards: Card[]): string {
+function playedMessage(
+  context: GameContext,
+  playerId: string,
+  cards: Card[]
+): string {
   const name = playerName(context, playerId)
-  if (cards.length === 1) return `${name} played ${cardLabel(cards[0] as Card)}.`
+  if (cards.length === 1)
+    return `${name} played ${cardLabel(cards[0] as Card)}.`
   return `${name} played ${cards.length} cards.`
 }
 
@@ -1457,10 +1901,15 @@ function cardLabel(card: Card): string {
 }
 
 function playerName(context: GameContext, playerId: string): string {
-  return context.players.find((player) => player.id === playerId)?.name ?? "A player"
+  return (
+    context.players.find((player) => player.id === playerId)?.name ?? "A player"
+  )
 }
 
-function pushEvent(game: GameState, event: Omit<GameEvent, "id" | "createdAt">) {
+function pushEvent(
+  game: GameState,
+  event: Omit<GameEvent, "id" | "createdAt">
+) {
   game.events.push({
     ...event,
     id: `${Date.now()}:${game.events.length}:${Math.random().toString(36).slice(2, 8)}`,

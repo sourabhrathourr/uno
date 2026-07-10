@@ -1,14 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router"
 import confetti from "canvas-confetti"
-import type {
-  CreateTypes as ConfettiInstance,
-  Options as ConfettiOptions,
-} from "canvas-confetti"
 import {
   ArrowRight,
   Check,
-  Clipboard,
   Circle,
+  Clipboard,
   ImageIcon,
   MessageCircle,
   Mic,
@@ -25,14 +21,7 @@ import {
   VolumeX,
   X,
 } from "lucide-react"
-import {
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type PointerEvent,
-  type ReactNode,
-} from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
 import { useWebHaptics } from "web-haptics/react"
 
@@ -40,23 +29,42 @@ import {
   CHAT_EMOJIS,
   CHAT_GIFS,
   CHAT_PRESETS,
-  type ChatMessage,
-  type Card,
-  type GameEvent,
-  type GameError,
-  type JoinRoomResponse,
-  type Player,
-  type PlayerGameSnapshot,
-  type PlayCardsInput,
-  type PlayColor,
-  type RoomSnapshot,
-  type SendChatMessageInput,
+  TABLE_REACTION_EMOJIS,
+  TABLE_REACTION_PRESETS,
 } from "@workspace/game"
 import { Button } from "@workspace/ui/components/button"
 import { Checkbox } from "@workspace/ui/components/checkbox"
 import { UnoCard } from "@workspace/ui/components/uno-card"
+import type {
+  Card,
+  ChatChannel,
+  ChatMessage,
+  GameError,
+  GameEvent,
+  JoinRoomResponse,
+  PlayCardsInput,
+  PlayColor,
+  Player,
+  PlayerGameSnapshot,
+  PlayerSocialSnapshot,
+  RoomSnapshot,
+  SendChatMessageInput,
+  SendTableReactionInput,
+  StageCardsInput,
+} from "@workspace/game"
+import type { PointerEvent, ReactNode } from "react"
+import type { Options as ConfettiOptions } from "canvas-confetti"
 
-import { getGameSocket, getRoomPreview, type GameSocket } from "@/lib/realtime"
+import type { GameSocket } from "@/lib/realtime"
+import type { RoomVoiceController } from "@/lib/use-room-voice"
+import type { ChatTray } from "@/components/use-channel-chat"
+import {
+  SupportConfirmDialog,
+  availableSupportCandidates,
+} from "@/components/support-experience"
+import { useChannelChat } from "@/components/use-channel-chat"
+
+import { getGameSocket, getRoomPreview } from "@/lib/realtime"
 import {
   getActiveRoomCode,
   getPlayerSessionId,
@@ -71,11 +79,7 @@ import {
   playWinnerSound,
 } from "@/lib/sound"
 import { useSoundSystem } from "@/lib/use-sound-system"
-import {
-  logRoomVoiceDebug,
-  useRoomVoice,
-  type RoomVoiceController,
-} from "@/lib/use-room-voice"
+import { logRoomVoiceDebug, useRoomVoice } from "@/lib/use-room-voice"
 
 type ResponsiveCardSize = "sm" | "md"
 type DeckDrawFlightState = {
@@ -100,6 +104,9 @@ function RoomPage() {
   const [error, setError] = useState<string | null>(null)
   const [socket, setSocket] = useState<GameSocket | null>(null)
   const [playerGame, setPlayerGame] = useState<PlayerGameSnapshot | null>(null)
+  const [playerSocial, setPlayerSocial] = useState<PlayerSocialSnapshot | null>(
+    null
+  )
   const [startIntroPhase, setStartIntroPhase] = useState<
     "idle" | "lights" | "shuffle" | "deal" | "done"
   >("idle")
@@ -111,6 +118,8 @@ function RoomPage() {
   const lastTurnPlayerIdRef = useRef<string | null>(null)
   const lastStatusRef = useRef<RoomSnapshot["status"] | null>(null)
   const seenInitialGameSnapshotRef = useRef(false)
+  const seenMentionMessageIdsRef = useRef(new Set<string>())
+  const mentionSnapshotInitializedRef = useRef(false)
   useSoundSystem()
   const haptic = useWebHaptics()
 
@@ -167,11 +176,19 @@ function RoomPage() {
     setPlayerGame(nextPlayerGame)
   }
 
+  function applyPlayerSocialSnapshot(nextSocial: PlayerSocialSnapshot | null) {
+    setPlayerSocial(nextSocial)
+  }
+
   function applyJoinSuccess(result: JoinRoomResponse) {
     saveActiveRoomCode(result.room.code)
     applyPlayer(result.player)
     applyRoomSnapshot(result.room)
     applyPlayerGameSnapshot(result.playerGame ?? null)
+    for (const message of result.playerSocial?.squadChatMessages ?? []) {
+      seenMentionMessageIdsRef.current.add(message.id)
+    }
+    applyPlayerSocialSnapshot(result.playerSocial ?? null)
   }
 
   function restoreSocketSeat(activeSocket: GameSocket) {
@@ -238,6 +255,10 @@ function RoomPage() {
       applyPlayerGameSnapshot(snapshot)
     }
 
+    function handlePlayerSocial(snapshot: PlayerSocialSnapshot) {
+      applyPlayerSocialSnapshot(snapshot)
+    }
+
     function handleError(nextError: GameError) {
       applyCommandError(nextError)
     }
@@ -254,6 +275,7 @@ function RoomPage() {
 
     activeSocket.on("room:snapshot", handleSnapshot)
     activeSocket.on("game:playerState", handlePlayerState)
+    activeSocket.on("room:playerSocial", handlePlayerSocial)
     activeSocket.on("room:error", handleError)
     activeSocket.on("connect", handleConnect)
     activeSocket.on("disconnect", handleDisconnect)
@@ -264,11 +286,44 @@ function RoomPage() {
     return () => {
       activeSocket.off("room:snapshot", handleSnapshot)
       activeSocket.off("game:playerState", handlePlayerState)
+      activeSocket.off("room:playerSocial", handlePlayerSocial)
       activeSocket.off("room:error", handleError)
       activeSocket.off("connect", handleConnect)
       activeSocket.off("disconnect", handleDisconnect)
     }
   }, [normalizedRoomCode])
+
+  useEffect(() => {
+    const messages = [
+      ...(room?.chatMessages ?? []),
+      ...(playerSocial?.squadChatMessages ?? []),
+    ]
+    if (!mentionSnapshotInitializedRef.current) {
+      mentionSnapshotInitializedRef.current = true
+      for (const message of messages)
+        seenMentionMessageIdsRef.current.add(message.id)
+      return
+    }
+
+    let mentionCount = 0
+    for (const message of messages) {
+      if (seenMentionMessageIdsRef.current.has(message.id)) continue
+      seenMentionMessageIdsRef.current.add(message.id)
+      if (
+        message.playerId !== player?.id &&
+        player?.id &&
+        message.mentionPlayerIds.includes(player.id)
+      ) {
+        mentionCount += 1
+      }
+    }
+    for (let index = 0; index < mentionCount; index += 1) {
+      window.setTimeout(
+        () => playFx("notify", { volume: 0.24, playbackRate: 1.12 }),
+        index * 120
+      )
+    }
+  }, [room?.chatMessages, playerSocial?.squadChatMessages, player?.id])
 
   useEffect(() => {
     if (!room) return
@@ -309,12 +364,12 @@ function RoomPage() {
       ? events.findIndex((event) => event.id === lastSeenId) + 1
       : 0
     if (startIndex <= 0) {
-      lastEventIdRef.current = events[events.length - 1]!.id
+      lastEventIdRef.current = events[events.length - 1].id
       return
     }
     const newEvents = events.slice(startIndex)
     if (newEvents.length === 0) return
-    lastEventIdRef.current = newEvents[newEvents.length - 1]!.id
+    lastEventIdRef.current = newEvents[newEvents.length - 1].id
 
     for (const nextEvent of newEvents) {
       const isSelfEvent = nextEvent.playerId === player?.id
@@ -353,6 +408,24 @@ function RoomPage() {
           playFx("blocked", { volume: 0.6 })
           if (isSelfEvent) haptic.trigger("error")
           break
+        case "support-started":
+          playFx("successBlip", { volume: 0.3, playbackRate: 1.08 })
+          if (
+            nextEvent.playerId === player?.id ||
+            nextEvent.targetPlayerId === player?.id
+          ) {
+            haptic.trigger("light")
+          }
+          break
+        case "support-kicked":
+          playFx("blocked", { volume: 0.34 })
+          if (nextEvent.targetPlayerId === player?.id) haptic.trigger("warning")
+          break
+        case "support-ended":
+          if (nextEvent.playerId === player?.id) {
+            playFx("notify", { volume: 0.22 })
+          }
+          break
         case "game-won": {
           const isFirstPlace =
             room.game?.winnerPlacements.some(
@@ -377,6 +450,9 @@ function RoomPage() {
     applyRoomSnapshot(null)
     applyPlayer(null)
     applyPlayerGameSnapshot(null)
+    applyPlayerSocialSnapshot(null)
+    seenMentionMessageIdsRef.current.clear()
+    mentionSnapshotInitializedRef.current = false
     setError(null)
 
     async function loadPreview() {
@@ -511,6 +587,34 @@ function RoomPage() {
     })
   }
 
+  function supportPlayer(supportedPlayerId: string) {
+    if (!socket) return
+    setError(null)
+    socket.emit("game:supportPlayer", { supportedPlayerId }, (result) => {
+      if (!result.ok) return applyCommandError(result.error)
+      playFx("successBling", { volume: 0.48 })
+      applyRoomSnapshot(result.data)
+    })
+  }
+
+  function kickSupporter(supporterPlayerId: string) {
+    if (!socket) return
+    setError(null)
+    socket.emit("game:kickSupporter", { supporterPlayerId }, (result) => {
+      if (!result.ok) return applyCommandError(result.error)
+      playFx("blocked", { volume: 0.42 })
+      applyRoomSnapshot(result.data)
+    })
+  }
+
+  function sendTableReaction(input: SendTableReactionInput) {
+    if (!socket) return
+    socket.emit("game:sendReaction", input, (result) => {
+      if (!result.ok) return applyCommandError(result.error)
+      applyRoomSnapshot(result.data)
+    })
+  }
+
   function playCards(input: PlayCardsInput) {
     if (!socket || !isActiveTurnPlayer()) return
     setError(null)
@@ -524,9 +628,9 @@ function RoomPage() {
     })
   }
 
-  function stageCards(cardIds: string[]) {
+  function stageCards(input: StageCardsInput) {
     if (!socket || !isActiveTurnPlayer()) return
-    socket.emit("game:stageCards", { cardIds }, (result) => {
+    socket.emit("game:stageCards", input, (result) => {
       if (!result.ok) {
         applyCommandError(result.error)
         return
@@ -650,6 +754,7 @@ function RoomPage() {
           room={room}
           player={player}
           playerGame={playerGame?.playerId === player.id ? playerGame : null}
+          playerSocial={playerSocial}
           connected={connected}
           error={error}
           onCopyInvite={copyInvite}
@@ -660,6 +765,9 @@ function RoomPage() {
           onTakePenalty={takePenalty}
           onDrawRouletteCard={drawRouletteCard}
           onCatchUno={catchUno}
+          onSupportPlayer={supportPlayer}
+          onKickSupporter={kickSupporter}
+          onSendReaction={sendTableReaction}
           onSendChatMessage={sendChatMessage}
           onRestartGame={restartGame}
           voice={voice}
@@ -700,6 +808,7 @@ function GameTable({
   room,
   player,
   playerGame,
+  playerSocial,
   connected,
   error,
   onCopyInvite,
@@ -710,6 +819,9 @@ function GameTable({
   onTakePenalty,
   onDrawRouletteCard,
   onCatchUno,
+  onSupportPlayer,
+  onKickSupporter,
+  onSendReaction,
   onSendChatMessage,
   onRestartGame,
   voice,
@@ -718,16 +830,20 @@ function GameTable({
   room: RoomSnapshot
   player: Player
   playerGame: PlayerGameSnapshot | null
+  playerSocial: PlayerSocialSnapshot | null
   connected: boolean
   error: string | null
   onCopyInvite: () => Promise<void>
   onPlayCards: (input: PlayCardsInput) => void
-  onStageCards: (cardIds: string[]) => void
+  onStageCards: (input: StageCardsInput) => void
   onDrawCard: () => void
   onEndTurn: () => void
   onTakePenalty: () => void
   onDrawRouletteCard: () => void
   onCatchUno: (targetPlayerId: string) => void
+  onSupportPlayer: (supportedPlayerId: string) => void
+  onKickSupporter: (supporterPlayerId: string) => void
+  onSendReaction: (input: SendTableReactionInput) => void
   onSendChatMessage: (input: SendChatMessageInput) => void
   onRestartGame: () => void
   voice: RoomVoiceController
@@ -735,15 +851,27 @@ function GameTable({
 }) {
   const game = room.game
   const tableDropRef = useRef<HTMLDivElement | null>(null)
-  
-  const [spectatingPlayerId, setSpectatingPlayerId] = useState<string | null>(null)
-  const [spectatingHand, setSpectatingHand] = useState<Card[] | null>(null)
 
   const selfState = game?.players.find((p) => p.playerId === player.id)
-  const isSelfEliminated = Boolean(selfState?.eliminated)
+  const isSelfEliminated = Boolean(
+    selfState?.eliminated || selfState?.winnerPlacement
+  )
+  const supportLink = game?.supportLinks.find(
+    (link) => link.supporterPlayerId === player.id
+  )
+  const spectatingPlayerId = supportLink?.supportedPlayerId ?? null
+  const [supportView, setSupportView] = useState<PlayerGameSnapshot | null>(
+    null
+  )
+  const supportViewRequestRef = useRef(0)
+  const [pendingSupportPlayerId, setPendingSupportPlayerId] = useState<
+    string | null
+  >(null)
 
-  const [selectedCardIds, setSelectedCardIds] = useState<string[]>([])
-  const [pendingPlayedCardIds, setPendingPlayedCardIds] = useState<string[]>([])
+  const [selectedCardIds, setSelectedCardIds] = useState<Array<string>>([])
+  const [pendingPlayedCardIds, setPendingPlayedCardIds] = useState<
+    Array<string>
+  >([])
   const [declaredUno, setDeclaredUno] = useState(false)
   const [chosenColor, setChosenColor] = useState<PlayColor | null>(null)
   const [wantsSwap, setWantsSwap] = useState(false)
@@ -756,17 +884,18 @@ function GameTable({
   )
   const celebratedWinnerIdsRef = useRef(new Set<string>())
   const acknowledgedWinnerIdsRef = useRef<Set<string> | null>(null)
+  const lastHypeCelebrationRef = useRef(game?.hypeMeter.celebrationCount ?? 0)
   const [rouletteFly, setRouletteFly] = useState<{
     sessionId: string
-    cards: Card[]
+    cards: Array<Card>
     targetPlayerId: string
   } | null>(null)
   const [rouletteConsumedKey, setRouletteConsumedKey] = useState<string | null>(
     null
   )
-  const [deckDrawFlights, setDeckDrawFlights] = useState<DeckDrawFlightState[]>(
-    []
-  )
+  const [deckDrawFlights, setDeckDrawFlights] = useState<
+    Array<DeckDrawFlightState>
+  >([])
   const rouletteAcceptedKeyRef = useRef<string | null>(null)
   const drawAnimationInitializedRef = useRef(false)
   const drawAnimationLastEventIdRef = useRef<string | null>(null)
@@ -802,6 +931,27 @@ function GameTable({
         !state?.winnerPlacement
       )
     }) ?? []
+  const supportCandidates = availableSupportCandidates(
+    game?.players ?? [],
+    playerSocial?.blockedSupportedPlayerIds ?? [],
+    player.id
+  )
+    .map((candidate) =>
+      room.players.find((roomPlayer) => roomPlayer.id === candidate.playerId)
+    )
+    .filter((candidate): candidate is Player => Boolean(candidate))
+  const pendingSupportPlayer = room.players.find(
+    (candidate) => candidate.id === pendingSupportPlayerId
+  )
+  const selfSupporters =
+    game?.supportLinks
+      .filter((link) => link.supportedPlayerId === player.id)
+      .map((link) =>
+        room.players.find(
+          (candidate) => candidate.id === link.supporterPlayerId
+        )
+      )
+      .filter((candidate): candidate is Player => Boolean(candidate)) ?? []
   const isMyTurn = game?.turnPlayerId === player.id
   const firstWinnerPlacement =
     game?.winnerPlacements.find((placement) => placement.position === 1) ?? null
@@ -904,34 +1054,69 @@ function GameTable({
     Boolean(isMyTurn) &&
     pendingPlayedCardIds.length === 0
   const visibleError = error ?? voice.error
+  const visibleSupportView =
+    supportView?.playerId === spectatingPlayerId ? supportView : null
 
   useEffect(() => {
+    const celebrationCount = game?.hypeMeter.celebrationCount ?? 0
+    if (celebrationCount > lastHypeCelebrationRef.current) {
+      playFx("successBlip", { volume: 0.34, playbackRate: 1.08 })
+      void confetti({
+        particleCount: 70,
+        spread: 88,
+        startVelocity: 34,
+        origin: { y: 0.64 },
+        colors: ["#f472b6", "#fbbf24", "#ffffff"],
+      })
+    }
+    lastHypeCelebrationRef.current = celebrationCount
+  }, [game?.hypeMeter.celebrationCount])
+
+  useEffect(() => {
+    const requestId = ++supportViewRequestRef.current
     if (!isSelfEliminated) {
-      setSpectatingPlayerId(null)
-      setSpectatingHand(null)
+      setSupportView(null)
+      setPendingSupportPlayerId(null)
       return
     }
 
     if (!spectatingPlayerId || !socket) {
-      setSpectatingHand(null)
+      setSupportView(null)
       return
     }
 
-    const targetState = game?.players.find((p) => p.playerId === spectatingPlayerId)
+    const targetState = game?.players.find(
+      (p) => p.playerId === spectatingPlayerId
+    )
     if (!targetState || targetState.eliminated || targetState.winnerPlacement) {
-      setSpectatingPlayerId(null)
-      setSpectatingHand(null)
+      setSupportView(null)
       return
     }
 
-    socket.emit("game:spectatePlayer", { targetPlayerId: spectatingPlayerId }, (result) => {
-      if (result.ok && result.data) {
-        setSpectatingHand(result.data.hand)
-      } else {
-        setSpectatingHand(null)
+    socket.emit("game:getSupportView", (result) => {
+      if (
+        supportViewRequestRef.current === requestId &&
+        result.ok &&
+        result.data?.playerId === spectatingPlayerId
+      ) {
+        setSupportView(result.data)
+      } else if (supportViewRequestRef.current === requestId) {
+        setSupportView(null)
       }
     })
-  }, [spectatingPlayerId, room.version, socket, isSelfEliminated, game?.players])
+
+    return () => {
+      if (supportViewRequestRef.current === requestId) {
+        supportViewRequestRef.current += 1
+      }
+    }
+  }, [
+    spectatingPlayerId,
+    room.version,
+    socket,
+    isSelfEliminated,
+    game?.players,
+  ])
 
   useEffect(() => {
     const hand = playerGame?.hand ?? []
@@ -974,8 +1159,22 @@ function GameTable({
 
   useEffect(() => {
     if (!isMyTurn) return
-    onStageCards(selectedCardIds)
-  }, [selectedCardIds.join(":"), isMyTurn])
+    onStageCards({
+      cardIds: selectedCardIds,
+      chosenColor: chosenColor ?? undefined,
+      declaredUno: declaredUno || undefined,
+      rotateHands: wantsRotate || undefined,
+      swapWithPlayerId: wantsSwap ? swapWithPlayerId || undefined : undefined,
+    })
+  }, [
+    selectedCardIds.join(":"),
+    chosenColor,
+    declaredUno,
+    wantsRotate,
+    wantsSwap,
+    swapWithPlayerId,
+    isMyTurn,
+  ])
 
   useEffect(() => {
     const stagedPlay = game?.stagedPlay
@@ -1207,18 +1406,431 @@ function GameTable({
 
   const tableStatusTitle =
     gameFinished && firstWinner
-      ? `${firstWinner.name} won this hand`
+      ? `${firstWinner.name} won this match`
       : isMyTurn
         ? "Your turn"
         : `${playerName(room, game?.turnPlayerId)} is playing`
   const tableStatusDetail = gameFinished
-    ? "Start another hand with the same room and players."
+    ? "Start a new match with the same room and players."
     : game?.drawStack
       ? `Draw stack is +${game.drawStack.amount}. Stack +${game.drawStack.minimum} or higher.`
       : `${game?.discardPileCount ?? 0} cards discarded`
 
   if (narrowViewport) {
     return (
+      <>
+        <main className="h-dvh overflow-hidden bg-[#070604] text-white antialiased">
+          <VoiceAudioOutputs
+            streamsByPlayerId={voice.remoteStreamsByPlayerId}
+          />
+          {celebratingWinner && (
+            <FirstPlaceCelebration playerName={celebratingWinner.name} />
+          )}
+          {rouletteFly && (
+            <RouletteFlyToHand
+              key={rouletteFly.sessionId}
+              cards={rouletteFly.cards}
+              targetPlayerId={rouletteFly.targetPlayerId}
+              isSelfTarget={rouletteFly.targetPlayerId === player.id}
+              startDelayMs={520}
+              onFlightStart={() =>
+                setRouletteConsumedKey(rouletteFly.sessionId)
+              }
+              onDone={() => {
+                setRouletteConsumedKey(rouletteFly.sessionId)
+                setRouletteFly(null)
+              }}
+            />
+          )}
+          {deckDrawFlights.map((flight) => (
+            <DeckDrawFlight
+              key={flight.id}
+              targetPlayerId={flight.targetPlayerId}
+              cardCount={flight.cardCount}
+              onDone={() =>
+                setDeckDrawFlights((current) =>
+                  current.filter((candidate) => candidate.id !== flight.id)
+                )
+              }
+            />
+          ))}
+
+          <div
+            className={
+              "mx-auto flex h-full min-h-0 w-full max-w-[680px] flex-col px-2 " +
+              (phoneViewport ? "gap-1.5 py-1.5" : "gap-2 py-2")
+            }
+          >
+            <header
+              className={
+                "flex shrink-0 items-center justify-between gap-2 border border-white/10 bg-white/[0.035] px-3 shadow-[0_14px_42px_rgba(0,0,0,0.28)] " +
+                (phoneViewport
+                  ? "rounded-[1.15rem] py-1.5"
+                  : "rounded-2xl py-2")
+              }
+            >
+              <div className="min-w-0">
+                <p className="text-[9px] font-medium tracking-[0.18em] text-white/42 uppercase">
+                  UNO No Mercy
+                </p>
+                <h1 className="truncate text-sm font-semibold tracking-tight sm:text-base">
+                  Room {room.code}
+                </h1>
+              </div>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <VoiceToggleButton voice={voice} compact />
+                <SoundToggle compact />
+                <StatusDot connected={connected} compact />
+                <CopyInviteButton iconOnly onCopy={onCopyInvite} />
+                <MobileChatSheet
+                  messages={room.chatMessages}
+                  squadMessages={playerSocial?.squadChatMessages}
+                  squadPlayerId={playerSocial?.squadPlayerId}
+                  players={room.players}
+                  squadMemberIds={squadMemberIdsFor(
+                    room,
+                    playerSocial?.squadPlayerId
+                  )}
+                  selfPlayerId={player.id}
+                  error={error}
+                  onSendMessage={onSendChatMessage}
+                />
+              </div>
+            </header>
+
+            <div
+              ref={tableDropRef}
+              className="flex min-h-0 flex-1 flex-col gap-1.5"
+            >
+              <section
+                style={{
+                  backgroundImage:
+                    "linear-gradient(135deg, rgba(255,255,255,0.09), rgba(255,255,255,0) 18%, rgba(0,0,0,0.18) 62%), repeating-linear-gradient(92deg, rgba(255,255,255,0.035) 0 10px, rgba(0,0,0,0.05) 10px 22px), linear-gradient(90deg, #5a341d, #7a4829 38%, #4b2917)",
+                }}
+                className={
+                  "relative isolate min-h-0 flex-1 overflow-hidden border shadow-[0_26px_70px_rgba(0,0,0,0.46)] transition-[border-color,box-shadow] " +
+                  (phoneViewport
+                    ? "rounded-[1.15rem] p-1.5"
+                    : "rounded-[1.35rem] p-2") +
+                  " " +
+                  (tableDragActive
+                    ? "border-white/35 shadow-[0_26px_70px_rgba(0,0,0,0.46),inset_0_0_0_2px_rgba(255,255,255,0.16)]"
+                    : draggingCardId
+                      ? "border-white/22"
+                      : "border-white/12")
+                }
+              >
+                <div className="pointer-events-none absolute inset-0 rounded-[1.35rem] bg-black/[0.08] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.32),inset_0_0_0_2px_rgba(255,255,255,0.045),inset_0_24px_80px_rgba(0,0,0,0.32)]" />
+
+                <MobileSeatingRing
+                  room={room}
+                  game={game}
+                  selfPlayerId={player.id}
+                  voiceStates={voice.voiceStates}
+                  canTakeDrawPenalty={Boolean(playerGame?.canTakeDrawPenalty)}
+                  onTakeDrawPenalty={handleTakePenalty}
+                  spectatingPlayerId={spectatingPlayerId}
+                  supportCandidatePlayerIds={supportCandidates.map(
+                    (candidate) => candidate.id
+                  )}
+                  onSpectatePlayer={setPendingSupportPlayerId}
+                />
+
+                <div className="relative z-10 flex h-full min-h-0 flex-col">
+                  <div className="flex shrink-0 items-center justify-between gap-2">
+                    <p className="min-w-0 flex-1 truncate text-[13px] font-semibold text-white">
+                      {tableStatusTitle}
+                    </p>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <DirectionPill direction={game?.direction ?? 1} compact />
+                      <ColorPill color={game?.currentColor ?? "red"} />
+                      {canRestartGame && (
+                        <Button
+                          type="button"
+                          size="xs"
+                          onClick={onRestartGame}
+                          className="h-7 rounded-full bg-white px-2 text-[11px] font-semibold text-neutral-950 hover:bg-white/85"
+                        >
+                          <Play className="mr-1 size-3" strokeWidth={2.2} />
+                          New
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+
+                  {(drawStack || (rouletteChoice && !canDrawRoulette)) && (
+                    <div className="mt-2 flex shrink-0 flex-wrap items-center gap-1.5">
+                      {drawStack && (
+                        <div className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-black/48 px-2.5 py-1 text-[11px] text-white/68 shadow-[0_10px_24px_rgba(0,0,0,0.22)] backdrop-blur-md">
+                          <span className="font-semibold text-red-100">
+                            Draw +{drawStack.amount}
+                          </span>
+                          <span className="text-white/42">
+                            stack +{drawStack.minimum}+
+                          </span>
+                          {playerGame?.canTakeDrawPenalty && (
+                            <Button
+                              type="button"
+                              size="xs"
+                              onClick={handleTakePenalty}
+                              className="h-6 rounded-full bg-white px-2 text-[11px] text-neutral-950 hover:bg-white/85"
+                            >
+                              Take
+                            </Button>
+                          )}
+                        </div>
+                      )}
+                      {rouletteChoice && !canDrawRoulette && (
+                        <div className="inline-flex items-center gap-1.5 rounded-full border border-amber-200/20 bg-amber-300/12 px-2.5 py-1 text-[11px] text-amber-50 shadow-[0_10px_24px_rgba(0,0,0,0.22)] backdrop-blur-md">
+                          <span className="truncate">
+                            {rouletteTargetName} draws until{" "}
+                            {rouletteChoice.color}
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="flex min-h-0 flex-1 items-center justify-center py-2">
+                    <div className="flex w-full max-w-[336px] flex-col items-center justify-center">
+                      <div
+                        className={
+                          "flex items-start justify-center " +
+                          (phoneViewport ? "gap-3" : "gap-4")
+                        }
+                      >
+                        <DeckStack
+                          canDraw={Boolean(playerGame?.canDraw)}
+                          alreadyDrawn={Boolean(playerGame?.canEndTurn)}
+                          drawPileCount={game?.drawPileCount ?? 0}
+                          size="sm"
+                          dense={phoneViewport}
+                          onDraw={handleDrawCard}
+                          rouletteMode={canDrawRoulette}
+                          rouletteColor={rouletteChoice?.color ?? null}
+                          onDrawRoulette={handleDrawRouletteCard}
+                        />
+                        <DiscardStack
+                          card={game?.topDiscard ?? null}
+                          size="sm"
+                          dense={phoneViewport}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <TableStagedPlay
+                cards={tableStagedCards}
+                playerName={tableStagedPlayerName}
+                mode={tableStagedMode}
+                dense
+                surface="tray"
+                targetColor={
+                  rouletteChoice?.color ??
+                  (game?.stagedPlay?.kind === "roulette"
+                    ? game.currentColor
+                    : null)
+                }
+                canEdit={canEditTableStaged}
+                onCardClick={toggleSelected}
+              />
+            </div>
+
+            {(visibleError ||
+              Boolean(playerGame?.catchablePlayerIds.length)) && (
+              <div className="shrink-0 space-y-1">
+                {visibleError && (
+                  <p className="rounded-xl border border-red-400/20 bg-red-500/12 px-3 py-2 text-xs text-red-100 shadow-[0_14px_34px_rgba(0,0,0,0.26)] backdrop-blur-md">
+                    {visibleError}
+                  </p>
+                )}
+                {playerGame?.catchablePlayerIds.length ? (
+                  <div className="flex gap-2 overflow-x-auto rounded-xl border border-yellow-300/20 bg-yellow-300/10 p-2 backdrop-blur-md">
+                    {playerGame.catchablePlayerIds.map((targetPlayerId) => (
+                      <Button
+                        key={targetPlayerId}
+                        type="button"
+                        size="xs"
+                        onClick={() => handleCatchUno(targetPlayerId)}
+                        className="shrink-0 bg-yellow-100 text-yellow-950 hover:bg-yellow-50"
+                      >
+                        Catch {playerName(room, targetPlayerId)}
+                      </Button>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            )}
+
+            <section
+              data-self-hand="true"
+              className="flex h-[clamp(174px,30dvh,230px)] shrink-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-black/40 p-2 shadow-[0_18px_54px_rgba(0,0,0,0.28)]"
+            >
+              <div className="flex shrink-0 items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-white/84">
+                    {isSelfEliminated
+                      ? spectatingPlayerId
+                        ? `${playerName(room, spectatingPlayerId)}'s hand`
+                        : "Your hand"
+                      : "Your hand"}
+                  </p>
+                  <p className="mt-0.5 truncate text-[11px] text-white/42">
+                    {isSelfEliminated
+                      ? spectatingPlayerId
+                        ? "🙌 Supporting"
+                        : "Choose an active player to support."
+                      : "Tap a card to stage it."}
+                  </p>
+                </div>
+                {!isSelfEliminated && (
+                  <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+                    {needsColor && (
+                      <ColorPicker
+                        value={chosenColor}
+                        required={!chosenColor}
+                        onChange={setChosenColor}
+                      />
+                    )}
+                    {canChooseRotate && (
+                      <GameOptionCheckbox
+                        checked={wantsRotate}
+                        onCheckedChange={setWantsRotate}
+                      >
+                        Cycle
+                      </GameOptionCheckbox>
+                    )}
+                    {canChooseSwap && (
+                      <GameOptionCheckbox
+                        checked={wantsSwap}
+                        onCheckedChange={(checked) => {
+                          setWantsSwap(checked)
+                          if (!checked) setSwapWithPlayerId("")
+                        }}
+                      >
+                        Swap
+                      </GameOptionCheckbox>
+                    )}
+                    <GameOptionCheckbox
+                      checked={declaredUno && canDeclareUno}
+                      disabled={!canDeclareUno}
+                      onCheckedChange={setDeclaredUno}
+                    >
+                      UNO
+                    </GameOptionCheckbox>
+                    <Button
+                      type="button"
+                      size="sm"
+                      disabled={!canUseEndTurnButton}
+                      onClick={handleEndTurnButton}
+                      className="h-8 bg-white px-3 text-neutral-950 hover:bg-white/85"
+                    >
+                      {canPassTurn ? "Pass" : "End"}
+                    </Button>
+                  </div>
+                )}
+              </div>
+
+              <SupportControls
+                candidates={
+                  isSelfEliminated && !spectatingPlayerId
+                    ? supportCandidates
+                    : []
+                }
+                supporters={selfSupporters}
+                onChoose={setPendingSupportPlayerId}
+                onKick={onKickSupporter}
+                compact
+              />
+
+              {isSelfEliminated &&
+                game?.stagedPlay?.playerId === spectatingPlayerId && (
+                  <SupportDecisionPills
+                    stagedPlay={game.stagedPlay}
+                    room={room}
+                  />
+                )}
+
+              <TableEnergyBar game={game} onReact={onSendReaction} compact />
+
+              {gameFinished && game?.supportRecap && (
+                <SupportRecapPanel
+                  recap={game.supportRecap}
+                  game={game}
+                  players={room.players}
+                  compact
+                />
+              )}
+
+              {!isSelfEliminated && needsSwap && (
+                <select
+                  value={swapWithPlayerId}
+                  onChange={(event) => setSwapWithPlayerId(event.target.value)}
+                  className="mt-2 h-8 rounded-lg border border-white/10 bg-neutral-950 px-2 text-sm text-white outline-none"
+                >
+                  <option value="">Swap with...</option>
+                  {activeOpponents.map((candidate) => (
+                    <option key={candidate.id} value={candidate.id}>
+                      {candidate.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              <FannedGameHand
+                cards={
+                  isSelfEliminated
+                    ? (visibleSupportView?.hand ?? [])
+                    : (playerGame?.hand ?? [])
+                }
+                playableCardIds={
+                  isSelfEliminated
+                    ? (visibleSupportView?.playableCardIds ?? [])
+                    : (playerGame?.playableCardIds ?? [])
+                }
+                selectedCardIds={
+                  isSelfEliminated
+                    ? game?.stagedPlay?.playerId === spectatingPlayerId
+                      ? game.stagedPlay.cards.map((card) => card.id)
+                      : []
+                    : selectedCardIds
+                }
+                hiddenCardIds={isSelfEliminated ? [] : pendingPlayedCardIds}
+                isMyTurn={isSelfEliminated ? false : Boolean(isMyTurn)}
+                drawStack={isSelfEliminated ? null : drawStack}
+                onToggleCard={isSelfEliminated ? () => {} : toggleSelected}
+                onDragStart={isSelfEliminated ? () => {} : setDraggingCardId}
+                onDragMove={
+                  isSelfEliminated ? () => {} : updatePointerDragTarget
+                }
+                onDragEnd={isSelfEliminated ? () => {} : finishPointerDrag}
+                onCancelDrag={() => {
+                  setDraggingCardId(null)
+                  setTableDragActive(false)
+                }}
+                cardSize="sm"
+              />
+            </section>
+          </div>
+        </main>
+        {pendingSupportPlayer && (
+          <SupportConfirmDialog
+            playerName={pendingSupportPlayer.name}
+            onCancel={() => setPendingSupportPlayerId(null)}
+            onConfirm={() => {
+              onSupportPlayer(pendingSupportPlayer.id)
+              setPendingSupportPlayerId(null)
+            }}
+          />
+        )}
+      </>
+    )
+  }
+
+  return (
+    <>
       <main className="h-dvh overflow-hidden bg-[#070604] text-white antialiased">
         <VoiceAudioOutputs streamsByPlayerId={voice.remoteStreamsByPlayerId} />
         {celebratingWinner && (
@@ -1250,613 +1862,583 @@ function GameTable({
             }
           />
         ))}
-
-        <div
-          className={
-            "mx-auto flex h-full min-h-0 w-full max-w-[680px] flex-col px-2 " +
-            (phoneViewport ? "gap-1.5 py-1.5" : "gap-2 py-2")
-          }
-        >
-          <header
-            className={
-              "flex shrink-0 items-center justify-between gap-2 border border-white/10 bg-white/[0.035] px-3 shadow-[0_14px_42px_rgba(0,0,0,0.28)] " +
-              (phoneViewport ? "rounded-[1.15rem] py-1.5" : "rounded-2xl py-2")
-            }
-          >
-            <div className="min-w-0">
-              <p className="text-[9px] font-medium tracking-[0.18em] text-white/42 uppercase">
+        <div className="mx-auto flex h-full min-h-0 w-full max-w-[1500px] flex-col gap-2 px-2 py-2 sm:gap-3 sm:px-4 sm:py-3 lg:px-8">
+          <header className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 pb-2 sm:pb-3">
+            <div>
+              <p className="text-[10px] font-medium tracking-[0.18em] text-white/45 uppercase sm:text-xs">
                 UNO No Mercy
               </p>
-              <h1 className="truncate text-sm font-semibold tracking-tight sm:text-base">
+              <h1 className="mt-0.5 text-lg font-semibold tracking-tight sm:mt-1 sm:text-xl">
                 Room {room.code}
               </h1>
             </div>
-            <div className="flex shrink-0 items-center gap-1.5">
-              <VoiceToggleButton voice={voice} compact />
-              <SoundToggle compact />
-              <StatusDot connected={connected} compact />
-              <CopyInviteButton iconOnly onCopy={onCopyInvite} />
-              <MobileChatSheet
-                messages={room.chatMessages}
-                selfPlayerId={player.id}
-                error={error}
-                onSendMessage={onSendChatMessage}
-              />
+            <div className="flex items-center gap-2">
+              <VoiceToggleButton voice={voice} />
+              <SoundToggle />
+              <StatusDot connected={connected} />
+              <CopyInviteButton onCopy={onCopyInvite} />
             </div>
           </header>
 
-          <div
-            ref={tableDropRef}
-            className="flex min-h-0 flex-1 flex-col gap-1.5"
-          >
-            <section
-              style={{
-                backgroundImage:
-                  "linear-gradient(135deg, rgba(255,255,255,0.09), rgba(255,255,255,0) 18%, rgba(0,0,0,0.18) 62%), repeating-linear-gradient(92deg, rgba(255,255,255,0.035) 0 10px, rgba(0,0,0,0.05) 10px 22px), linear-gradient(90deg, #5a341d, #7a4829 38%, #4b2917)",
-              }}
-              className={
-                "relative isolate min-h-0 flex-1 overflow-hidden border shadow-[0_26px_70px_rgba(0,0,0,0.46)] transition-[border-color,box-shadow] " +
-                (phoneViewport
-                  ? "rounded-[1.15rem] p-1.5"
-                  : "rounded-[1.35rem] p-2") +
-                " " +
-                (tableDragActive
-                  ? "border-white/35 shadow-[0_26px_70px_rgba(0,0,0,0.46),inset_0_0_0_2px_rgba(255,255,255,0.16)]"
-                  : draggingCardId
-                    ? "border-white/22"
-                    : "border-white/12")
-              }
-            >
-              <div className="pointer-events-none absolute inset-0 rounded-[1.35rem] bg-black/[0.08] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.32),inset_0_0_0_2px_rgba(255,255,255,0.045),inset_0_24px_80px_rgba(0,0,0,0.32)]" />
-
-              <MobileSeatingRing
-                room={room}
-                game={game}
-                selfPlayerId={player.id}
-                voiceStates={voice.voiceStates}
-                canTakeDrawPenalty={Boolean(playerGame?.canTakeDrawPenalty)}
-                onTakeDrawPenalty={handleTakePenalty}
-                isSelfEliminated={isSelfEliminated}
-                spectatingPlayerId={spectatingPlayerId}
-                onSpectatePlayer={setSpectatingPlayerId}
-              />
-
-              <div className="relative z-10 flex h-full min-h-0 flex-col">
-                <div className="flex shrink-0 items-center justify-between gap-2">
-                  <p className="min-w-0 flex-1 truncate text-[13px] font-semibold text-white">
-                    {tableStatusTitle}
-                  </p>
-                  <div className="flex shrink-0 items-center gap-1">
-                    <DirectionPill direction={game?.direction ?? 1} compact />
-                    <ColorPill color={game?.currentColor ?? "red"} />
-                    {canRestartGame && (
-                      <Button
-                        type="button"
-                        size="xs"
-                        onClick={onRestartGame}
-                        className="h-7 rounded-full bg-white px-2 text-[11px] font-semibold text-neutral-950 hover:bg-white/85"
-                      >
-                        <Play className="mr-1 size-3" strokeWidth={2.2} />
-                        New
-                      </Button>
-                    )}
+          <section className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] gap-2 overflow-hidden lg:grid-rows-[minmax(0,1fr)_220px] xl:grid-cols-[minmax(0,1fr)_310px] xl:grid-rows-none">
+            <div className="relative grid min-h-0 grid-rows-[minmax(0,1fr)_clamp(188px,30dvh,300px)] gap-2 overflow-hidden sm:grid-rows-[minmax(0,1fr)_clamp(220px,30dvh,330px)] lg:gap-3">
+              <div
+                ref={tableDropRef}
+                style={{
+                  backgroundImage:
+                    "linear-gradient(135deg, rgba(255,255,255,0.09), rgba(255,255,255,0) 18%, rgba(0,0,0,0.18) 62%), repeating-linear-gradient(92deg, rgba(255,255,255,0.035) 0 10px, rgba(0,0,0,0.05) 10px 22px), linear-gradient(90deg, #5a341d, #7a4829 38%, #4b2917)",
+                }}
+                className={
+                  "relative isolate min-h-0 overflow-visible rounded-2xl border p-2 shadow-[0_30px_90px_rgba(0,0,0,0.5)] transition-[border-color,box-shadow] sm:rounded-[1.75rem] sm:p-4 " +
+                  (tableDragActive
+                    ? "border-white/35 shadow-[0_30px_90px_rgba(0,0,0,0.5),inset_0_0_0_2px_rgba(255,255,255,0.16)]"
+                    : draggingCardId
+                      ? "border-white/22"
+                      : "border-white/12")
+                }
+              >
+                <div className="pointer-events-none absolute inset-0 rounded-2xl bg-black/[0.08] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.32),inset_0_0_0_2px_rgba(255,255,255,0.045),inset_0_24px_80px_rgba(0,0,0,0.32)] sm:rounded-[1.75rem]" />
+                <TableSeatRing
+                  room={room}
+                  game={game}
+                  selfPlayerId={player.id}
+                  canTakeDrawPenalty={Boolean(playerGame?.canTakeDrawPenalty)}
+                  onTakeDrawPenalty={handleTakePenalty}
+                  compact={compactSurface}
+                  voiceStates={voice.voiceStates}
+                  isSelfEliminated={isSelfEliminated}
+                  spectatingPlayerId={spectatingPlayerId}
+                  supportCandidatePlayerIds={supportCandidates.map(
+                    (candidate) => candidate.id
+                  )}
+                  onSpectatePlayer={setPendingSupportPlayerId}
+                />
+                <div className="relative z-10 flex h-full min-h-0 flex-col">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-white">
+                        {tableStatusTitle}
+                      </p>
+                      <p className="mt-1 text-xs text-white/65">
+                        {tableStatusDetail}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-end gap-1.5 sm:gap-2">
+                      <span className="rounded-full border border-white/10 bg-black/28 px-2.5 py-1.5 text-[11px] font-medium text-white/60 sm:px-3 sm:py-2 sm:text-xs">
+                        {room.players.length}/{room.houseRules.maxPlayers}{" "}
+                        seated
+                      </span>
+                      <DirectionPill direction={game?.direction ?? 1} compact />
+                      <ColorPill color={game?.currentColor ?? "red"} />
+                      {canRestartGame && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          onClick={onRestartGame}
+                          className="rounded-full bg-white px-3 text-neutral-950 hover:bg-white/85"
+                        >
+                          <Play className="mr-1.5 size-3.5" strokeWidth={2.2} />
+                          New match
+                        </Button>
+                      )}
+                      {rouletteChoice && !canDrawRoulette && (
+                        <div className="flex items-center gap-2 rounded-full border border-amber-200/20 bg-amber-300/12 px-3 py-1 text-xs text-amber-50 shadow-[0_10px_26px_rgba(0,0,0,0.22)] backdrop-blur-md">
+                          <span className="flex items-center gap-1.5">
+                            {rouletteTargetName} draws until
+                            <span
+                              className="size-2.5 rounded-full shadow-[0_0_0_1px_rgba(255,255,255,0.22)]"
+                              style={{
+                                background: colorValue(rouletteChoice.color),
+                              }}
+                            />
+                            {rouletteChoice.color}
+                          </span>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
 
-                {(drawStack || (rouletteChoice && !canDrawRoulette)) && (
-                  <div className="mt-2 flex shrink-0 flex-wrap items-center gap-1.5">
-                    {drawStack && (
-                      <div className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-black/48 px-2.5 py-1 text-[11px] text-white/68 shadow-[0_10px_24px_rgba(0,0,0,0.22)] backdrop-blur-md">
-                        <span className="font-semibold text-red-100">
-                          Draw +{drawStack.amount}
-                        </span>
-                        <span className="text-white/42">
-                          stack +{drawStack.minimum}+
-                        </span>
-                        {playerGame?.canTakeDrawPenalty && (
-                          <Button
-                            type="button"
-                            size="xs"
-                            onClick={handleTakePenalty}
-                            className="h-6 rounded-full bg-white px-2 text-[11px] text-neutral-950 hover:bg-white/85"
-                          >
-                            Take
-                          </Button>
-                        )}
+                  <div className="grid min-h-0 flex-1 place-items-center px-1 py-2 sm:px-8 sm:py-5">
+                    <div className="flex min-h-0 flex-col items-center justify-center gap-2 sm:gap-4">
+                      <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-8 lg:gap-12">
+                        <DeckStack
+                          canDraw={Boolean(playerGame?.canDraw)}
+                          alreadyDrawn={Boolean(playerGame?.canEndTurn)}
+                          drawPileCount={game?.drawPileCount ?? 0}
+                          size={tableCardSize}
+                          onDraw={handleDrawCard}
+                          rouletteMode={canDrawRoulette}
+                          rouletteColor={rouletteChoice?.color ?? null}
+                          onDrawRoulette={handleDrawRouletteCard}
+                        />
+                        <DiscardStack
+                          card={game?.topDiscard ?? null}
+                          size={tableCardSize}
+                        />
                       </div>
-                    )}
-                    {rouletteChoice && !canDrawRoulette && (
-                      <div className="inline-flex items-center gap-1.5 rounded-full border border-amber-200/20 bg-amber-300/12 px-2.5 py-1 text-[11px] text-amber-50 shadow-[0_10px_24px_rgba(0,0,0,0.22)] backdrop-blur-md">
-                        <span className="truncate">
-                          {rouletteTargetName} draws until{" "}
-                          {rouletteChoice.color}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                <div className="flex min-h-0 flex-1 items-center justify-center py-2">
-                  <div className="flex w-full max-w-[336px] flex-col items-center justify-center">
-                    <div
-                      className={
-                        "flex items-start justify-center " +
-                        (phoneViewport ? "gap-3" : "gap-4")
-                      }
-                    >
-                      <DeckStack
-                        canDraw={Boolean(playerGame?.canDraw)}
-                        alreadyDrawn={Boolean(playerGame?.canEndTurn)}
-                        drawPileCount={game?.drawPileCount ?? 0}
-                        size="sm"
-                        dense={phoneViewport}
-                        onDraw={handleDrawCard}
-                        rouletteMode={canDrawRoulette}
-                        rouletteColor={rouletteChoice?.color ?? null}
-                        onDrawRoulette={handleDrawRouletteCard}
-                      />
-                      <DiscardStack
-                        card={game?.topDiscard ?? null}
-                        size="sm"
-                        dense={phoneViewport}
+                      <TableStagedPlay
+                        cards={tableStagedCards}
+                        playerName={tableStagedPlayerName}
+                        mode={tableStagedMode}
+                        targetColor={
+                          rouletteChoice?.color ??
+                          (game?.stagedPlay?.kind === "roulette"
+                            ? game.currentColor
+                            : null)
+                        }
+                        canEdit={canEditTableStaged}
+                        onCardClick={toggleSelected}
                       />
                     </div>
                   </div>
                 </div>
               </div>
-            </section>
 
-            <TableStagedPlay
-              cards={tableStagedCards}
-              playerName={tableStagedPlayerName}
-              mode={tableStagedMode}
-              dense
-              surface="tray"
-              targetColor={
-                rouletteChoice?.color ??
-                (game?.stagedPlay?.kind === "roulette"
-                  ? game.currentColor
-                  : null)
-              }
-              canEdit={canEditTableStaged}
-              onCardClick={toggleSelected}
-            />
-          </div>
+              <div className="pointer-events-none absolute inset-x-2 top-[3.4rem] z-30 flex max-h-[34%] flex-col gap-2 overflow-y-auto sm:inset-x-3 sm:top-[4.25rem]">
+                {visibleError && (
+                  <p className="pointer-events-auto rounded-md border border-red-400/20 bg-red-500/12 px-3 py-2 text-sm text-red-100 shadow-[0_18px_44px_rgba(0,0,0,0.26)] backdrop-blur-md xl:hidden">
+                    {visibleError}
+                  </p>
+                )}
 
-          {(visibleError || Boolean(playerGame?.catchablePlayerIds.length)) && (
-            <div className="shrink-0 space-y-1">
-              {visibleError && (
-                <p className="rounded-xl border border-red-400/20 bg-red-500/12 px-3 py-2 text-xs text-red-100 shadow-[0_14px_34px_rgba(0,0,0,0.26)] backdrop-blur-md">
-                  {visibleError}
-                </p>
-              )}
-              {playerGame?.catchablePlayerIds.length ? (
-                <div className="flex gap-2 overflow-x-auto rounded-xl border border-yellow-300/20 bg-yellow-300/10 p-2 backdrop-blur-md">
-                  {playerGame.catchablePlayerIds.map((targetPlayerId) => (
-                    <Button
-                      key={targetPlayerId}
-                      type="button"
-                      size="xs"
-                      onClick={() => handleCatchUno(targetPlayerId)}
-                      className="shrink-0 bg-yellow-100 text-yellow-950 hover:bg-yellow-50"
-                    >
-                      Catch {playerName(room, targetPlayerId)}
-                    </Button>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          )}
-
-          <section
-            data-self-hand="true"
-            className="flex h-[clamp(174px,30dvh,230px)] shrink-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-black/40 p-2 shadow-[0_18px_54px_rgba(0,0,0,0.28)]"
-          >
-            <div className="flex shrink-0 items-start justify-between gap-2">
-              <div className="min-w-0">
-                <p className="text-sm font-medium text-white/84">
-                  {isSelfEliminated
-                    ? spectatingPlayerId
-                      ? `${playerName(room, spectatingPlayerId)}'s hand`
-                      : "Your hand"
-                    : "Your hand"}
-                </p>
-                <p className="mt-0.5 truncate text-[11px] text-white/42">
-                  {isSelfEliminated
-                    ? spectatingPlayerId
-                      ? "👁 Spectating"
-                      : "Tap a active player to view their cards."
-                    : "Tap a card to stage it."}
-                </p>
+                {playerGame?.catchablePlayerIds.length ? (
+                  <div className="pointer-events-auto flex flex-wrap gap-2 rounded-lg border border-yellow-300/20 bg-yellow-300/10 p-3 backdrop-blur-md">
+                    {playerGame.catchablePlayerIds.map((targetPlayerId) => (
+                      <Button
+                        key={targetPlayerId}
+                        type="button"
+                        size="sm"
+                        onClick={() => handleCatchUno(targetPlayerId)}
+                        className="bg-yellow-100 text-yellow-950 hover:bg-yellow-50"
+                      >
+                        Catch {playerName(room, targetPlayerId)}
+                      </Button>
+                    ))}
+                  </div>
+                ) : null}
               </div>
-              {!isSelfEliminated && (
-                <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-                  {needsColor && (
-                    <ColorPicker
-                      value={chosenColor}
-                      required={!chosenColor}
-                      onChange={setChosenColor}
+
+              <div
+                data-self-hand="true"
+                className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-white/10 bg-black/35 p-2 shadow-[0_18px_60px_rgba(0,0,0,0.25)] sm:rounded-2xl sm:p-3"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-medium text-white/82">
+                      {isSelfEliminated
+                        ? spectatingPlayerId
+                          ? `${playerName(room, spectatingPlayerId)}'s hand`
+                          : "Your hand"
+                        : "Your hand"}
+                    </p>
+                    <p className="mt-0.5 text-xs text-white/42 sm:mt-1">
+                      {isSelfEliminated
+                        ? spectatingPlayerId
+                          ? "🙌 Supporting"
+                          : "Choose an active player to support."
+                        : "Drag cards to the table, then end your turn."}
+                    </p>
+                  </div>
+                  {!isSelfEliminated && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      {needsColor && (
+                        <ColorPicker
+                          value={chosenColor}
+                          required={!chosenColor}
+                          onChange={setChosenColor}
+                        />
+                      )}
+                      {canChooseRotate && (
+                        <GameOptionCheckbox
+                          checked={wantsRotate}
+                          onCheckedChange={setWantsRotate}
+                        >
+                          Cycle hands
+                        </GameOptionCheckbox>
+                      )}
+                      {canChooseSwap && (
+                        <GameOptionCheckbox
+                          checked={wantsSwap}
+                          onCheckedChange={(checked) => {
+                            setWantsSwap(checked)
+                            if (!checked) setSwapWithPlayerId("")
+                          }}
+                        >
+                          Swap
+                        </GameOptionCheckbox>
+                      )}
+                      {needsSwap && (
+                        <select
+                          value={swapWithPlayerId}
+                          onChange={(event) =>
+                            setSwapWithPlayerId(event.target.value)
+                          }
+                          className="h-9 rounded-lg border border-white/10 bg-neutral-950 px-2 text-sm text-white outline-none"
+                        >
+                          <option value="">Swap with...</option>
+                          {activeOpponents.map((candidate) => (
+                            <option key={candidate.id} value={candidate.id}>
+                              {candidate.name}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                      <GameOptionCheckbox
+                        checked={declaredUno && canDeclareUno}
+                        disabled={!canDeclareUno}
+                        onCheckedChange={setDeclaredUno}
+                      >
+                        UNO
+                      </GameOptionCheckbox>
+                      <Button
+                        type="button"
+                        size="sm"
+                        disabled={!canUseEndTurnButton}
+                        onClick={handleEndTurnButton}
+                        className="bg-white text-neutral-950 hover:bg-white/85"
+                      >
+                        {canPassTurn ? "Pass turn" : "End turn"}
+                      </Button>
+                    </div>
+                  )}
+                </div>
+
+                <SupportControls
+                  candidates={
+                    isSelfEliminated && !spectatingPlayerId
+                      ? supportCandidates
+                      : []
+                  }
+                  supporters={selfSupporters}
+                  onChoose={setPendingSupportPlayerId}
+                  onKick={onKickSupporter}
+                />
+
+                {isSelfEliminated &&
+                  game?.stagedPlay?.playerId === spectatingPlayerId && (
+                    <SupportDecisionPills
+                      stagedPlay={game.stagedPlay}
+                      room={room}
                     />
                   )}
-                  {canChooseRotate && (
-                    <GameOptionCheckbox
-                      checked={wantsRotate}
-                      onCheckedChange={setWantsRotate}
-                    >
-                      Cycle
-                    </GameOptionCheckbox>
-                  )}
-                  {canChooseSwap && (
-                    <GameOptionCheckbox
-                      checked={wantsSwap}
-                      onCheckedChange={(checked) => {
-                        setWantsSwap(checked)
-                        if (!checked) setSwapWithPlayerId("")
-                      }}
-                    >
-                      Swap
-                    </GameOptionCheckbox>
-                  )}
-                  <GameOptionCheckbox
-                    checked={declaredUno && canDeclareUno}
-                    disabled={!canDeclareUno}
-                    onCheckedChange={setDeclaredUno}
-                  >
-                    UNO
-                  </GameOptionCheckbox>
-                  <Button
-                    type="button"
-                    size="sm"
-                    disabled={!canUseEndTurnButton}
-                    onClick={handleEndTurnButton}
-                    className="h-8 bg-white px-3 text-neutral-950 hover:bg-white/85"
-                  >
-                    {canPassTurn ? "Pass" : "End"}
-                  </Button>
-                </div>
-              )}
+
+                <TableEnergyBar game={game} onReact={onSendReaction} />
+
+                {gameFinished && game?.supportRecap && (
+                  <SupportRecapPanel
+                    recap={game.supportRecap}
+                    game={game}
+                    players={room.players}
+                  />
+                )}
+
+                <FannedGameHand
+                  cards={
+                    isSelfEliminated
+                      ? (visibleSupportView?.hand ?? [])
+                      : (playerGame?.hand ?? [])
+                  }
+                  playableCardIds={
+                    isSelfEliminated
+                      ? (visibleSupportView?.playableCardIds ?? [])
+                      : (playerGame?.playableCardIds ?? [])
+                  }
+                  selectedCardIds={
+                    isSelfEliminated
+                      ? game?.stagedPlay?.playerId === spectatingPlayerId
+                        ? game.stagedPlay.cards.map((card) => card.id)
+                        : []
+                      : selectedCardIds
+                  }
+                  hiddenCardIds={isSelfEliminated ? [] : pendingPlayedCardIds}
+                  isMyTurn={isSelfEliminated ? false : Boolean(isMyTurn)}
+                  drawStack={isSelfEliminated ? null : drawStack}
+                  onToggleCard={isSelfEliminated ? () => {} : toggleSelected}
+                  onDragStart={isSelfEliminated ? () => {} : setDraggingCardId}
+                  onDragMove={
+                    isSelfEliminated ? () => {} : updatePointerDragTarget
+                  }
+                  onDragEnd={isSelfEliminated ? () => {} : finishPointerDrag}
+                  onCancelDrag={() => {
+                    setDraggingCardId(null)
+                    setTableDragActive(false)
+                  }}
+                  cardSize={handCardSize}
+                />
+              </div>
             </div>
 
-            {!isSelfEliminated && needsSwap && (
-              <select
-                value={swapWithPlayerId}
-                onChange={(event) => setSwapWithPlayerId(event.target.value)}
-                className="mt-2 h-8 rounded-lg border border-white/10 bg-neutral-950 px-2 text-sm text-white outline-none"
-              >
-                <option value="">Swap with...</option>
-                {activeOpponents.map((candidate) => (
-                  <option key={candidate.id} value={candidate.id}>
-                    {candidate.name}
-                  </option>
-                ))}
-              </select>
-            )}
-
-            <FannedGameHand
-              cards={isSelfEliminated ? (spectatingHand ?? []) : (playerGame?.hand ?? [])}
-              playableCardIds={isSelfEliminated ? [] : (playerGame?.playableCardIds ?? [])}
-              selectedCardIds={isSelfEliminated ? [] : selectedCardIds}
-              hiddenCardIds={isSelfEliminated ? [] : pendingPlayedCardIds}
-              isMyTurn={isSelfEliminated ? false : Boolean(isMyTurn)}
-              drawStack={isSelfEliminated ? null : drawStack}
-              onToggleCard={isSelfEliminated ? () => {} : toggleSelected}
-              onDragStart={isSelfEliminated ? () => {} : setDraggingCardId}
-              onDragMove={isSelfEliminated ? () => {} : updatePointerDragTarget}
-              onDragEnd={isSelfEliminated ? () => {} : finishPointerDrag}
-              onCancelDrag={() => {
-                setDraggingCardId(null)
-                setTableDragActive(false)
-              }}
-              cardSize="sm"
+            <TableChatPanel
+              messages={room.chatMessages}
+              squadMessages={playerSocial?.squadChatMessages}
+              squadPlayerId={playerSocial?.squadPlayerId}
+              players={room.players}
+              squadMemberIds={squadMemberIdsFor(
+                room,
+                playerSocial?.squadPlayerId
+              )}
+              selfPlayerId={player.id}
+              error={error}
+              onSendMessage={onSendChatMessage}
             />
           </section>
         </div>
       </main>
-    )
-  }
-
-  return (
-    <main className="h-dvh overflow-hidden bg-[#070604] text-white antialiased">
-      <VoiceAudioOutputs streamsByPlayerId={voice.remoteStreamsByPlayerId} />
-      {celebratingWinner && (
-        <FirstPlaceCelebration playerName={celebratingWinner.name} />
-      )}
-      {rouletteFly && (
-        <RouletteFlyToHand
-          key={rouletteFly.sessionId}
-          cards={rouletteFly.cards}
-          targetPlayerId={rouletteFly.targetPlayerId}
-          isSelfTarget={rouletteFly.targetPlayerId === player.id}
-          startDelayMs={520}
-          onFlightStart={() => setRouletteConsumedKey(rouletteFly.sessionId)}
-          onDone={() => {
-            setRouletteConsumedKey(rouletteFly.sessionId)
-            setRouletteFly(null)
+      {pendingSupportPlayer && (
+        <SupportConfirmDialog
+          playerName={pendingSupportPlayer.name}
+          onCancel={() => setPendingSupportPlayerId(null)}
+          onConfirm={() => {
+            onSupportPlayer(pendingSupportPlayer.id)
+            setPendingSupportPlayerId(null)
           }}
         />
       )}
-      {deckDrawFlights.map((flight) => (
-        <DeckDrawFlight
-          key={flight.id}
-          targetPlayerId={flight.targetPlayerId}
-          cardCount={flight.cardCount}
-          onDone={() =>
-            setDeckDrawFlights((current) =>
-              current.filter((candidate) => candidate.id !== flight.id)
-            )
-          }
-        />
-      ))}
-      <div className="mx-auto flex h-full min-h-0 w-full max-w-[1500px] flex-col gap-2 px-2 py-2 sm:gap-3 sm:px-4 sm:py-3 lg:px-8">
-        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 pb-2 sm:pb-3">
-          <div>
-            <p className="text-[10px] font-medium tracking-[0.18em] text-white/45 uppercase sm:text-xs">
-              UNO No Mercy
-            </p>
-            <h1 className="mt-0.5 text-lg font-semibold tracking-tight sm:mt-1 sm:text-xl">
-              Room {room.code}
-            </h1>
-          </div>
-          <div className="flex items-center gap-2">
-            <VoiceToggleButton voice={voice} />
-            <SoundToggle />
-            <StatusDot connected={connected} />
-            <CopyInviteButton onCopy={onCopyInvite} />
-          </div>
-        </header>
-
-        <section className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] gap-2 overflow-hidden lg:grid-rows-[minmax(0,1fr)_220px] xl:grid-cols-[minmax(0,1fr)_310px] xl:grid-rows-none">
-          <div className="relative grid min-h-0 grid-rows-[minmax(0,1fr)_clamp(188px,30dvh,300px)] gap-2 overflow-hidden sm:grid-rows-[minmax(0,1fr)_clamp(220px,30dvh,330px)] lg:gap-3">
-            <div
-              ref={tableDropRef}
-              style={{
-                backgroundImage:
-                  "linear-gradient(135deg, rgba(255,255,255,0.09), rgba(255,255,255,0) 18%, rgba(0,0,0,0.18) 62%), repeating-linear-gradient(92deg, rgba(255,255,255,0.035) 0 10px, rgba(0,0,0,0.05) 10px 22px), linear-gradient(90deg, #5a341d, #7a4829 38%, #4b2917)",
-              }}
-              className={
-                "relative isolate min-h-0 overflow-visible rounded-2xl border p-2 shadow-[0_30px_90px_rgba(0,0,0,0.5)] transition-[border-color,box-shadow] sm:rounded-[1.75rem] sm:p-4 " +
-                (tableDragActive
-                  ? "border-white/35 shadow-[0_30px_90px_rgba(0,0,0,0.5),inset_0_0_0_2px_rgba(255,255,255,0.16)]"
-                  : draggingCardId
-                    ? "border-white/22"
-                    : "border-white/12")
-              }
-            >
-              <div className="pointer-events-none absolute inset-0 rounded-2xl bg-black/[0.08] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.32),inset_0_0_0_2px_rgba(255,255,255,0.045),inset_0_24px_80px_rgba(0,0,0,0.32)] sm:rounded-[1.75rem]" />
-              <TableSeatRing
-                room={room}
-                game={game}
-                selfPlayerId={player.id}
-                canTakeDrawPenalty={Boolean(playerGame?.canTakeDrawPenalty)}
-                onTakeDrawPenalty={handleTakePenalty}
-                compact={compactSurface}
-                voiceStates={voice.voiceStates}
-                isSelfEliminated={isSelfEliminated}
-                spectatingPlayerId={spectatingPlayerId}
-                onSpectatePlayer={setSpectatingPlayerId}
-              />
-              <div className="relative z-10 flex h-full min-h-0 flex-col">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold text-white">
-                      {tableStatusTitle}
-                    </p>
-                    <p className="mt-1 text-xs text-white/65">
-                      {tableStatusDetail}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap items-center justify-end gap-1.5 sm:gap-2">
-                    <span className="rounded-full border border-white/10 bg-black/28 px-2.5 py-1.5 text-[11px] font-medium text-white/60 sm:px-3 sm:py-2 sm:text-xs">
-                      {room.players.length}/{room.houseRules.maxPlayers} seated
-                    </span>
-                    <DirectionPill direction={game?.direction ?? 1} compact />
-                    <ColorPill color={game?.currentColor ?? "red"} />
-                    {canRestartGame && (
-                      <Button
-                        type="button"
-                        size="sm"
-                        onClick={onRestartGame}
-                        className="rounded-full bg-white px-3 text-neutral-950 hover:bg-white/85"
-                      >
-                        <Play className="mr-1.5 size-3.5" strokeWidth={2.2} />
-                        Next hand
-                      </Button>
-                    )}
-                    {rouletteChoice && !canDrawRoulette && (
-                      <div className="flex items-center gap-2 rounded-full border border-amber-200/20 bg-amber-300/12 px-3 py-1 text-xs text-amber-50 shadow-[0_10px_26px_rgba(0,0,0,0.22)] backdrop-blur-md">
-                        <span className="flex items-center gap-1.5">
-                          {rouletteTargetName} draws until
-                          <span
-                            className="size-2.5 rounded-full shadow-[0_0_0_1px_rgba(255,255,255,0.22)]"
-                            style={{
-                              background: colorValue(rouletteChoice.color),
-                            }}
-                          />
-                          {rouletteChoice.color}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="grid min-h-0 flex-1 place-items-center px-1 py-2 sm:px-8 sm:py-5">
-                  <div className="flex min-h-0 flex-col items-center justify-center gap-2 sm:gap-4">
-                    <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-8 lg:gap-12">
-                      <DeckStack
-                        canDraw={Boolean(playerGame?.canDraw)}
-                        alreadyDrawn={Boolean(playerGame?.canEndTurn)}
-                        drawPileCount={game?.drawPileCount ?? 0}
-                        size={tableCardSize}
-                        onDraw={handleDrawCard}
-                        rouletteMode={canDrawRoulette}
-                        rouletteColor={rouletteChoice?.color ?? null}
-                        onDrawRoulette={handleDrawRouletteCard}
-                      />
-                      <DiscardStack
-                        card={game?.topDiscard ?? null}
-                        size={tableCardSize}
-                      />
-                    </div>
-                    <TableStagedPlay
-                      cards={tableStagedCards}
-                      playerName={tableStagedPlayerName}
-                      mode={tableStagedMode}
-                      targetColor={
-                        rouletteChoice?.color ??
-                        (game?.stagedPlay?.kind === "roulette"
-                          ? game.currentColor
-                          : null)
-                      }
-                      canEdit={canEditTableStaged}
-                      onCardClick={toggleSelected}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="pointer-events-none absolute inset-x-2 top-[3.4rem] z-30 flex max-h-[34%] flex-col gap-2 overflow-y-auto sm:inset-x-3 sm:top-[4.25rem]">
-              {visibleError && (
-                <p className="pointer-events-auto rounded-md border border-red-400/20 bg-red-500/12 px-3 py-2 text-sm text-red-100 shadow-[0_18px_44px_rgba(0,0,0,0.26)] backdrop-blur-md xl:hidden">
-                  {visibleError}
-                </p>
-              )}
-
-              {playerGame?.catchablePlayerIds.length ? (
-                <div className="pointer-events-auto flex flex-wrap gap-2 rounded-lg border border-yellow-300/20 bg-yellow-300/10 p-3 backdrop-blur-md">
-                  {playerGame.catchablePlayerIds.map((targetPlayerId) => (
-                    <Button
-                      key={targetPlayerId}
-                      type="button"
-                      size="sm"
-                      onClick={() => handleCatchUno(targetPlayerId)}
-                      className="bg-yellow-100 text-yellow-950 hover:bg-yellow-50"
-                    >
-                      Catch {playerName(room, targetPlayerId)}
-                    </Button>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-
-            <div
-              data-self-hand="true"
-              className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-white/10 bg-black/35 p-2 shadow-[0_18px_60px_rgba(0,0,0,0.25)] sm:rounded-2xl sm:p-3"
-            >
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-medium text-white/82">
-                    {isSelfEliminated
-                      ? spectatingPlayerId
-                        ? `${playerName(room, spectatingPlayerId)}'s hand`
-                        : "Your hand"
-                      : "Your hand"}
-                  </p>
-                  <p className="mt-0.5 text-xs text-white/42 sm:mt-1">
-                    {isSelfEliminated
-                      ? spectatingPlayerId
-                        ? "👁 Spectating"
-                        : "Click an active player to view their cards."
-                      : "Drag cards to the table, then end your turn."}
-                  </p>
-                </div>
-                {!isSelfEliminated && (
-                  <div className="flex flex-wrap items-center gap-2">
-                    {needsColor && (
-                      <ColorPicker
-                        value={chosenColor}
-                        required={!chosenColor}
-                        onChange={setChosenColor}
-                      />
-                    )}
-                    {canChooseRotate && (
-                      <GameOptionCheckbox
-                        checked={wantsRotate}
-                        onCheckedChange={setWantsRotate}
-                      >
-                        Cycle hands
-                      </GameOptionCheckbox>
-                    )}
-                    {canChooseSwap && (
-                      <GameOptionCheckbox
-                        checked={wantsSwap}
-                        onCheckedChange={(checked) => {
-                          setWantsSwap(checked)
-                          if (!checked) setSwapWithPlayerId("")
-                        }}
-                      >
-                        Swap
-                      </GameOptionCheckbox>
-                    )}
-                    {needsSwap && (
-                      <select
-                        value={swapWithPlayerId}
-                        onChange={(event) =>
-                          setSwapWithPlayerId(event.target.value)
-                        }
-                        className="h-9 rounded-lg border border-white/10 bg-neutral-950 px-2 text-sm text-white outline-none"
-                      >
-                        <option value="">Swap with...</option>
-                        {activeOpponents.map((candidate) => (
-                          <option key={candidate.id} value={candidate.id}>
-                            {candidate.name}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                    <GameOptionCheckbox
-                      checked={declaredUno && canDeclareUno}
-                      disabled={!canDeclareUno}
-                      onCheckedChange={setDeclaredUno}
-                    >
-                      UNO
-                    </GameOptionCheckbox>
-                    <Button
-                      type="button"
-                      size="sm"
-                      disabled={!canUseEndTurnButton}
-                      onClick={handleEndTurnButton}
-                      className="bg-white text-neutral-950 hover:bg-white/85"
-                    >
-                      {canPassTurn ? "Pass turn" : "End turn"}
-                    </Button>
-                  </div>
-                )}
-              </div>
-
-              <FannedGameHand
-                cards={isSelfEliminated ? (spectatingHand ?? []) : (playerGame?.hand ?? [])}
-                playableCardIds={isSelfEliminated ? [] : (playerGame?.playableCardIds ?? [])}
-                selectedCardIds={isSelfEliminated ? [] : selectedCardIds}
-                hiddenCardIds={isSelfEliminated ? [] : pendingPlayedCardIds}
-                isMyTurn={isSelfEliminated ? false : Boolean(isMyTurn)}
-                drawStack={isSelfEliminated ? null : drawStack}
-                onToggleCard={isSelfEliminated ? () => {} : toggleSelected}
-                onDragStart={isSelfEliminated ? () => {} : setDraggingCardId}
-                onDragMove={isSelfEliminated ? () => {} : updatePointerDragTarget}
-                onDragEnd={isSelfEliminated ? () => {} : finishPointerDrag}
-                onCancelDrag={() => {
-                  setDraggingCardId(null)
-                  setTableDragActive(false)
-                }}
-                cardSize={handCardSize}
-              />
-            </div>
-          </div>
-
-          <TableChatPanel
-            messages={room.chatMessages}
-            selfPlayerId={player.id}
-            error={error}
-            onSendMessage={onSendChatMessage}
-          />
-        </section>
-      </div>
-    </main>
+    </>
   )
 }
 
-type ChatTray = "presets" | "emoji" | "gifs"
+function SupportControls({
+  candidates,
+  supporters,
+  onChoose,
+  onKick,
+  compact = false,
+}: {
+  candidates: Array<Player>
+  supporters: Array<Player>
+  onChoose: (playerId: string) => void
+  onKick: (playerId: string) => void
+  compact?: boolean
+}) {
+  if (candidates.length === 0 && supporters.length === 0) return null
+  return (
+    <div
+      className={
+        (compact ? "mt-1" : "mt-2") + " flex shrink-0 gap-2 overflow-x-auto"
+      }
+    >
+      {candidates.length > 0 && (
+        <div className="flex shrink-0 items-center gap-1 rounded-xl border border-pink-200/15 bg-pink-300/[0.08] p-1">
+          <span className="px-1.5 text-[10px] font-semibold tracking-wide text-pink-50/70 uppercase">
+            Choose your player
+          </span>
+          {candidates.map((candidate) => (
+            <button
+              key={candidate.id}
+              type="button"
+              onClick={() => onChoose(candidate.id)}
+              className="h-7 rounded-lg bg-white px-2 text-[11px] font-semibold text-neutral-950 hover:bg-white/86"
+            >
+              🙌 {candidate.name}
+            </button>
+          ))}
+        </div>
+      )}
+      {supporters.length > 0 && (
+        <div className="flex shrink-0 items-center gap-1 rounded-xl border border-white/10 bg-white/[0.045] p-1">
+          <span className="px-1.5 text-[10px] font-semibold tracking-wide text-white/50 uppercase">
+            Your squad
+          </span>
+          {supporters.map((supporter) => (
+            <button
+              key={supporter.id}
+              type="button"
+              onClick={() => onKick(supporter.id)}
+              title={`Kick ${supporter.name}`}
+              className="h-7 rounded-lg border border-white/10 bg-black/30 px-2 text-[11px] text-white/72 hover:border-red-300/30 hover:bg-red-400/10 hover:text-red-100"
+            >
+              {supporter.name} · kick
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function TableEnergyBar({
+  game,
+  onReact,
+  compact = false,
+}: {
+  game: RoomSnapshot["game"]
+  onReact: (input: SendTableReactionInput) => void
+  compact?: boolean
+}) {
+  if (!game || game.turnPlayerId === null) return null
+  return (
+    <div
+      className={
+        (compact ? "mt-1" : "mt-2") +
+        " flex shrink-0 items-center gap-1 overflow-x-auto"
+      }
+    >
+      <div className="flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-black/30 p-1">
+        {TABLE_REACTION_EMOJIS.map((emoji) => (
+          <button
+            key={emoji}
+            type="button"
+            onClick={() => onReact({ kind: "emoji", body: emoji })}
+            className="grid size-7 place-items-center rounded-full text-sm hover:bg-white/10 active:scale-90"
+            aria-label={`React ${emoji}`}
+          >
+            {emoji}
+          </button>
+        ))}
+      </div>
+      <select
+        aria-label="Send preset reaction"
+        defaultValue=""
+        onChange={(event) => {
+          if (!event.target.value) return
+          onReact({ kind: "preset", body: event.target.value })
+          event.target.value = ""
+        }}
+        className="h-8 shrink-0 rounded-full border border-white/10 bg-neutral-950 px-2 text-[10px] font-semibold text-white/68 outline-none"
+      >
+        <option value="">Quick taunt…</option>
+        {TABLE_REACTION_PRESETS.map((preset) => (
+          <option key={preset} value={preset}>
+            {preset}
+          </option>
+        ))}
+      </select>
+      <div className="flex min-w-24 shrink-0 items-center gap-1.5 rounded-full border border-amber-200/15 bg-amber-300/[0.08] px-2 py-1">
+        <span className="text-[9px] font-semibold text-amber-50/68 uppercase">
+          Hype
+        </span>
+        <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-black/40">
+          <span
+            className="block h-full rounded-full bg-gradient-to-r from-pink-400 to-amber-300 transition-[width] duration-300"
+            style={{
+              width: `${Math.min(100, (game.hypeMeter.value / game.hypeMeter.threshold) * 100)}%`,
+            }}
+          />
+        </span>
+      </div>
+    </div>
+  )
+}
+
+function SupportDecisionPills({
+  stagedPlay,
+  room,
+}: {
+  stagedPlay: NonNullable<NonNullable<RoomSnapshot["game"]>["stagedPlay"]>
+  room: RoomSnapshot
+}) {
+  const choices = [
+    stagedPlay.chosenColor ? `Color: ${stagedPlay.chosenColor}` : null,
+    stagedPlay.swapWithPlayerId
+      ? `Swap: ${playerName(room, stagedPlay.swapWithPlayerId)}`
+      : null,
+    stagedPlay.rotateHands ? "Cycle hands" : null,
+    stagedPlay.declaredUno ? "Calling UNO" : null,
+  ].filter((choice): choice is string => Boolean(choice))
+  if (choices.length === 0) return null
+  return (
+    <div className="mt-1 flex shrink-0 gap-1 overflow-x-auto">
+      {choices.map((choice) => (
+        <span
+          key={choice}
+          className="shrink-0 rounded-full border border-cyan-200/15 bg-cyan-300/[0.08] px-2 py-1 text-[10px] font-medium text-cyan-50/76"
+        >
+          {choice}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function SupportRecapPanel({
+  recap,
+  game,
+  players,
+  compact = false,
+}: {
+  recap: NonNullable<NonNullable<RoomSnapshot["game"]>["supportRecap"]>
+  game: NonNullable<RoomSnapshot["game"]>
+  players: Array<Player>
+  compact?: boolean
+}) {
+  if (recap.journey.length === 0 && recap.titles.length === 0) return null
+  const name = (playerId: string) =>
+    players.find((candidate) => candidate.id === playerId)?.name ?? "Player"
+  const journeys = Array.from(
+    recap.journey
+      .reduce((groups, entry) => {
+        const entries = groups.get(entry.supporterPlayerId) ?? []
+        entries.push(entry)
+        groups.set(entry.supporterPlayerId, entries)
+        return groups
+      }, new Map<string, typeof recap.journey>())
+      .entries()
+  )
+
+  function outcome(entry: (typeof recap.journey)[number]): string | null {
+    if (entry.endReason === "supporter-kicked") return "kicked from squad"
+    const target = game.players.find(
+      (candidate) => candidate.playerId === entry.supportedPlayerId
+    )
+    if (target?.winnerPlacement) {
+      return `finished #${target.winnerPlacement.position}`
+    }
+    if (target?.eliminated) return "eliminated"
+    if (entry.endReason === "match-finished") return "match ended"
+    return null
+  }
+
+  return (
+    <div
+      className={
+        (compact ? "mt-1 p-2" : "mt-2 p-3") +
+        " shrink-0 rounded-xl border border-amber-200/15 bg-amber-300/[0.07]"
+      }
+    >
+      <p className="text-[10px] font-semibold tracking-[0.14em] text-amber-50/64 uppercase">
+        Support recap
+      </p>
+      <div className="mt-1 space-y-1 text-[11px] text-white/70">
+        {journeys.map(([supporterPlayerId, entries]) => (
+          <div
+            key={supporterPlayerId}
+            className="flex items-center gap-1 overflow-x-auto rounded-lg border border-white/8 bg-black/18 px-2 py-1.5"
+          >
+            <span className="shrink-0 font-semibold text-white/82">
+              {name(supporterPlayerId)}
+            </span>
+            {entries.map((entry, index) => (
+              <span
+                key={`${entry.supportedPlayerId}:${entry.createdAt}`}
+                className="flex shrink-0 items-center gap-1"
+              >
+                <span className="text-white/32">→</span>
+                <span>{name(entry.supportedPlayerId)}</span>
+                {outcome(entry) && (
+                  <span className="text-white/42">({outcome(entry)})</span>
+                )}
+                {index < entries.length - 1 && (
+                  <span className="text-amber-200/42">then</span>
+                )}
+              </span>
+            ))}
+          </div>
+        ))}
+      </div>
+      <div className="mt-1 flex gap-1.5 overflow-x-auto text-[11px]">
+        {recap.titles.map((title) => (
+          <span
+            key={`${title.label}:${title.playerId}`}
+            className="shrink-0 rounded-full bg-white px-2 py-1 font-semibold text-neutral-950"
+          >
+            {title.label}: {name(title.playerId)}
+          </span>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 function deckDrawFlightFromEvent(event: GameEvent): DeckDrawFlightState | null {
   if (!event.playerId) return null
@@ -1883,29 +2465,47 @@ function deckDrawFlightFromEvent(event: GameEvent): DeckDrawFlightState | null {
 
 function TableChatPanel({
   messages,
+  squadMessages = [],
+  squadPlayerId = null,
+  players = [],
+  squadMemberIds = [],
   selfPlayerId,
   error,
   onSendMessage,
 }: {
-  messages: ChatMessage[]
+  messages: Array<ChatMessage>
+  squadMessages?: Array<ChatMessage>
+  squadPlayerId?: string | null
+  players?: Array<Player>
+  squadMemberIds?: Array<string>
   selfPlayerId: string
   error: string | null
   onSendMessage: (input: SendChatMessageInput) => void
 }) {
-  const [text, setText] = useState("")
-  const [tray, setTray] = useState<ChatTray | null>(null)
-
-  function send(input: SendChatMessageInput) {
-    playFx("buttonSoft", { volume: 0.36 })
-    onSendMessage(input)
-  }
-
-  function sendText() {
-    const body = text.trim()
-    if (!body) return
-    send({ kind: "text", body })
-    setText("")
-  }
+  const {
+    addMention,
+    changeText,
+    channel,
+    channelMessages,
+    mentionablePlayers,
+    publicMention,
+    send,
+    sendText,
+    setChannel,
+    setTray,
+    squadMention,
+    text,
+    tray,
+  } = useChannelChat({
+    messages,
+    squadMessages,
+    squadPlayerId,
+    players,
+    squadMemberIds,
+    selfPlayerId,
+    isReading: true,
+    onSendMessage,
+  })
 
   return (
     <aside className="hidden min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035] p-2 shadow-[0_18px_56px_rgba(0,0,0,0.28)] lg:flex xl:p-3">
@@ -1915,19 +2515,27 @@ function TableChatPanel({
             <MessageCircle className="size-4" strokeWidth={1.9} />
           </span>
           <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-white/86">Table chat</h2>
+            <h2 className="text-sm font-semibold text-white/86">Match chat</h2>
             <p className="text-[11px] text-white/42">
               Emoji, GIFs, and quick roasts
             </p>
           </div>
         </div>
         <span className="rounded-full border border-white/10 bg-black/26 px-2 py-1 text-[11px] text-white/52 tabular-nums">
-          {messages.length}
+          {channelMessages.length}
         </span>
       </div>
 
+      <ChatChannelTabs
+        channel={channel}
+        squadAvailable={Boolean(squadPlayerId)}
+        publicMention={publicMention}
+        squadMention={squadMention}
+        onChange={setChannel}
+      />
+
       <ChatMessageList
-        messages={messages}
+        messages={channelMessages}
         selfPlayerId={selfPlayerId}
         className="mt-3 flex-1 pr-1"
       />
@@ -1941,7 +2549,9 @@ function TableChatPanel({
       <ChatComposer
         text={text}
         tray={tray}
-        onTextChange={setText}
+        mentionablePlayers={mentionablePlayers}
+        onMention={addMention}
+        onTextChange={changeText}
         onTrayChange={setTray}
         onSend={send}
         onSendText={sendText}
@@ -1952,58 +2562,57 @@ function TableChatPanel({
 
 function MobileChatSheet({
   messages,
+  squadMessages = [],
+  squadPlayerId = null,
+  players = [],
+  squadMemberIds = [],
   selfPlayerId,
   error,
   onSendMessage,
 }: {
-  messages: ChatMessage[]
+  messages: Array<ChatMessage>
+  squadMessages?: Array<ChatMessage>
+  squadPlayerId?: string | null
+  players?: Array<Player>
+  squadMemberIds?: Array<string>
   selfPlayerId: string
   error: string | null
   onSendMessage: (input: SendChatMessageInput) => void
 }) {
-  const [text, setText] = useState("")
-  const [tray, setTray] = useState<ChatTray | null>(null)
   const [open, setOpen] = useState(false)
-  const latestMessageId =
-    messages.length > 0 ? messages[messages.length - 1]!.id : null
-  const [lastReadMessageId, setLastReadMessageId] = useState<string | null>(
-    latestMessageId
-  )
   const haptic = useWebHaptics()
-  const unreadMessageCount = useMemo(() => {
-    if (messages.length === 0) return 0
-
-    const lastReadIndex = lastReadMessageId
-      ? messages.findIndex((message) => message.id === lastReadMessageId)
-      : -1
-
-    return messages
-      .slice(lastReadIndex + 1)
-      .filter((message) => message.playerId !== selfPlayerId).length
-  }, [messages, lastReadMessageId, selfPlayerId])
+  const {
+    addMention,
+    changeText,
+    channel,
+    channelMessages,
+    markChannelRead,
+    mentionablePlayers,
+    publicMention,
+    send,
+    sendText,
+    setChannel,
+    setTray,
+    squadMention,
+    text,
+    tray,
+    unreadMessageCount,
+  } = useChannelChat({
+    messages,
+    squadMessages,
+    squadPlayerId,
+    players,
+    squadMemberIds,
+    selfPlayerId,
+    isReading: open,
+    onBeforeSend: () => haptic.trigger("light"),
+    onSendMessage,
+  })
 
   function openChat() {
-    setLastReadMessageId(latestMessageId)
     setOpen(true)
+    markChannelRead()
   }
-
-  function send(input: SendChatMessageInput) {
-    playFx("buttonSoft", { volume: 0.36 })
-    haptic.trigger("light")
-    onSendMessage(input)
-  }
-
-  function sendText() {
-    const body = text.trim()
-    if (!body) return
-    send({ kind: "text", body })
-    setText("")
-  }
-
-  useEffect(() => {
-    if (!open) return
-    setLastReadMessageId(latestMessageId)
-  }, [open, latestMessageId])
 
   useEffect(() => {
     if (!open) return
@@ -2065,7 +2674,7 @@ function MobileChatSheet({
                     id="mobile-chat-title"
                     className="text-base font-semibold text-white"
                   >
-                    Table chat
+                    Match chat
                   </h2>
                   <p className="mt-0.5 text-xs text-white/45">
                     Text, emoji, GIFs, and quick lines.
@@ -2081,8 +2690,21 @@ function MobileChatSheet({
                 </button>
               </div>
 
+              <div className="px-4 pt-2">
+                <ChatChannelTabs
+                  channel={channel}
+                  squadAvailable={Boolean(squadPlayerId)}
+                  publicMention={publicMention}
+                  squadMention={squadMention}
+                  onChange={(nextChannel) => {
+                    setChannel(nextChannel)
+                    markChannelRead(nextChannel)
+                  }}
+                />
+              </div>
+
               <ChatMessageList
-                messages={messages}
+                messages={channelMessages}
                 selfPlayerId={selfPlayerId}
                 emptyVariant="sheet"
                 className="flex-1 px-4 py-3"
@@ -2099,7 +2721,9 @@ function MobileChatSheet({
                   text={text}
                   tray={tray}
                   comfortable
-                  onTextChange={setText}
+                  mentionablePlayers={mentionablePlayers}
+                  onMention={addMention}
+                  onTextChange={changeText}
                   onTrayChange={setTray}
                   onSend={send}
                   onSendText={sendText}
@@ -2120,8 +2744,8 @@ function MobileSeatingRing({
   voiceStates,
   canTakeDrawPenalty,
   onTakeDrawPenalty,
-  isSelfEliminated,
   spectatingPlayerId,
+  supportCandidatePlayerIds,
   onSpectatePlayer,
 }: {
   room: RoomSnapshot
@@ -2130,8 +2754,8 @@ function MobileSeatingRing({
   voiceStates: RoomVoiceController["voiceStates"]
   canTakeDrawPenalty: boolean
   onTakeDrawPenalty: () => void
-  isSelfEliminated: boolean
   spectatingPlayerId: string | null
+  supportCandidatePlayerIds: Array<string>
   onSpectatePlayer: (targetPlayerId: string) => void
 }) {
   const ordered = orderPlayersAroundSelf(room.players, selfPlayerId)
@@ -2164,9 +2788,30 @@ function MobileSeatingRing({
         const isWinner = winnerPlacement?.position === 1
         const fadedOpacity = eliminated || !candidate.connected
         const showName = !dense || isYou
+        const supporterCount =
+          game?.supportLinks.filter(
+            (link) => link.supportedPlayerId === candidate.id
+          ).length ?? 0
+        const supporterNames =
+          game?.supportLinks
+            .filter((link) => link.supportedPlayerId === candidate.id)
+            .map(
+              (link) =>
+                room.players.find(
+                  (supporter) => supporter.id === link.supporterPlayerId
+                )?.name
+            )
+            .filter((name): name is string => Boolean(name)) ?? []
+        const latestReaction = game?.tableReactions
+          .slice()
+          .reverse()
+          .find(
+            (reaction) =>
+              (reaction.supportedPlayerId ?? reaction.playerId) === candidate.id
+          )
 
         const isSpectated = spectatingPlayerId === candidate.id
-        const canSpectate = isSelfEliminated && !isYou && !eliminated && !winnerPlacement
+        const canSpectate = supportCandidatePlayerIds.includes(candidate.id)
 
         const ringClass = isWinner
           ? "ring-2 ring-amber-200/85 shadow-[0_0_22px_rgba(252,211,77,0.46)]"
@@ -2195,7 +2840,9 @@ function MobileSeatingRing({
               " " +
               (fadedOpacity ? "opacity-55" : "opacity-100") +
               " " +
-              (canSpectate ? "pointer-events-auto cursor-pointer hover:scale-105" : "")
+              (canSpectate
+                ? "pointer-events-auto cursor-pointer hover:scale-105"
+                : "")
             }
             style={{
               left: `${seat.left}%`,
@@ -2237,6 +2884,19 @@ function MobileSeatingRing({
                     ? "UNO"
                     : handCount}
               </span>
+              {supporterCount > 0 && (
+                <span className="absolute -bottom-1.5 -left-1.5 rounded-full border border-pink-200/25 bg-pink-300/18 px-1 text-[8px] font-semibold text-pink-50 shadow-[0_4px_10px_rgba(0,0,0,0.32)]">
+                  🙌 {supporterCount}
+                </span>
+              )}
+              {latestReaction && (
+                <span
+                  key={latestReaction.id}
+                  className="absolute -bottom-5 animate-bounce rounded-full border border-white/12 bg-black/80 px-1.5 py-0.5 text-[9px] text-white shadow-lg"
+                >
+                  {latestReaction.body}
+                </span>
+              )}
               <span
                 className={
                   "absolute -right-1 -bottom-1 grid size-4 place-items-center rounded-full border bg-neutral-950/95 transition-[border-color,color] " +
@@ -2273,6 +2933,14 @@ function MobileSeatingRing({
                 {isYou ? "You" : candidate.name}
               </p>
             )}
+            {supporterNames.length > 0 && (
+              <p
+                className="mt-0.5 max-w-[72px] truncate text-center text-[8px] text-pink-100/72"
+                title={supporterNames.join(", ")}
+              >
+                🙌 {supporterNames.join(", ")}
+              </p>
+            )}
             {drawStack && (
               <div className="pointer-events-auto absolute -bottom-1.5 flex items-center gap-1 rounded-full border border-white/14 bg-neutral-950 px-1.5 py-0.5 text-[9px] font-semibold text-red-100 shadow-[0_8px_18px_rgba(0,0,0,0.32)]">
                 +{drawStack.amount}
@@ -2306,13 +2974,58 @@ function mobileSeatPosition(index: number, total: number) {
   }
 }
 
+function ChatChannelTabs({
+  channel,
+  squadAvailable,
+  publicMention,
+  squadMention,
+  onChange,
+}: {
+  channel: ChatChannel
+  squadAvailable: boolean
+  publicMention: boolean
+  squadMention: boolean
+  onChange: (channel: ChatChannel) => void
+}) {
+  return (
+    <div className="mt-2 grid grid-cols-2 gap-1 rounded-xl border border-white/8 bg-black/22 p-1">
+      {(["public", "squad"] as const).map((nextChannel) => {
+        const disabled = nextChannel === "squad" && !squadAvailable
+        const mentioned =
+          nextChannel === "public" ? publicMention : squadMention
+        return (
+          <button
+            key={nextChannel}
+            type="button"
+            disabled={disabled}
+            onClick={() => onChange(nextChannel)}
+            className={
+              "relative h-8 rounded-lg text-xs font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-35 " +
+              (channel === nextChannel
+                ? "bg-white text-neutral-950"
+                : "text-white/52 hover:bg-white/[0.06] hover:text-white/78")
+            }
+          >
+            {nextChannel === "public" ? "Public" : "Squad"}
+            {mentioned && (
+              <span className="absolute top-1 right-2 grid size-4 place-items-center rounded-full bg-pink-500 text-[9px] text-white">
+                @
+              </span>
+            )}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 function ChatMessageList({
   messages,
   selfPlayerId,
   emptyVariant = "panel",
   className,
 }: {
-  messages: ChatMessage[]
+  messages: Array<ChatMessage>
   selfPlayerId: string
   emptyVariant?: "panel" | "sheet"
   className?: string
@@ -2385,6 +3098,7 @@ function ChatMessageList({
               key={message.id}
               message={message}
               isSelf={message.playerId === selfPlayerId}
+              isMentioned={message.mentionPlayerIds.includes(selfPlayerId)}
             />
           ))}
     </div>
@@ -2394,7 +3108,9 @@ function ChatMessageList({
 function ChatComposer({
   text,
   tray,
+  mentionablePlayers = [],
   comfortable = false,
+  onMention,
   onTextChange,
   onTrayChange,
   onSend,
@@ -2402,7 +3118,9 @@ function ChatComposer({
 }: {
   text: string
   tray: ChatTray | null
+  mentionablePlayers?: Array<Player>
   comfortable?: boolean
+  onMention?: (player: Player) => void
   onTextChange: (value: string) => void
   onTrayChange: (tray: ChatTray | null) => void
   onSend: (input: SendChatMessageInput) => void
@@ -2424,13 +3142,26 @@ function ChatComposer({
         (comfortable ? "rounded-2xl p-2" : "rounded-xl p-1.5")
       }
     >
-      {tray && (
+      {tray === "mentions" ? (
+        <div className="uno-scrollbar flex max-h-32 flex-wrap gap-1.5 overflow-y-auto pr-1">
+          {mentionablePlayers.map((player) => (
+            <button
+              key={player.id}
+              type="button"
+              onClick={() => onMention?.(player)}
+              className="rounded-full border border-white/10 bg-white/[0.055] px-2.5 py-1.5 text-xs text-white/72 hover:bg-white/[0.09] hover:text-white"
+            >
+              @{player.name} · seat {player.seat}
+            </button>
+          ))}
+        </div>
+      ) : tray ? (
         <ChatQuickTray
           tray={tray}
           comfortable={comfortable}
           onSend={sendQuick}
         />
-      )}
+      ) : null}
 
       <div className={tray ? "mt-2" : ""}>
         <div
@@ -2443,6 +3174,12 @@ function ChatComposer({
             label="Presets"
             icon={<Sparkles className="size-3" strokeWidth={1.9} />}
             onClick={() => toggleTray("presets")}
+          />
+          <ChatToolButton
+            active={tray === "mentions"}
+            label="Mention player"
+            icon={<span className="text-[11px] font-bold">@</span>}
+            onClick={() => toggleTray("mentions")}
           />
           <ChatToolButton
             active={tray === "emoji"}
@@ -2504,7 +3241,7 @@ function ChatQuickTray({
   comfortable = false,
   onSend,
 }: {
-  tray: ChatTray
+  tray: Exclude<ChatTray, "mentions">
   comfortable?: boolean
   onSend: (input: SendChatMessageInput) => void
 }) {
@@ -2616,9 +3353,11 @@ function ChatToolButton({
 function ChatMessageBubble({
   message,
   isSelf,
+  isMentioned,
 }: {
   message: ChatMessage
   isSelf: boolean
+  isMentioned: boolean
 }) {
   return (
     <div className={"flex " + (isSelf ? "justify-end" : "justify-start")}>
@@ -2641,7 +3380,8 @@ function ChatMessageBubble({
             "overflow-hidden rounded-2xl px-3 py-2 shadow-[0_10px_24px_rgba(0,0,0,0.22)] " +
             (isSelf
               ? "rounded-br-md bg-white text-neutral-950"
-              : "rounded-bl-md bg-white/[0.085] text-white/82 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.07),0_10px_24px_rgba(0,0,0,0.22)]")
+              : "rounded-bl-md bg-white/[0.085] text-white/82 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.07),0_10px_24px_rgba(0,0,0,0.22)]") +
+            (isMentioned ? " ring-1 ring-pink-300/55" : "")
           }
         >
           {message.kind === "gif" ? (
@@ -2740,8 +3480,8 @@ function SideCannonConfetti() {
     const instance = confetti.create(canvas, {
       resize: true,
       useWorker: true,
-    }) as ConfettiInstance
-    const timeouts: number[] = []
+    })
+    const timeouts: Array<number> = []
 
     const defaults: ConfettiOptions = {
       colors: [
@@ -2831,6 +3571,7 @@ function TableSeatRing({
   voiceStates,
   isSelfEliminated,
   spectatingPlayerId,
+  supportCandidatePlayerIds,
   onSpectatePlayer,
 }: {
   room: RoomSnapshot
@@ -2842,6 +3583,7 @@ function TableSeatRing({
   voiceStates: RoomVoiceController["voiceStates"]
   isSelfEliminated: boolean
   spectatingPlayerId: string | null
+  supportCandidatePlayerIds: Array<string>
   onSpectatePlayer: (targetPlayerId: string) => void
 }) {
   const players = orderPlayersAroundSelf(room.players, selfPlayerId)
@@ -2859,6 +3601,32 @@ function TableSeatRing({
             key={candidate.id}
             player={candidate}
             handCount={state?.handCount ?? 0}
+            supporterCount={
+              game?.supportLinks.filter(
+                (link) => link.supportedPlayerId === candidate.id
+              ).length ?? 0
+            }
+            supporterNames={
+              game?.supportLinks
+                .filter((link) => link.supportedPlayerId === candidate.id)
+                .map(
+                  (link) =>
+                    room.players.find(
+                      (supporter) => supporter.id === link.supporterPlayerId
+                    )?.name
+                )
+                .filter((name): name is string => Boolean(name)) ?? []
+            }
+            latestReaction={
+              game?.tableReactions
+                .slice()
+                .reverse()
+                .find(
+                  (reaction) =>
+                    (reaction.supportedPlayerId ?? reaction.playerId) ===
+                    candidate.id
+                ) ?? null
+            }
             active={game?.turnPlayerId === candidate.id}
             declaredUno={Boolean(state?.declaredUno)}
             eliminated={Boolean(state?.eliminated)}
@@ -2881,6 +3649,7 @@ function TableSeatRing({
             top={seat.top}
             isSelfEliminated={isSelfEliminated}
             isSpectated={spectatingPlayerId === candidate.id}
+            canChooseSupport={supportCandidatePlayerIds.includes(candidate.id)}
             onSpectatePlayer={onSpectatePlayer}
           />
         )
@@ -2892,6 +3661,9 @@ function TableSeatRing({
 function TableAvatarSeat({
   player,
   handCount,
+  supporterCount,
+  supporterNames,
+  latestReaction,
   active,
   declaredUno,
   eliminated,
@@ -2907,10 +3679,16 @@ function TableAvatarSeat({
   top,
   isSelfEliminated,
   isSpectated,
+  canChooseSupport,
   onSpectatePlayer,
 }: {
   player: Player
   handCount: number
+  supporterCount: number
+  supporterNames: Array<string>
+  latestReaction:
+    | NonNullable<RoomSnapshot["game"]>["tableReactions"][number]
+    | null
   active: boolean
   declaredUno: boolean
   eliminated: boolean
@@ -2928,6 +3706,7 @@ function TableAvatarSeat({
   top: number
   isSelfEliminated?: boolean
   isSpectated?: boolean
+  canChooseSupport?: boolean
   onSpectatePlayer?: (targetPlayerId: string) => void
 }) {
   const placementText = winnerPlacement
@@ -2939,7 +3718,13 @@ function TableAvatarSeat({
   const isMuted = !hasVoiceOn || Boolean(voiceState?.muted)
   const isSpeaking = Boolean(voiceState?.speaking && !isMuted)
 
-  const canSpectate = isSelfEliminated && !isYou && !eliminated && !winnerPlacement
+  const canSpectate = Boolean(
+    canChooseSupport &&
+    isSelfEliminated &&
+    !isYou &&
+    !eliminated &&
+    !winnerPlacement
+  )
 
   return (
     <div
@@ -2957,7 +3742,9 @@ function TableAvatarSeat({
             ? "opacity-45"
             : "opacity-100") +
         " " +
-        (canSpectate ? "pointer-events-auto cursor-pointer hover:scale-[1.03]" : "")
+        (canSpectate
+          ? "pointer-events-auto cursor-pointer hover:scale-[1.03]"
+          : "")
       }
       style={{ left: `${left}%`, top: `${top}%` }}
     >
@@ -2990,6 +3777,19 @@ function TableAvatarSeat({
             aria-label={`${placementText} trophy`}
           >
             <Trophy className="size-4" strokeWidth={2.2} />
+          </div>
+        )}
+        {supporterCount > 0 && (
+          <div className="absolute -top-2 -left-2 rounded-full border border-pink-200/30 bg-pink-300/18 px-2 py-0.5 text-[10px] font-semibold text-pink-50 shadow-[0_8px_18px_rgba(0,0,0,0.28)]">
+            🙌 {supporterCount}
+          </div>
+        )}
+        {latestReaction && (
+          <div
+            key={latestReaction.id}
+            className="absolute -bottom-7 left-1/2 -translate-x-1/2 animate-bounce rounded-full border border-white/12 bg-neutral-950/95 px-2 py-1 text-[10px] font-semibold whitespace-nowrap text-white shadow-[0_10px_24px_rgba(0,0,0,0.42)]"
+          >
+            {latestReaction.body}
           </div>
         )}
         <div
@@ -3085,6 +3885,21 @@ function TableAvatarSeat({
           )}
         </div>
       </div>
+      {supporterNames.length > 0 && (
+        <div
+          className="pointer-events-auto flex max-w-40 flex-wrap justify-center gap-1"
+          aria-label={`Supporters: ${supporterNames.join(", ")}`}
+        >
+          {supporterNames.map((name) => (
+            <span
+              key={name}
+              className="max-w-24 truncate rounded-full border border-pink-200/20 bg-pink-300/12 px-1.5 py-0.5 text-[9px] font-medium text-pink-50/78"
+            >
+              🙌 {name}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -3115,7 +3930,7 @@ function DrawStackSeatBadge({
   )
 }
 
-function orderPlayersAroundSelf(players: Player[], selfPlayerId: string) {
+function orderPlayersAroundSelf(players: Array<Player>, selfPlayerId: string) {
   const selfIndex = players.findIndex(
     (candidate) => candidate.id === selfPlayerId
   )
@@ -3138,8 +3953,8 @@ function tableSeatPosition(index: number, total: number, compact: boolean) {
 
 function canStageCardWithSelection(
   card: Card,
-  selectedCards: Card[],
-  playableCardIds: string[],
+  selectedCards: Array<Card>,
+  playableCardIds: Array<string>,
   isMyTurn: boolean,
   drawStack: NonNullable<RoomSnapshot["game"]>["drawStack"]
 ) {
@@ -3153,7 +3968,7 @@ function canStageCardWithSelection(
   )
 }
 
-function cardsInIdOrder(cards: Card[], cardIds: string[]) {
+function cardsInIdOrder(cards: Array<Card>, cardIds: Array<string>) {
   const cardsById = new Map(cards.map((card) => [card.id, card]))
   return cardIds
     .map((cardId) => cardsById.get(cardId))
@@ -3161,8 +3976,8 @@ function cardsInIdOrder(cards: Card[], cardIds: string[]) {
 }
 
 function canPlayStagedCards(
-  cards: Card[],
-  playableCardIds: string[],
+  cards: Array<Card>,
+  playableCardIds: Array<string>,
   drawStack: NonNullable<RoomSnapshot["game"]>["drawStack"]
 ) {
   if (cards.length === 0) return false
@@ -3182,7 +3997,10 @@ function canPlayStagedCards(
   )
 }
 
-function isDiscardFirstStage(cards: Card[], playableCardIds: string[]) {
+function isDiscardFirstStage(
+  cards: Array<Card>,
+  playableCardIds: Array<string>
+) {
   const discardCard = cards[0]
   if (!discardCard || discardCard.face.kind !== "discard-color") return false
   if (!playableCardIds.includes(discardCard.id)) return false
@@ -3197,8 +4015,8 @@ function isDiscardFirstStage(cards: Card[], playableCardIds: string[]) {
 
 function canStackDrawCards(
   drawStack: NonNullable<RoomSnapshot["game"]>["drawStack"],
-  cards: Card[],
-  playableCardIds: string[]
+  cards: Array<Card>,
+  playableCardIds: Array<string>
 ) {
   if (!drawStack || cards.length === 0) return false
 
@@ -3235,7 +4053,7 @@ function isForbiddenFinalCard(card: Card) {
   return card.face.kind !== "number" && card.face.kind !== "discard-color"
 }
 
-function sameNumberGroup(cards: Card[]) {
+function sameNumberGroup(cards: Array<Card>) {
   const first = cards[0]
   if (!first || first.face.kind !== "number") return false
   const value = first.face.value
@@ -3244,14 +4062,14 @@ function sameNumberGroup(cards: Card[]) {
   )
 }
 
-function sameDrawGroup(cards: Card[]) {
+function sameDrawGroup(cards: Array<Card>) {
   const first = cards[0]
   const key = first ? drawGroupKey(first) : null
   if (!key) return false
   return cards.every((card) => drawGroupKey(card) === key)
 }
 
-function sameActionGroup(cards: Card[]) {
+function sameActionGroup(cards: Array<Card>) {
   const firstKind = cards[0]?.face.kind
   if (
     firstKind !== "skip" &&
@@ -3463,7 +4281,7 @@ function TableStagedPlay({
   canEdit,
   onCardClick,
 }: {
-  cards: Card[]
+  cards: Array<Card>
   playerName: string | null
   mode: "stage" | "roulette"
   targetColor: PlayColor | null
@@ -3677,10 +4495,10 @@ function FannedGameHand({
   onDragEnd,
   onCancelDrag,
 }: {
-  cards: Card[]
-  playableCardIds: string[]
-  selectedCardIds: string[]
-  hiddenCardIds?: string[]
+  cards: Array<Card>
+  playableCardIds: Array<string>
+  selectedCardIds: Array<string>
+  hiddenCardIds?: Array<string>
   isMyTurn: boolean
   drawStack: NonNullable<RoomSnapshot["game"]>["drawStack"]
   cardSize: ResponsiveCardSize
@@ -4264,7 +5082,7 @@ function CopyInviteButton({
   )
 }
 
-const playColors: PlayColor[] = ["red", "yellow", "green", "blue"]
+const playColors: Array<PlayColor> = ["red", "yellow", "green", "blue"]
 
 const cardBackPlaceholder: Card = {
   id: "draw-pile",
@@ -4368,6 +5186,19 @@ function playerName(
   return (
     room.players.find((player) => player.id === playerId)?.name ?? "Someone"
   )
+}
+
+function squadMemberIdsFor(
+  room: RoomSnapshot,
+  squadPlayerId: string | null | undefined
+): Array<string> {
+  if (!squadPlayerId) return []
+  return [
+    squadPlayerId,
+    ...(room.game?.supportLinks
+      .filter((link) => link.supportedPlayerId === squadPlayerId)
+      .map((link) => link.supporterPlayerId) ?? []),
+  ]
 }
 
 function ordinalLabel(value: number): string {
@@ -4792,6 +5623,7 @@ function LobbyWaitingRoom({
             <div className="lg:hidden">
               <MobileChatSheet
                 messages={messages}
+                players={players}
                 selfPlayerId={player.id}
                 error={visibleError}
                 onSendMessage={onSendChatMessage}
@@ -4819,6 +5651,7 @@ function LobbyWaitingRoom({
 
           <TableChatPanel
             messages={messages}
+            players={players}
             selfPlayerId={player.id}
             error={visibleError}
             onSendMessage={onSendChatMessage}
@@ -4982,7 +5815,7 @@ function DimmedSeatRing({
   voiceStates,
   compact,
 }: {
-  players: Player[]
+  players: Array<Player>
   hostPlayerId: string | null
   selfPlayerId: string
   voiceStates: RoomVoiceController["voiceStates"]
@@ -5283,7 +6116,7 @@ function GameStartIntro({
     }
 
     const total = tokens.length
-    const longest = total > 0 ? tokens[total - 1]!.delay + 520 : 600
+    const longest = total > 0 ? tokens[total - 1].delay + 520 : 600
     const timer = window.setTimeout(() => {
       onPhaseChange("done")
       onFinish()
@@ -5399,7 +6232,7 @@ function RouletteFlyToHand({
   onFlightStart,
   onDone,
 }: {
-  cards: Card[]
+  cards: Array<Card>
   targetPlayerId: string
   isSelfTarget: boolean
   startDelayMs?: number
