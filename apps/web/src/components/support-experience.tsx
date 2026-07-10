@@ -50,11 +50,14 @@ export function SupportConfirmDialog({
           id="support-confirm-title"
           className="mt-4 text-center text-xl font-semibold"
         >
-          Support {playerName}?
+          Ride with {playerName}?
         </h2>
         <p className="mt-2 text-center text-sm leading-6 text-white/58">
-          You&apos;ll see their full hand and cannot switch while they remain
-          active—unless they kick you from the squad.
+          You&apos;ll see {playerName}&apos;s full hand in real time and drop
+          into their Squad chat.
+          <br />
+          Pick once—you&apos;re locked to them for the rest of this game. No
+          takebacks.
         </p>
         <div className="mt-5 grid grid-cols-2 gap-2">
           <button
@@ -69,7 +72,7 @@ export function SupportConfirmDialog({
             onClick={onConfirm}
             className="h-11 rounded-xl bg-white px-3 text-sm font-semibold text-neutral-950 hover:bg-white/86"
           >
-            Lock in support
+            Ride or die
           </button>
         </div>
       </section>

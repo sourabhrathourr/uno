@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { act } from "react"
 import { createRoot } from "react-dom/client"
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest"
@@ -36,10 +37,10 @@ describe("support experience", () => {
       return Promise.resolve()
     })
 
-    expect(container.textContent).toContain("Support Priya?")
-    expect(container.textContent).toContain("cannot switch")
+    expect(container.textContent).toContain("Ride with Priya?")
+    expect(container.textContent).toContain("No takebacks")
     const button = [...container.querySelectorAll("button")].find(
-      (candidate) => candidate.textContent === "Lock in support"
+      (candidate) => candidate.textContent === "Ride or die"
     )
     await act(() => {
       button?.click()
