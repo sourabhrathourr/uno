@@ -3339,16 +3339,6 @@ function ChatMessageBubble({
                 className="h-28 w-full rounded-xl object-cover outline outline-1 outline-white/10"
                 loading="lazy"
               />
-              {message.label && (
-                <p
-                  className={
-                    "px-1 pt-1 text-[11px] " +
-                    (isSelf ? "text-neutral-600" : "text-white/52")
-                  }
-                >
-                  {message.label}
-                </p>
-              )}
             </div>
           ) : message.kind === "emoji" ? (
             <p className="text-3xl leading-none">{message.body}</p>
