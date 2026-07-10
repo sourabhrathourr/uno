@@ -15,7 +15,6 @@ import {
   Smile,
   Sparkles,
   Trophy,
-  UserRound,
   UsersRound,
   Volume2,
   VolumeX,
@@ -30,7 +29,6 @@ import {
   CHAT_GIFS,
   CHAT_PRESETS,
   TABLE_REACTION_EMOJIS,
-  TABLE_REACTION_PRESETS,
 } from "@workspace/game"
 import { Button } from "@workspace/ui/components/button"
 import { Checkbox } from "@workspace/ui/components/checkbox"
@@ -868,6 +866,11 @@ function GameTable({
     string | null
   >(null)
 
+  function requestSupportPlayer(targetPlayerId: string) {
+    if (spectatingPlayerId) return
+    setPendingSupportPlayerId(targetPlayerId)
+  }
+
   const [selectedCardIds, setSelectedCardIds] = useState<Array<string>>([])
   const [pendingPlayedCardIds, setPendingPlayedCardIds] = useState<
     Array<string>
@@ -943,15 +946,6 @@ function GameTable({
   const pendingSupportPlayer = room.players.find(
     (candidate) => candidate.id === pendingSupportPlayerId
   )
-  const selfSupporters =
-    game?.supportLinks
-      .filter((link) => link.supportedPlayerId === player.id)
-      .map((link) =>
-        room.players.find(
-          (candidate) => candidate.id === link.supporterPlayerId
-        )
-      )
-      .filter((candidate): candidate is Player => Boolean(candidate)) ?? []
   const isMyTurn = game?.turnPlayerId === player.id
   const firstWinnerPlacement =
     game?.winnerPlacements.find((placement) => placement.position === 1) ?? null
@@ -1494,6 +1488,7 @@ function GameTable({
                   selfPlayerId={player.id}
                   error={error}
                   onSendMessage={onSendChatMessage}
+                  onKickSupporter={onKickSupporter}
                 />
               </div>
             </header>
@@ -1533,7 +1528,7 @@ function GameTable({
                   supportCandidatePlayerIds={supportCandidates.map(
                     (candidate) => candidate.id
                   )}
-                  onSpectatePlayer={setPendingSupportPlayerId}
+                  onSpectatePlayer={requestSupportPlayer}
                 />
 
                 <div className="relative z-10 flex h-full min-h-0 flex-col">
@@ -1681,7 +1676,7 @@ function GameTable({
                     {isSelfEliminated
                       ? spectatingPlayerId
                         ? "🙌 Supporting"
-                        : "Choose an active player to support."
+                        : "Tap an active player to spectate."
                       : "Tap a card to stage it."}
                   </p>
                 </div>
@@ -1732,18 +1727,6 @@ function GameTable({
                   </div>
                 )}
               </div>
-
-              <SupportControls
-                candidates={
-                  isSelfEliminated && !spectatingPlayerId
-                    ? supportCandidates
-                    : []
-                }
-                supporters={selfSupporters}
-                onChoose={setPendingSupportPlayerId}
-                onKick={onKickSupporter}
-                compact
-              />
 
               {isSelfEliminated &&
                 game?.stagedPlay?.playerId === spectatingPlayerId && (
@@ -1911,7 +1894,7 @@ function GameTable({
                   supportCandidatePlayerIds={supportCandidates.map(
                     (candidate) => candidate.id
                   )}
-                  onSpectatePlayer={setPendingSupportPlayerId}
+                  onSpectatePlayer={requestSupportPlayer}
                 />
                 <div className="relative z-10 flex h-full min-h-0 flex-col">
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -2035,7 +2018,7 @@ function GameTable({
                       {isSelfEliminated
                         ? spectatingPlayerId
                           ? "🙌 Supporting"
-                          : "Choose an active player to support."
+                          : "Tap an active player to spectate."
                         : "Drag cards to the table, then end your turn."}
                     </p>
                   </div>
@@ -2103,17 +2086,6 @@ function GameTable({
                   )}
                 </div>
 
-                <SupportControls
-                  candidates={
-                    isSelfEliminated && !spectatingPlayerId
-                      ? supportCandidates
-                      : []
-                  }
-                  supporters={selfSupporters}
-                  onChoose={setPendingSupportPlayerId}
-                  onKick={onKickSupporter}
-                />
-
                 {isSelfEliminated &&
                   game?.stagedPlay?.playerId === spectatingPlayerId && (
                     <SupportDecisionPills
@@ -2180,6 +2152,7 @@ function GameTable({
               selfPlayerId={player.id}
               error={error}
               onSendMessage={onSendChatMessage}
+              onKickSupporter={onKickSupporter}
             />
           </section>
         </div>
@@ -2195,65 +2168,6 @@ function GameTable({
         />
       )}
     </>
-  )
-}
-
-function SupportControls({
-  candidates,
-  supporters,
-  onChoose,
-  onKick,
-  compact = false,
-}: {
-  candidates: Array<Player>
-  supporters: Array<Player>
-  onChoose: (playerId: string) => void
-  onKick: (playerId: string) => void
-  compact?: boolean
-}) {
-  if (candidates.length === 0 && supporters.length === 0) return null
-  return (
-    <div
-      className={
-        (compact ? "mt-1" : "mt-2") + " flex shrink-0 gap-2 overflow-x-auto"
-      }
-    >
-      {candidates.length > 0 && (
-        <div className="flex shrink-0 items-center gap-1 rounded-xl border border-pink-200/15 bg-pink-300/[0.08] p-1">
-          <span className="px-1.5 text-[10px] font-semibold tracking-wide text-pink-50/70 uppercase">
-            Choose your player
-          </span>
-          {candidates.map((candidate) => (
-            <button
-              key={candidate.id}
-              type="button"
-              onClick={() => onChoose(candidate.id)}
-              className="h-7 rounded-lg bg-white px-2 text-[11px] font-semibold text-neutral-950 hover:bg-white/86"
-            >
-              🙌 {candidate.name}
-            </button>
-          ))}
-        </div>
-      )}
-      {supporters.length > 0 && (
-        <div className="flex shrink-0 items-center gap-1 rounded-xl border border-white/10 bg-white/[0.045] p-1">
-          <span className="px-1.5 text-[10px] font-semibold tracking-wide text-white/50 uppercase">
-            Your squad
-          </span>
-          {supporters.map((supporter) => (
-            <button
-              key={supporter.id}
-              type="button"
-              onClick={() => onKick(supporter.id)}
-              title={`Kick ${supporter.name}`}
-              className="h-7 rounded-lg border border-white/10 bg-black/30 px-2 text-[11px] text-white/72 hover:border-red-300/30 hover:bg-red-400/10 hover:text-red-100"
-            >
-              {supporter.name} · kick
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
   )
 }
 
@@ -2286,36 +2200,6 @@ function TableEnergyBar({
             {emoji}
           </button>
         ))}
-      </div>
-      <select
-        aria-label="Send preset reaction"
-        defaultValue=""
-        onChange={(event) => {
-          if (!event.target.value) return
-          onReact({ kind: "preset", body: event.target.value })
-          event.target.value = ""
-        }}
-        className="h-8 shrink-0 rounded-full border border-white/10 bg-neutral-950 px-2 text-[10px] font-semibold text-white/68 outline-none"
-      >
-        <option value="">Quick taunt…</option>
-        {TABLE_REACTION_PRESETS.map((preset) => (
-          <option key={preset} value={preset}>
-            {preset}
-          </option>
-        ))}
-      </select>
-      <div className="flex min-w-24 shrink-0 items-center gap-1.5 rounded-full border border-amber-200/15 bg-amber-300/[0.08] px-2 py-1">
-        <span className="text-[9px] font-semibold text-amber-50/68 uppercase">
-          Hype
-        </span>
-        <span className="h-1.5 flex-1 overflow-hidden rounded-full bg-black/40">
-          <span
-            className="block h-full rounded-full bg-gradient-to-r from-pink-400 to-amber-300 transition-[width] duration-300"
-            style={{
-              width: `${Math.min(100, (game.hypeMeter.value / game.hypeMeter.threshold) * 100)}%`,
-            }}
-          />
-        </span>
       </div>
     </div>
   )
@@ -2472,6 +2356,7 @@ function TableChatPanel({
   selfPlayerId,
   error,
   onSendMessage,
+  onKickSupporter,
 }: {
   messages: Array<ChatMessage>
   squadMessages?: Array<ChatMessage>
@@ -2481,6 +2366,7 @@ function TableChatPanel({
   selfPlayerId: string
   error: string | null
   onSendMessage: (input: SendChatMessageInput) => void
+  onKickSupporter?: (supporterPlayerId: string) => void
 }) {
   const {
     addMention,
@@ -2534,6 +2420,16 @@ function TableChatPanel({
         onChange={setChannel}
       />
 
+      {channel === "squad" && squadPlayerId && (
+        <SquadRosterPanel
+          players={players}
+          squadPlayerId={squadPlayerId}
+          squadMemberIds={squadMemberIds}
+          selfPlayerId={selfPlayerId}
+          onKickSupporter={onKickSupporter}
+        />
+      )}
+
       <ChatMessageList
         messages={channelMessages}
         selfPlayerId={selfPlayerId}
@@ -2569,6 +2465,7 @@ function MobileChatSheet({
   selfPlayerId,
   error,
   onSendMessage,
+  onKickSupporter,
 }: {
   messages: Array<ChatMessage>
   squadMessages?: Array<ChatMessage>
@@ -2578,6 +2475,7 @@ function MobileChatSheet({
   selfPlayerId: string
   error: string | null
   onSendMessage: (input: SendChatMessageInput) => void
+  onKickSupporter?: (supporterPlayerId: string) => void
 }) {
   const [open, setOpen] = useState(false)
   const haptic = useWebHaptics()
@@ -2703,6 +2601,18 @@ function MobileChatSheet({
                 />
               </div>
 
+              {channel === "squad" && squadPlayerId && (
+                <div className="px-4">
+                  <SquadRosterPanel
+                    players={players}
+                    squadPlayerId={squadPlayerId}
+                    squadMemberIds={squadMemberIds}
+                    selfPlayerId={selfPlayerId}
+                    onKickSupporter={onKickSupporter}
+                  />
+                </div>
+              )}
+
               <ChatMessageList
                 messages={channelMessages}
                 selfPlayerId={selfPlayerId}
@@ -2759,6 +2669,7 @@ function MobileSeatingRing({
   onSpectatePlayer: (targetPlayerId: string) => void
 }) {
   const ordered = orderPlayersAroundSelf(room.players, selfPlayerId)
+  const avatarUrls = avatarsByPlayerId(room.code, room.players)
 
   if (ordered.length === 0) return null
 
@@ -2862,14 +2773,22 @@ function MobileSeatingRing({
                   : "border-white/10")
               }
             >
-              {winnerPlacement ? (
-                <Trophy className="size-4" strokeWidth={2.1} />
-              ) : (
-                <UserRound
-                  className={dense ? "size-3.5" : "size-4"}
-                  strokeWidth={1.85}
-                />
-              )}
+              <ReactionAvatarContent
+                reaction={latestReaction ?? null}
+                emojiClassName={dense ? "text-xl" : "text-2xl"}
+                fallback={
+                  winnerPlacement ? (
+                    <Trophy className="size-4" strokeWidth={2.1} />
+                  ) : (
+                    <img
+                      src={avatarUrls.get(candidate.id) ?? PLAYER_AVATARS[0]!}
+                      alt={`${candidate.name} avatar`}
+                      draggable={false}
+                      className="size-full rounded-[inherit] object-cover"
+                    />
+                  )
+                }
+              />
               <span
                 className={
                   "absolute -top-1.5 -right-1.5 grid h-4 min-w-4 place-items-center rounded-full border px-1 text-[9px] font-semibold tabular-nums shadow-[0_4px_10px_rgba(0,0,0,0.32)] " +
@@ -2887,14 +2806,6 @@ function MobileSeatingRing({
               {supporterCount > 0 && (
                 <span className="absolute -bottom-1.5 -left-1.5 rounded-full border border-pink-200/25 bg-pink-300/18 px-1 text-[8px] font-semibold text-pink-50 shadow-[0_4px_10px_rgba(0,0,0,0.32)]">
                   🙌 {supporterCount}
-                </span>
-              )}
-              {latestReaction && (
-                <span
-                  key={latestReaction.id}
-                  className="absolute -bottom-5 animate-bounce rounded-full border border-white/12 bg-black/80 px-1.5 py-0.5 text-[9px] text-white shadow-lg"
-                >
-                  {latestReaction.body}
                 </span>
               )}
               <span
@@ -2972,6 +2883,62 @@ function mobileSeatPosition(index: number, total: number) {
     left: 50 + Math.cos(angle) * xRadius,
     top: 50 + Math.sin(angle) * yRadius,
   }
+}
+
+function SquadRosterPanel({
+  players,
+  squadPlayerId,
+  squadMemberIds,
+  selfPlayerId,
+  onKickSupporter,
+}: {
+  players: Array<Player>
+  squadPlayerId: string
+  squadMemberIds: Array<string>
+  selfPlayerId: string
+  onKickSupporter?: (supporterPlayerId: string) => void
+}) {
+  const members = squadMemberIds
+    .map((memberId) => players.find((candidate) => candidate.id === memberId))
+    .filter((member): member is Player => Boolean(member))
+  if (members.length === 0) return null
+
+  const canKick = selfPlayerId === squadPlayerId && Boolean(onKickSupporter)
+
+  return (
+    <div className="mt-2 shrink-0 border-b border-white/10 pb-2">
+      <p className="px-1 text-[10px] font-semibold tracking-wide text-white/50 uppercase">
+        Your squad
+      </p>
+      <div className="mt-1.5 flex flex-wrap gap-1 px-1">
+        {members.map((member) => {
+          const isSupported = member.id === squadPlayerId
+          const isSelf = member.id === selfPlayerId
+          return (
+            <span
+              key={member.id}
+              className="flex items-center gap-1.5 rounded-full border border-white/10 bg-black/30 px-2 py-1 text-[11px] text-white/72"
+            >
+              <span className="max-w-28 truncate">
+                {isSupported ? "🎮" : "🙌"} {member.name}
+                {isSelf ? " · you" : ""}
+              </span>
+              {canKick && !isSupported && (
+                <button
+                  type="button"
+                  onClick={() => onKickSupporter?.(member.id)}
+                  title={`Kick ${member.name}`}
+                  className="rounded-full border border-white/10 bg-white/[0.05] px-1.5 py-px text-[10px] font-semibold text-white/55 hover:border-red-300/30 hover:bg-red-400/10 hover:text-red-100"
+                >
+                  Kick
+                </button>
+              )}
+            </span>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 function ChatChannelTabs({
@@ -3587,6 +3554,7 @@ function TableSeatRing({
   onSpectatePlayer: (targetPlayerId: string) => void
 }) {
   const players = orderPlayersAroundSelf(room.players, selfPlayerId)
+  const avatarUrls = avatarsByPlayerId(room.code, room.players)
 
   return (
     <div className="pointer-events-none absolute inset-0 z-20">
@@ -3600,6 +3568,7 @@ function TableSeatRing({
           <TableAvatarSeat
             key={candidate.id}
             player={candidate}
+            avatarUrl={avatarUrls.get(candidate.id) ?? PLAYER_AVATARS[0]!}
             handCount={state?.handCount ?? 0}
             supporterCount={
               game?.supportLinks.filter(
@@ -3658,8 +3627,84 @@ function TableSeatRing({
   )
 }
 
+function ReactionAvatarContent({
+  reaction,
+  emojiClassName,
+  fallback,
+}: {
+  reaction:
+    | NonNullable<RoomSnapshot["game"]>["tableReactions"][number]
+    | null
+  emojiClassName: string
+  fallback: ReactNode
+}) {
+  const [display, setDisplay] = useState<{ id: string; body: string } | null>(
+    null
+  )
+  const [fading, setFading] = useState(false)
+  // Reactions persist in the snapshot; skip whatever was already there on mount
+  const seenIdRef = useRef<string | null>(
+    reaction?.kind === "emoji" ? reaction.id : null
+  )
+  const lastShownAtRef = useRef(0)
+  const holdTimerRef = useRef<number | null>(null)
+  const fadeTimerRef = useRef<number | null>(null)
+
+  useEffect(() => {
+    if (!reaction || reaction.kind !== "emoji") return
+    if (seenIdRef.current === reaction.id) return
+    seenIdRef.current = reaction.id
+
+    const now = Date.now()
+    const rapid = now - lastShownAtRef.current < 2000
+    lastShownAtRef.current = now
+
+    if (holdTimerRef.current) window.clearTimeout(holdTimerRef.current)
+    if (fadeTimerRef.current) window.clearTimeout(fadeTimerRef.current)
+    setDisplay({ id: reaction.id, body: reaction.body })
+    setFading(false)
+
+    holdTimerRef.current = window.setTimeout(
+      () => {
+        setFading(true)
+        fadeTimerRef.current = window.setTimeout(() => {
+          setDisplay(null)
+          setFading(false)
+        }, 500)
+      },
+      rapid ? 2000 : 5000
+    )
+  }, [reaction])
+
+  useEffect(
+    () => () => {
+      if (holdTimerRef.current) window.clearTimeout(holdTimerRef.current)
+      if (fadeTimerRef.current) window.clearTimeout(fadeTimerRef.current)
+    },
+    []
+  )
+
+  if (!display) return <>{fallback}</>
+
+  return (
+    <span
+      key={display.id}
+      className={
+        "pointer-events-none leading-none transition-opacity duration-500 animate-[seat-reaction-pop_0.35s_cubic-bezier(0.2,0,0,1)] " +
+        (fading ? "opacity-0" : "opacity-100") +
+        " " +
+        emojiClassName
+      }
+      aria-label={`Reacted ${display.body}`}
+    >
+      {display.body}
+    </span>
+  )
+}
+
 function TableAvatarSeat({
   player,
+  avatarUrl,
   handCount,
   supporterCount,
   supporterNames,
@@ -3683,6 +3728,7 @@ function TableAvatarSeat({
   onSpectatePlayer,
 }: {
   player: Player
+  avatarUrl: string
   handCount: number
   supporterCount: number
   supporterNames: Array<string>
@@ -3784,17 +3830,9 @@ function TableAvatarSeat({
             🙌 {supporterCount}
           </div>
         )}
-        {latestReaction && (
-          <div
-            key={latestReaction.id}
-            className="absolute -bottom-7 left-1/2 -translate-x-1/2 animate-bounce rounded-full border border-white/12 bg-neutral-950/95 px-2 py-1 text-[10px] font-semibold whitespace-nowrap text-white shadow-[0_10px_24px_rgba(0,0,0,0.42)]"
-          >
-            {latestReaction.body}
-          </div>
-        )}
         <div
           className={
-            "grid size-9 shrink-0 place-items-center rounded-full border transition-[background-color,border-color,color,box-shadow] sm:size-12 " +
+            "grid size-9 shrink-0 place-items-center overflow-hidden rounded-full border transition-[background-color,border-color,color,box-shadow] sm:size-12 " +
             (winnerPlacement
               ? isFirstPlace
                 ? "border-amber-100/75 bg-amber-100/24 text-amber-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.32),0_0_28px_rgba(252,211,77,0.28)]"
@@ -3806,7 +3844,18 @@ function TableAvatarSeat({
                   : "border-white/12 bg-white/[0.075] text-white/74")
           }
         >
-          <UserRound className="size-5 sm:size-6" strokeWidth={1.8} />
+          <ReactionAvatarContent
+            reaction={latestReaction}
+            emojiClassName="text-3xl sm:text-4xl"
+            fallback={
+              <img
+                src={avatarUrl}
+                alt={`${player.name} avatar`}
+                draggable={false}
+                className="size-full rounded-full object-cover"
+              />
+            }
+          />
         </div>
         <div className="hidden min-w-0 flex-1 sm:block">
           <p className="truncate text-xs font-semibold text-white/86">
@@ -5188,6 +5237,56 @@ function playerName(
   )
 }
 
+const PLAYER_AVATARS = [
+  "/avatars/bear.png",
+  "/avatars/deer.png",
+  "/avatars/fox.png",
+  "/avatars/kola.png",
+  "/avatars/lizard.png",
+  "/avatars/panda.png",
+  "/avatars/rabbit.png",
+  "/avatars/racoon.png",
+  "/avatars/tiger.png",
+  "/avatars/wolf-blue.png",
+]
+
+function hashString(value: string): number {
+  let hash = 0
+  for (let index = 0; index < value.length; index++) {
+    hash = (hash * 31 + value.charCodeAt(index)) | 0
+  }
+  return hash >>> 0
+}
+
+// Deterministic per-room assignment: the room code seeds a shuffle of the
+// avatar pool, then players get avatars by seat order. Same link → same
+// avatars on every client and across rematches; a new link reshuffles.
+function avatarsByPlayerId(
+  roomCode: string,
+  players: Array<Player>
+): Map<string, string> {
+  let seed = hashString(roomCode)
+  const random = () => {
+    seed = (seed + 0x6d2b79f5) | 0
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed)
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+  const shuffled = [...PLAYER_AVATARS]
+  for (let index = shuffled.length - 1; index > 0; index--) {
+    const swapIndex = Math.floor(random() * (index + 1))
+    ;[shuffled[index], shuffled[swapIndex]] = [
+      shuffled[swapIndex]!,
+      shuffled[index]!,
+    ]
+  }
+  const assignments = new Map<string, string>()
+  players.forEach((player, index) => {
+    assignments.set(player.id, shuffled[index % shuffled.length]!)
+  })
+  return assignments
+}
+
 function squadMemberIdsFor(
   room: RoomSnapshot,
   squadPlayerId: string | null | undefined
@@ -5707,6 +5806,7 @@ function DimmedTablePreview({
       <div className="pointer-events-none absolute inset-0 rounded-2xl bg-black/40 shadow-[inset_0_0_0_1px_rgba(0,0,0,0.32),inset_0_0_0_2px_rgba(255,255,255,0.025),inset_0_24px_80px_rgba(0,0,0,0.6)] sm:rounded-[1.75rem]" />
 
       <DimmedSeatRing
+        roomCode={room?.code ?? ""}
         players={players}
         hostPlayerId={room?.hostPlayerId ?? null}
         selfPlayerId={player.id}
@@ -5809,12 +5909,14 @@ function DimmedTablePreview({
 }
 
 function DimmedSeatRing({
+  roomCode,
   players,
   hostPlayerId,
   selfPlayerId,
   voiceStates,
   compact,
 }: {
+  roomCode: string
   players: Array<Player>
   hostPlayerId: string | null
   selfPlayerId: string
@@ -5822,6 +5924,7 @@ function DimmedSeatRing({
   compact: boolean
 }) {
   const ordered = orderPlayersAroundSelf(players, selfPlayerId)
+  const avatarUrls = avatarsByPlayerId(roomCode, players)
 
   return (
     <div className="pointer-events-none absolute inset-0 z-20">
@@ -5858,8 +5961,13 @@ function DimmedSeatRing({
                   : "0 12px 30px rgba(0, 0, 0, 0.32)",
               }}
             >
-              <div className="grid size-9 shrink-0 place-items-center rounded-full border border-white/12 bg-white/[0.06] text-white/72 sm:size-12">
-                <UserRound className="size-5 sm:size-6" strokeWidth={1.8} />
+              <div className="grid size-9 shrink-0 place-items-center overflow-hidden rounded-full border border-white/12 bg-white/[0.06] text-white/72 sm:size-12">
+                <img
+                  src={avatarUrls.get(candidate.id) ?? PLAYER_AVATARS[0]!}
+                  alt={`${candidate.name} avatar`}
+                  draggable={false}
+                  className="size-full rounded-full object-cover"
+                />
               </div>
               <div className="hidden min-w-0 flex-1 sm:block">
                 <p className="truncate text-xs font-semibold text-white/86">
