@@ -3310,10 +3310,11 @@ function ChatMessageBubble({
     return (
       <div className={"flex " + (isSelf ? "justify-end" : "justify-start")}>
         <div className="w-[180px] max-w-[88%]">
+          <ChatMessageMeta message={message} isSelf={isSelf} />
           <div
             role="img"
             aria-label={`${isSelf ? "You" : message.playerName} sent ${message.label ?? "a GIF reaction"}`}
-            className="relative rounded-2xl bg-white/[0.055] p-1 shadow-[0_0_0_1px_rgba(255,255,255,0.13),0_10px_26px_rgba(0,0,0,0.24)]"
+            className="rounded-2xl bg-white/[0.055] p-1 shadow-[0_0_0_1px_rgba(255,255,255,0.13),0_10px_26px_rgba(0,0,0,0.24)]"
           >
             <img
               src={message.body}
@@ -3321,15 +3322,6 @@ function ChatMessageBubble({
               className="h-28 w-full rounded-xl object-cover outline outline-1 -outline-offset-1 outline-white/15"
               loading="lazy"
             />
-            <span
-              aria-hidden="true"
-              className={
-                "absolute top-2 max-w-[8.5rem] truncate rounded-full bg-black/68 px-2 py-1 text-[10px] font-semibold text-white/90 shadow-[0_1px_0_rgba(255,255,255,0.1),0_4px_14px_rgba(0,0,0,0.3)] backdrop-blur-md " +
-                (isSelf ? "right-2" : "left-2")
-              }
-            >
-              {isSelf ? "You" : message.playerName}
-            </span>
           </div>
         </div>
       </div>
@@ -3339,19 +3331,7 @@ function ChatMessageBubble({
   return (
     <div className={"flex " + (isSelf ? "justify-end" : "justify-start")}>
       <div className={"max-w-[88%] " + (isSelf ? "items-end" : "items-start")}>
-        <div
-          className={
-            "mb-1 flex items-center gap-1.5 px-1 text-[10px] font-medium text-white/36 " +
-            (isSelf ? "justify-end" : "justify-start")
-          }
-        >
-          <span className="max-w-[9rem] truncate">
-            {isSelf ? "You" : message.playerName}
-          </span>
-          <span className="tabular-nums">
-            {formatChatTime(message.createdAt)}
-          </span>
-        </div>
+        <ChatMessageMeta message={message} isSelf={isSelf} />
         <div
           className={
             "overflow-hidden rounded-2xl px-3 py-2 shadow-[0_10px_24px_rgba(0,0,0,0.22)] " +
@@ -3370,6 +3350,28 @@ function ChatMessageBubble({
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+function ChatMessageMeta({
+  message,
+  isSelf,
+}: {
+  message: ChatMessage
+  isSelf: boolean
+}) {
+  return (
+    <div
+      className={
+        "mb-1 flex items-center gap-1.5 px-1 text-[11px] font-medium text-white/60 " +
+        (isSelf ? "justify-end" : "justify-start")
+      }
+    >
+      <span className="max-w-[9rem] truncate">
+        {isSelf ? "You" : message.playerName}
+      </span>
+      <span className="tabular-nums">{formatChatTime(message.createdAt)}</span>
     </div>
   )
 }
