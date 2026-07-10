@@ -3309,17 +3309,29 @@ function ChatMessageBubble({
   if (message.kind === "gif") {
     return (
       <div className={"flex " + (isSelf ? "justify-end" : "justify-start")}>
-        <div
-          role="img"
-          aria-label={`${isSelf ? "You" : message.playerName} sent ${message.label ?? "a GIF reaction"}`}
-          className="w-[180px] max-w-[88%] overflow-hidden rounded-xl"
-        >
-          <img
-            src={message.body}
-            alt=""
-            className="h-28 w-full object-cover"
-            loading="lazy"
-          />
+        <div className="w-[180px] max-w-[88%]">
+          <div
+            className={
+              "mb-1 flex px-1 text-[11px] font-medium text-white/60 " +
+              (isSelf ? "justify-end" : "justify-start")
+            }
+          >
+            <span className="max-w-[9rem] truncate">
+              {isSelf ? "You" : message.playerName}
+            </span>
+          </div>
+          <div
+            role="img"
+            aria-label={`${isSelf ? "You" : message.playerName} sent ${message.label ?? "a GIF reaction"}`}
+            className="rounded-2xl bg-white/[0.055] p-1 shadow-[0_0_0_1px_rgba(255,255,255,0.075),0_10px_26px_rgba(0,0,0,0.24)]"
+          >
+            <img
+              src={message.body}
+              alt=""
+              className="h-28 w-full rounded-xl object-cover outline outline-1 -outline-offset-1 outline-white/10"
+              loading="lazy"
+            />
+          </div>
         </div>
       </div>
     )
