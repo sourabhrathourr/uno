@@ -189,6 +189,21 @@ function RoomPage() {
     applyPlayerSocialSnapshot(result.playerSocial ?? null)
   }
 
+  function clearJoinedRoom() {
+    saveActiveRoomCode("")
+    applyPlayer(null)
+    applyRoomSnapshot(null)
+    applyPlayerGameSnapshot(null)
+    applyPlayerSocialSnapshot(null)
+    seenMentionMessageIdsRef.current.clear()
+    mentionSnapshotInitializedRef.current = false
+  }
+
+  function applyJoinFailure(nextError: GameError) {
+    if (nextError.code === "room-not-found") clearJoinedRoom()
+    setError(nextError.message)
+  }
+
   function restoreSocketSeat(activeSocket: GameSocket) {
     if (joinInFlightRef.current) return
 
@@ -210,7 +225,7 @@ function RoomPage() {
       (result) => {
         joinInFlightRef.current = false
         if (!result.ok) {
-          if (!playerRef.current) setError(result.error.message)
+          applyJoinFailure(result.error)
           return
         }
 
@@ -520,7 +535,7 @@ function RoomPage() {
         joinInFlightRef.current = false
         setJoining(false)
         if (!result.ok) {
-          setError(result.error.message)
+          applyJoinFailure(result.error)
           return
         }
 
