@@ -8,6 +8,24 @@ describe("RoomManager support squads", () => {
     vi.setSystemTime(new Date("2026-07-10T00:00:00.000Z"))
   })
 
+  it("recognizes only sessions that belong to the requested room", () => {
+    const manager = new RoomManager()
+    const created = manager.createRoom({
+      playerName: "Host",
+      sessionId: "session-host-1234",
+    })
+    expect(created.ok).toBe(true)
+    if (!created.ok) return
+
+    expect(
+      manager.hasPlayerSession(created.data.room.code, "session-host-1234")
+    ).toBe(true)
+    expect(
+      manager.hasPlayerSession(created.data.room.code, "session-stranger-1234")
+    ).toBe(false)
+    expect(manager.hasPlayerSession("XXXXXX", "session-host-1234")).toBe(false)
+  })
+
   it("persists a support link across reconnects and limits full-hand access to it", () => {
     const { manager, code, hostId, playerBId } = startedRoomWithInactiveHost()
 
@@ -106,10 +124,51 @@ describe("RoomManager support squads", () => {
     const room = manager.getRoom(code)
     expect(room.ok && room.data.game?.avatarEmojiReactions).toHaveLength(2)
   })
+
+  it("accepts only provider-approved GIPHY selections in chat", () => {
+    const manager = new RoomManager({
+      resolveGif: (provider, id) =>
+        provider === "giphy" && id === "winner-123"
+          ? {
+              body: "https://media.giphy.com/original.webp",
+              label: "Victory dance",
+            }
+          : null,
+    })
+    const { code, hostId } = startedRoomWithInactiveHost(manager)
+
+    expect(
+      manager.sendChatMessage(code, hostId, {
+        channel: "public",
+        kind: "gif",
+        gifProvider: "giphy",
+        body: "winner-123",
+      }).ok
+    ).toBe(true)
+
+    const room = manager.getRoom(code)
+    expect(room.ok && room.data.chatMessages[0]).toMatchObject({
+      kind: "gif",
+      body: "https://media.giphy.com/original.webp",
+      label: "Victory dance",
+    })
+
+    vi.advanceTimersByTime(700)
+    expect(
+      manager.sendChatMessage(code, hostId, {
+        channel: "public",
+        kind: "gif",
+        gifProvider: "giphy",
+        body: "not-approved",
+      })
+    ).toMatchObject({
+      ok: false,
+      error: { code: "invalid-chat-gif" },
+    })
+  })
 })
 
-function startedRoomWithInactiveHost() {
-  const manager = new RoomManager()
+function startedRoomWithInactiveHost(manager = new RoomManager()) {
   const created = manager.createRoom({
     playerName: "A",
     sessionId: "session-a",

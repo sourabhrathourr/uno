@@ -53,8 +53,13 @@ export function useChannelChat({
         activeChannel === "squad" ? squadMessages : messages
       setSeenMessageIds((current) => {
         const next = new Set(current)
-        for (const message of activeMessages) next.add(message.id)
-        return next
+        let changed = false
+        for (const message of activeMessages) {
+          if (next.has(message.id)) continue
+          next.add(message.id)
+          changed = true
+        }
+        return changed ? next : current
       })
     },
     [channel, messages, squadMessages]

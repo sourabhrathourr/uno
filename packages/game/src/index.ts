@@ -9,6 +9,7 @@ export type {
   SendChatMessageInput,
 } from "./chat"
 export { createNoMercyDeck, shuffleCards } from "./deck"
+export type { GifProvider, GifSearchResponse, GifSearchResult } from "./gifs"
 export {
   catchUno,
   createGame,

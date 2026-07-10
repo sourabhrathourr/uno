@@ -27,7 +27,6 @@ import { useWebHaptics } from "web-haptics/react"
 import {
   AVATAR_REACTION_EMOJIS,
   CHAT_EMOJIS,
-  CHAT_GIFS,
   CHAT_PRESETS,
 } from "@workspace/game"
 import { Button } from "@workspace/ui/components/button"
@@ -56,6 +55,7 @@ import type { Options as ConfettiOptions } from "canvas-confetti"
 import type { GameSocket } from "@/lib/realtime"
 import type { RoomVoiceController } from "@/lib/use-room-voice"
 import type { ChatTray } from "@/components/use-channel-chat"
+import { GifPicker } from "@/components/gif-picker"
 import {
   SupportConfirmDialog,
   availableSupportCandidates,
@@ -3249,33 +3249,7 @@ function ChatQuickTray({
     )
   }
 
-  return (
-    <div
-      className={
-        "uno-scrollbar grid grid-cols-2 gap-2 overflow-y-auto pr-1 " +
-        (comfortable ? "max-h-[30dvh]" : "max-h-40")
-      }
-    >
-      {CHAT_GIFS.map((gif) => (
-        <button
-          key={gif.url}
-          type="button"
-          onClick={() => onSend({ kind: "gif", body: gif.url })}
-          className="group min-h-20 overflow-hidden rounded-xl bg-black/36 text-left shadow-[0_10px_24px_rgba(0,0,0,0.22),inset_0_0_0_1px_rgba(255,255,255,0.075)] transition-[scale,filter] duration-200 ease-[cubic-bezier(0.2,0,0,1)] hover:brightness-110 active:scale-[0.96]"
-        >
-          <img
-            src={gif.url}
-            alt=""
-            className="h-16 w-full object-cover outline outline-1 outline-white/10"
-            loading="lazy"
-          />
-          <span className="block truncate px-2 py-1.5 text-[11px] font-medium text-white/64 group-hover:text-white/84">
-            {gif.label}
-          </span>
-        </button>
-      ))}
-    </div>
-  )
+  return <GifPicker comfortable={comfortable} onSelect={onSend} />
 }
 
 function ChatToolButton({

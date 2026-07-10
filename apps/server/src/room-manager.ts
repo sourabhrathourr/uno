@@ -30,6 +30,7 @@ import {
   type CreateRoomRequest,
   type CreateRoomResponse,
   type GameState,
+  type GifProvider,
   type HouseRules,
   type JoinRoomInput,
   type Player,
@@ -56,6 +57,15 @@ type JoinRoomResult = {
   isNewPlayer: boolean
 }
 
+type ResolvedGif = {
+  body: string
+  label: string
+}
+
+type RoomManagerOptions = {
+  resolveGif?: (provider: GifProvider, id: string) => ResolvedGif | null
+}
+
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 const CHAT_HISTORY_LIMIT = 250
 const CHAT_RATE_LIMIT_MS = 650
@@ -63,6 +73,11 @@ const AVATAR_EMOJI_REACTION_RATE_LIMIT_MS = 1_200
 
 export class RoomManager {
   private readonly rooms = new Map<string, ManagedRoom>()
+  private readonly resolveGif?: RoomManagerOptions["resolveGif"]
+
+  constructor(options: RoomManagerOptions = {}) {
+    this.resolveGif = options.resolveGif
+  }
 
   createRoom(input: CreateRoomRequest): CommandResult<CreateRoomResponse> {
     const playerName = cleanPlayerName(input.playerName)
@@ -121,6 +136,16 @@ export class RoomManager {
     }
 
     return ok(snapshot(room))
+  }
+
+  hasPlayerSession(code: string, sessionId: string): boolean {
+    const room = this.rooms.get(normalizeRoomCode(code))
+    const normalizedSessionId = cleanSessionId(sessionId)
+    return Boolean(
+      room &&
+      normalizedSessionId &&
+      room.sessionToPlayerId.has(normalizedSessionId)
+    )
   }
 
   joinRoom(input: JoinRoomInput): CommandResult<JoinRoomResult> {
@@ -319,7 +344,7 @@ export class RoomManager {
       )
     }
 
-    const prepared = prepareChatMessage(input)
+    const prepared = prepareChatMessage(input, this.resolveGif)
     if (!prepared.ok) return prepared
 
     const channel = input.channel ?? "public"
@@ -775,7 +800,8 @@ function nextSeat(room: ManagedRoom): number {
 }
 
 function prepareChatMessage(
-  input: SendChatMessageInput
+  input: SendChatMessageInput,
+  resolveGif?: RoomManagerOptions["resolveGif"]
 ): CommandResult<{ body: string; label?: string }> {
   if (!input || typeof input.body !== "string") {
     return fail("invalid-chat-message", "Send a valid chat message.")
@@ -798,6 +824,14 @@ function prepareChatMessage(
       }
       return ok({ body })
     case "gif": {
+      if (input.gifProvider === "giphy") {
+        const gif = resolveGif?.("giphy", body)
+        if (!gif) return fail("invalid-chat-gif", "Choose a GIF from search.")
+        return ok({ body: gif.body, label: gif.label })
+      }
+      if (input.gifProvider && input.gifProvider !== "curated") {
+        return fail("invalid-chat-gif", "Choose a supported GIF provider.")
+      }
       const gif = CHAT_GIFS.find((candidate) => candidate.url === body)
       if (!gif) return fail("invalid-chat-gif", "Choose one of the room GIFs.")
       return ok({ body: gif.url, label: gif.label })

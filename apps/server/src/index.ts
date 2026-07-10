@@ -16,6 +16,7 @@ import type {
   VoiceSignal,
 } from "@workspace/game"
 
+import { GiphyService } from "./giphy"
 import { RoomManager } from "./room-manager"
 
 type IceServerConfig = {
@@ -34,7 +35,22 @@ const voiceDebugEnabled =
   process.env.VOICE_DEBUG === "1" || process.env.VOICE_DEBUG === "true"
 const voiceIceServers = getConfiguredIceServers()
 
-const rooms = new RoomManager()
+const gifs = new GiphyService({
+  apiKey: process.env.GIPHY_API_KEY,
+  countryCode: process.env.GIPHY_COUNTRY_CODE ?? "US",
+  maxRequestsPerHour: Number.parseInt(
+    process.env.GIPHY_REQUESTS_PER_HOUR ?? "90",
+    10
+  ),
+  maxRequestsPerRequesterPerHour: Number.parseInt(
+    process.env.GIPHY_REQUESTS_PER_PLAYER_PER_HOUR ?? "30",
+    10
+  ),
+})
+const rooms = new RoomManager({
+  resolveGif: (provider, id) =>
+    provider === "giphy" ? gifs.resolveApprovedGif(id) : null,
+})
 const voiceStatesByRoomCode = new Map<
   string,
   Map<string, { enabled: boolean; muted: boolean; speaking: boolean }>
@@ -61,6 +77,39 @@ const httpServer = createServer(async (req, res) => {
 
   if (req.method === "GET" && url.pathname === "/voice/ice-servers") {
     sendJson(req, res, 200, { iceServers: voiceIceServers })
+    return
+  }
+
+  if (req.method === "GET" && url.pathname === "/gifs/search") {
+    const roomCode = firstHeader(req.headers["x-room-code"])
+    const sessionId = firstHeader(req.headers["x-player-session-id"])
+    if (!rooms.hasPlayerSession(roomCode, sessionId)) {
+      sendJson(req, res, 401, {
+        error: {
+          code: "gif-search-unauthorized",
+          message: "Join the room before searching for GIFs.",
+        },
+      })
+      return
+    }
+    const query = url.searchParams.get("q") ?? ""
+    const offset = Number.parseInt(url.searchParams.get("offset") ?? "0", 10)
+    try {
+      const result = await gifs.search({
+        query,
+        offset,
+        requesterId: sessionId,
+      })
+      sendJson(req, res, 200, result)
+    } catch (cause) {
+      console.error("GIF search failed", cause)
+      sendJson(req, res, 502, {
+        error: {
+          code: "gif-search-unavailable",
+          message: "GIF search is temporarily unavailable.",
+        },
+      })
+    }
     return
   }
 
@@ -431,7 +480,14 @@ function setCorsHeaders(req: IncomingMessage, res: ServerResponse) {
   )
   res.setHeader("Vary", "Origin")
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type")
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, X-Room-Code, X-Player-Session-Id"
+  )
+}
+
+function firstHeader(value: string | Array<string> | undefined): string {
+  return Array.isArray(value) ? (value[0] ?? "") : (value ?? "")
 }
 
 function sendJson(

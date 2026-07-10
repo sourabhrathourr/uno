@@ -1,3 +1,5 @@
+import type { GifProvider } from "./gifs"
+
 export type ChatMessageKind = "text" | "emoji" | "gif" | "preset"
 export type ChatChannel = "public" | "squad"
 
@@ -5,6 +7,7 @@ export type SendChatMessageInput = {
   channel?: ChatChannel
   kind: ChatMessageKind
   body: string
+  gifProvider?: GifProvider
   mentionPlayerIds?: string[]
 }
 
