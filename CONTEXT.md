@@ -17,11 +17,15 @@ A player who can still take turns in the current match because they have neither
 _Avoid_: Contender, playing player
 
 **Inactive Player**:
-A player who has won, been eliminated, or been vote-kicked and can no longer take turns in the current match. An inactive player may remain neutral or choose an active player to support.
+A player who has no turn rights in the current match because they have won, been eliminated, been vote-kicked, or are waiting for the next match. An inactive player may remain neutral or choose an active player to support.
 _Avoid_: Spectator
 
+**Waiting Player**:
+A seated room participant who joined while a match was actively playing and waits to become active when the next match starts.
+_Avoid_: Spectator, late joiner
+
 **Supporter**:
-An inactive player who has publicly chosen one active player to support. A supporter participates socially without changing match rules or outcomes and cannot end their own support link.
+An inactive player, including a waiting player, who has publicly chosen one active player to support. A supporter participates socially without changing match rules or outcomes and cannot end their own support link.
 _Avoid_: Spectator, watcher
 
 **Supported Player**:

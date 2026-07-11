@@ -71,6 +71,7 @@ export function createGame(
     handsByPlayerId,
     eliminatedPlayerIds: [],
     voteKickedPlayerIds,
+    waitingPlayerIds: [],
     knockedOutCards: [],
     drawStack: null,
     pendingChoice: null,
@@ -95,10 +96,47 @@ export function createGame(
   return game
 }
 
+export function addWaitingPlayer(
+  game: GameState,
+  context: GameContext,
+  playerId: string
+): CommandResult<GameState> {
+  if (isGameFinished(game)) {
+    return fail("game-finished", "This match is finished.")
+  }
+  if (!context.players.some((player) => player.id === playerId)) {
+    return fail("player-not-found", "That player is not seated here.")
+  }
+  if (game.playerOrder.includes(playerId)) {
+    game.waitingPlayerIds = unique([...(game.waitingPlayerIds ?? []), playerId])
+    game.handsByPlayerId[playerId] ??= []
+    return ok(game)
+  }
+
+  const existingOrWaiting = new Set([...game.playerOrder, playerId])
+  game.playerOrder = context.players
+    .slice()
+    .sort((a, b) => a.seat - b.seat)
+    .map((player) => player.id)
+    .filter((orderedPlayerId) => existingOrWaiting.has(orderedPlayerId))
+  game.waitingPlayerIds = unique([...(game.waitingPlayerIds ?? []), playerId])
+  game.handsByPlayerId[playerId] = []
+  pushEvent(game, {
+    type: "player-waiting",
+    playerId,
+    message: `${playerName(context, playerId)} is waiting for the next match.`,
+  })
+  return ok(game)
+}
+
 export function projectPublicGame(
   game: GameState,
   context: GameContext
 ): PublicGameSnapshot {
+  const playersById = new Map(
+    context.players.map((player) => [player.id, player])
+  )
+
   return {
     matchId: game.matchId,
     direction: game.direction,
@@ -110,14 +148,17 @@ export function projectPublicGame(
     drawStack: game.drawStack ? { ...game.drawStack } : null,
     pendingChoice: projectPendingChoice(game),
     stagedPlay: projectStagedPlay(game),
-    players: context.players
-      .slice()
-      .sort((a, b) => a.seat - b.seat)
+    players: game.playerOrder
+      .map((playerId) => playersById.get(playerId))
+      .filter((player): player is GameContext["players"][number] =>
+        Boolean(player)
+      )
       .map((player) => {
         const winnerPlacement = winnerPlacementFor(game, player.id)
         const handCount = winnerPlacement
           ? 0
           : (game.handsByPlayerId[player.id]?.length ?? 0)
+        const waiting = (game.waitingPlayerIds ?? []).includes(player.id)
         return {
           playerId: player.id,
           handCount,
@@ -126,6 +167,7 @@ export function projectPublicGame(
             (game.unoDeclaredPlayerIds ?? []).includes(player.id),
           eliminated: game.eliminatedPlayerIds.includes(player.id),
           voteKicked: game.voteKickedPlayerIds.includes(player.id),
+          waiting,
           winnerPlacement: winnerPlacement ? { ...winnerPlacement } : null,
           connected: player.connected,
           ready: player.ready,
@@ -1744,8 +1786,10 @@ function activePlayerIds(game: GameState): string[] {
 
 function isPlayerActive(game: GameState, playerId: string): boolean {
   return (
+    game.playerOrder.includes(playerId) &&
     !game.eliminatedPlayerIds.includes(playerId) &&
     !(game.voteKickedPlayerIds ?? []).includes(playerId) &&
+    !(game.waitingPlayerIds ?? []).includes(playerId) &&
     !winnerPlacementFor(game, playerId)
   )
 }

@@ -21,6 +21,7 @@ export type GameEventType =
   | "uno-called"
   | "uno-caught"
   | "player-eliminated"
+  | "player-waiting"
   | "game-won"
   | "player-vote-kicked"
   | "support-started"
@@ -108,6 +109,7 @@ export type PlayerGamePublic = {
   declaredUno: boolean
   eliminated: boolean
   voteKicked: boolean
+  waiting: boolean
   winnerPlacement: WinnerPlacement | null
   connected: boolean
   ready: boolean
@@ -174,6 +176,7 @@ export type GameState = {
   handsByPlayerId: Record<string, Card[]>
   eliminatedPlayerIds: string[]
   voteKickedPlayerIds: string[]
+  waitingPlayerIds: string[]
   knockedOutCards: Card[]
   drawStack: DrawStack | null
   pendingChoice: PendingChoice | null

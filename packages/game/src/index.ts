@@ -16,6 +16,7 @@ export type {
 export { createNoMercyDeck, shuffleCards } from "./deck"
 export type { GifProvider, GifSearchResponse, GifSearchResult } from "./gifs"
 export {
+  addWaitingPlayer,
   catchUno,
   createGame,
   drawRouletteCard,
