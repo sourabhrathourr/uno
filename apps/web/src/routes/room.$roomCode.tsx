@@ -2549,6 +2549,7 @@ function TableChatPanel({
       <ChatComposer
         text={text}
         tray={tray}
+        roomCode={room?.code ?? ""}
         mentionablePlayers={mentionablePlayers}
         voteKickTargets={voteKickTargetsForRoom(room, selfPlayerId)}
         canStartVoteKick={
@@ -2751,6 +2752,7 @@ function MobileChatSheet({
                   text={text}
                   tray={tray}
                   comfortable
+                  roomCode={room?.code ?? ""}
                   mentionablePlayers={mentionablePlayers}
                   voteKickTargets={voteKickTargetsForRoom(room, selfPlayerId)}
                   canStartVoteKick={
@@ -3217,6 +3219,7 @@ function ChatMessageList({
 function ChatComposer({
   text,
   tray,
+  roomCode = "",
   mentionablePlayers = [],
   voteKickTargets = [],
   canStartVoteKick = false,
@@ -3230,6 +3233,7 @@ function ChatComposer({
 }: {
   text: string
   tray: ChatTray | null
+  roomCode?: string
   mentionablePlayers?: Array<Player>
   voteKickTargets?: Array<VoteKickTarget>
   canStartVoteKick?: boolean
@@ -3273,6 +3277,7 @@ function ChatComposer({
       ) : tray === "voteKick" ? (
         <VoteKickTargetTray
           targets={voteKickTargets}
+          roomCode={roomCode}
           onSelect={(targetPlayerId) => {
             onStartVoteKick?.(targetPlayerId)
             onTrayChange(null)
@@ -3426,13 +3431,19 @@ function ChatQuickTray({
 
 function VoteKickTargetTray({
   targets,
+  roomCode,
   onSelect,
 }: {
   targets: Array<VoteKickTarget>
+  roomCode: string
   onSelect: (targetPlayerId: string) => void
 }) {
   const now = useSecondTick(
     targets.some((target) => Boolean(target.cooldownExpiresAt))
+  )
+  const avatarUrls = avatarsByPlayerId(
+    roomCode,
+    targets.map((target) => target.player)
   )
 
   if (targets.length === 0) {
@@ -3444,7 +3455,7 @@ function VoteKickTargetTray({
   }
 
   return (
-    <div className="uno-scrollbar flex max-h-36 flex-col gap-1.5 overflow-y-auto pr-1">
+    <div className="uno-scrollbar flex max-h-36 flex-col gap-1 overflow-y-auto pr-1">
       {targets.map((target) => {
         const cooldownMs = target.cooldownExpiresAt
           ? Date.parse(target.cooldownExpiresAt) - now
@@ -3457,10 +3468,16 @@ function VoteKickTargetTray({
             type="button"
             disabled={disabled}
             onClick={() => onSelect(target.player.id)}
-            className="flex min-h-9 items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/[0.055] px-2.5 py-1.5 text-left text-xs text-white/72 transition-[background-color,border-color,color,scale] hover:border-white/18 hover:bg-white/[0.085] hover:text-white active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-55"
+            className="flex min-h-10 items-center gap-2.5 rounded-lg border border-white/10 bg-white/[0.055] px-2 py-1.5 text-left transition-[background-color,border-color,color,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] hover:border-white/18 hover:bg-white/[0.085] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-55"
           >
-            <span className="min-w-0 truncate">
-              {target.player.name} · seat {target.player.seat}
+            <img
+              src={avatarUrls.get(target.player.id) ?? PLAYER_AVATARS[0]!}
+              alt=""
+              className="size-7 shrink-0 rounded-full border border-white/12 object-cover"
+              draggable={false}
+            />
+            <span className="min-w-0 flex-1 truncate text-sm font-medium text-white/82">
+              {target.player.name}
             </span>
             {disabled && (
               <span className="shrink-0 rounded-full border border-red-200/20 bg-red-400/12 px-2 py-0.5 text-[10px] font-semibold text-red-100 tabular-nums">
@@ -3621,16 +3638,16 @@ function VoteKickPollBubble({
   return (
     <div
       className={
-        "overflow-hidden rounded-2xl rounded-bl-md bg-[#104c31] px-3 py-3 text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.09),0_10px_24px_rgba(0,0,0,0.24)] " +
+        "overflow-hidden rounded-2xl rounded-bl-md bg-white/[0.1] px-3 py-2.5 text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.14),0_10px_24px_rgba(0,0,0,0.28)] " +
         (isMentioned ? " ring-1 ring-pink-300/55" : "")
       }
     >
-      <div className="flex items-start justify-between gap-3">
+      <div className="flex items-start justify-between gap-2.5">
         <div className="min-w-0">
-          <p className="truncate text-base font-semibold text-white">
+          <p className="truncate text-sm font-semibold text-white/92">
             Kick {poll.targetPlayerName}?
           </p>
-          <p className="mt-1 text-xs font-medium text-white/58">
+          <p className="mt-0.5 text-[11px] font-medium text-white/48">
             {poll.status === "open"
               ? `${remainingSeconds}s left`
               : poll.result === "kicked"
@@ -3640,19 +3657,19 @@ function VoteKickPollBubble({
         </div>
         <span
           className={
-            "shrink-0 rounded-full border px-2 py-1 text-[10px] font-semibold tracking-wide uppercase " +
+            "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-semibold tracking-wide uppercase " +
             (poll.status === "passed"
-              ? "border-red-100/35 bg-red-400/18 text-red-50"
+              ? "border-red-200/25 bg-red-400/14 text-red-100"
               : poll.status === "failed"
-                ? "border-white/14 bg-white/[0.08] text-white/62"
-                : "border-emerald-100/35 bg-emerald-300/16 text-emerald-50")
+                ? "border-white/12 bg-white/[0.05] text-white/55"
+                : "border-white/16 bg-white/[0.06] text-white/68")
           }
         >
           {poll.status === "open" ? "Open" : poll.result}
         </span>
       </div>
 
-      <div className="mt-3 space-y-2">
+      <div className="mt-2.5 space-y-1.5">
         <VoteKickOptionRow
           label="Yes"
           choice="yes"
@@ -3711,60 +3728,64 @@ function VoteKickOptionRow({
       type="button"
       disabled={disabled}
       onClick={() => onVote?.(poll.id, choice)}
-      className="group w-full rounded-xl text-left outline-none disabled:cursor-default"
+      className="group w-full rounded-lg px-0.5 py-1 text-left outline-none transition-[background-color] duration-200 ease-[cubic-bezier(0.2,0,0,1)] group-enabled:hover:bg-white/[0.04] disabled:cursor-default"
     >
-      <div className="flex items-center gap-2">
+      <div className="flex items-start gap-2">
         <span
           className={
-            "grid size-8 shrink-0 place-items-center rounded-full border transition-colors " +
+            "mt-0.5 grid size-[1.125rem] shrink-0 place-items-center rounded-full border transition-[border-color,background-color,color] duration-200 " +
             (selected
-              ? "border-emerald-200 bg-emerald-300 text-emerald-950"
-              : "border-white/55 text-white/40 group-enabled:group-hover:border-white/85 group-enabled:group-hover:text-white/70")
+              ? "border-white bg-white text-neutral-950"
+              : "border-white/28 text-transparent group-enabled:group-hover:border-white/48")
           }
         >
-          {selected && <Check className="size-4" strokeWidth={3} />}
+          {selected && <Check className="size-2.5" strokeWidth={3.25} />}
         </span>
-        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-white">
-          {label}
-        </span>
-        <span className="text-sm font-semibold text-white tabular-nums">
-          {count}
-        </span>
-      </div>
-      <div className="mt-1.5 ml-10 h-2 overflow-hidden rounded-full bg-white/14">
-        <div
-          className={
-            "h-full rounded-full transition-[width] duration-300 " +
-            (choice === "yes" ? "bg-emerald-300" : "bg-white/26")
-          }
-          style={{ width: `${progress}%` }}
-        />
-      </div>
-      {votes.length > 0 && (
-        <div className="mt-1.5 ml-10 flex items-center gap-1">
-          <div className="flex -space-x-1.5">
-            {visibleVotes.map((vote) => {
-              const voter = players.find(
-                (candidate) => candidate.id === vote.playerId
-              )
-              return (
-                <img
-                  key={vote.playerId}
-                  src={avatarUrls.get(vote.playerId) ?? PLAYER_AVATARS[0]!}
-                  alt={voter ? `${voter.name} avatar` : "Voter avatar"}
-                  className="size-5 rounded-full border border-[#104c31] object-cover"
-                  draggable={false}
-                />
-              )
-            })}
-          </div>
-          {overflowCount > 0 && (
-            <span className="text-[11px] font-semibold text-white/72">
-              +{overflowCount}
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-white/84">
+              {label}
             </span>
+            <span className="text-[13px] font-semibold text-white/72 tabular-nums">
+              {count}
+            </span>
+          </div>
+          <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/14">
+            <div
+              className={
+                "h-full rounded-full transition-[width] duration-300 " +
+                (choice === "yes" ? "bg-white/72" : "bg-white/42")
+              }
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+          {votes.length > 0 && (
+            <div className="mt-1.5 flex items-center gap-1">
+              <div className="flex -space-x-1">
+                {visibleVotes.map((vote) => {
+                  const voter = players.find(
+                    (candidate) => candidate.id === vote.playerId
+                  )
+                  return (
+                    <img
+                      key={vote.playerId}
+                      src={avatarUrls.get(vote.playerId) ?? PLAYER_AVATARS[0]!}
+                      alt={voter ? `${voter.name} avatar` : "Voter avatar"}
+                      className="size-4 rounded-full border border-white/20 object-cover"
+                      draggable={false}
+                    />
+                  )
+                })}
+              </div>
+              {overflowCount > 0 && (
+                <span className="text-[10px] font-medium text-white/52">
+                  +{overflowCount}
+                </span>
+              )}
+            </div>
           )}
         </div>
-      )}
+      </div>
     </button>
   )
 }
