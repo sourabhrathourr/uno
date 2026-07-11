@@ -31,9 +31,9 @@ Players need a public way to remove a disruptive or inactive participant from ac
 - After the Vote-Kick resolves, the Public Chat poll remains visible with final Yes and No counts, voter avatars under each option, and a final status of Kicked or Not kicked.
 - Resolved Vote-Kick polls remain in Public Chat history after the match ends. Their gameplay effect still resets when the next match starts.
 - A resolved lobby Vote-Kick poll remains visible after the match starts so players can see why the target started the match as a Vote-Kicked Player.
-- Voting lasts 20 seconds.
+- Voting lasts 25 seconds.
 - The Public Chat poll shows a countdown timer with the seconds remaining.
-- A Vote-Kick always stays open for the full 20 seconds and resolves only when the timer expires.
+- A Vote-Kick always stays open for the full 25 seconds and resolves only when the timer expires.
 - A reconnecting player who was included in the original eligible-voter snapshot sees an in-progress Vote-Kick with the remaining shared countdown and may vote.
 - A player who joins the lobby after a Vote-Kick starts can see the in-progress poll but cannot vote in it.
 - The target sees the Public Chat poll but cannot vote on their own Vote-Kick. Until the Vote-Kick resolves and passes, the target remains fully active.

@@ -5,6 +5,7 @@ import {
   Check,
   Circle,
   Clipboard,
+  Eye,
   ImageIcon,
   MessageCircle,
   Mic,
@@ -14,9 +15,9 @@ import {
   SendHorizontal,
   Smile,
   Sparkles,
+  SportShoe,
   Trophy,
   UsersRound,
-  Vote,
   Volume2,
   VolumeX,
   X,
@@ -107,6 +108,7 @@ function RoomPage() {
   const [joining, setJoining] = useState(false)
   const [loadingPreview, setLoadingPreview] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [errorNonce, setErrorNonce] = useState(0)
   const [socket, setSocket] = useState<GameSocket | null>(null)
   const [playerGame, setPlayerGame] = useState<PlayerGameSnapshot | null>(null)
   const [playerSocial, setPlayerSocial] = useState<PlayerSocialSnapshot | null>(
@@ -213,6 +215,7 @@ function RoomPage() {
   function applyJoinFailure(nextError: GameError) {
     if (nextError.code === "room-not-found") clearJoinedRoom()
     setError(nextError.message)
+    setErrorNonce((current) => current + 1)
   }
 
   function restoreSocketSeat(activeSocket: GameSocket) {
@@ -257,8 +260,15 @@ function RoomPage() {
     }
 
     setError(nextError.message)
+    setErrorNonce((current) => current + 1)
     haptic.trigger("error")
   }
+
+  useEffect(() => {
+    if (!error) return
+    const timer = window.setTimeout(() => setError(null), 10_000)
+    return () => window.clearTimeout(timer)
+  }, [error, errorNonce])
 
   function isActiveTurnPlayer() {
     return Boolean(
@@ -522,6 +532,7 @@ function RoomPage() {
         if (!result.ok) {
           applyRoomSnapshot(null)
           setError(result.error.message)
+          setErrorNonce((current) => current + 1)
           return
         }
 
@@ -535,6 +546,7 @@ function RoomPage() {
             ? cause.message
             : "Could not reach the game server."
         )
+        setErrorNonce((current) => current + 1)
       }
     }
 
@@ -556,6 +568,7 @@ function RoomPage() {
     const cleanName = nextName.trim()
     if (!cleanName) {
       setError("Enter a name to join this room.")
+      setErrorNonce((current) => current + 1)
       return
     }
 
@@ -1718,29 +1731,25 @@ function GameTable({
               />
             </div>
 
-            {(visibleError ||
-              Boolean(playerGame?.catchablePlayerIds.length)) && (
+            <RoomErrorBanner
+              message={visibleError}
+              className="shrink-0 rounded-xl border border-red-400/20 bg-red-500/12 px-3 py-2 text-xs text-red-100 shadow-[0_14px_34px_rgba(0,0,0,0.26)] backdrop-blur-md"
+            />
+            {Boolean(playerGame?.catchablePlayerIds.length) && (
               <div className="shrink-0 space-y-1">
-                {visibleError && (
-                  <p className="rounded-xl border border-red-400/20 bg-red-500/12 px-3 py-2 text-xs text-red-100 shadow-[0_14px_34px_rgba(0,0,0,0.26)] backdrop-blur-md">
-                    {visibleError}
-                  </p>
-                )}
-                {playerGame?.catchablePlayerIds.length ? (
-                  <div className="flex gap-2 overflow-x-auto rounded-xl border border-yellow-300/20 bg-yellow-300/10 p-2 backdrop-blur-md">
-                    {playerGame.catchablePlayerIds.map((targetPlayerId) => (
-                      <Button
-                        key={targetPlayerId}
-                        type="button"
-                        size="xs"
-                        onClick={() => handleCatchUno(targetPlayerId)}
-                        className="shrink-0 bg-yellow-100 text-yellow-950 hover:bg-yellow-50"
-                      >
-                        Catch {playerName(room, targetPlayerId)}
-                      </Button>
-                    ))}
-                  </div>
-                ) : null}
+                <div className="flex gap-2 overflow-x-auto rounded-xl border border-yellow-300/20 bg-yellow-300/10 p-2 backdrop-blur-md">
+                  {playerGame?.catchablePlayerIds.map((targetPlayerId) => (
+                    <Button
+                      key={targetPlayerId}
+                      type="button"
+                      size="xs"
+                      onClick={() => handleCatchUno(targetPlayerId)}
+                      className="shrink-0 bg-yellow-100 text-yellow-950 hover:bg-yellow-50"
+                    >
+                      Catch {playerName(room, targetPlayerId)}
+                    </Button>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -1760,7 +1769,7 @@ function GameTable({
                   <p className="mt-0.5 truncate text-[11px] text-white/42">
                     {isSelfEliminated
                       ? spectatingPlayerId
-                        ? "🙌 Supporting"
+                        ? "Spectating"
                         : "Tap an active player to spectate."
                       : "Tap a card to stage it."}
                   </p>
@@ -2067,11 +2076,10 @@ function GameTable({
               </div>
 
               <div className="pointer-events-none absolute inset-x-2 top-[3.4rem] z-30 flex max-h-[34%] flex-col gap-2 overflow-y-auto sm:inset-x-3 sm:top-[4.25rem]">
-                {visibleError && (
-                  <p className="pointer-events-auto rounded-md border border-red-400/20 bg-red-500/12 px-3 py-2 text-sm text-red-100 shadow-[0_18px_44px_rgba(0,0,0,0.26)] backdrop-blur-md xl:hidden">
-                    {visibleError}
-                  </p>
-                )}
+                <RoomErrorBanner
+                  message={visibleError}
+                  className="pointer-events-auto rounded-md border border-red-400/20 bg-red-500/12 px-3 py-2 text-sm text-red-100 shadow-[0_18px_44px_rgba(0,0,0,0.26)] backdrop-blur-md xl:hidden"
+                />
 
                 {playerGame?.catchablePlayerIds.length ? (
                   <div className="pointer-events-auto flex flex-wrap gap-2 rounded-lg border border-yellow-300/20 bg-yellow-300/10 p-3 backdrop-blur-md">
@@ -2106,7 +2114,7 @@ function GameTable({
                     <p className="mt-0.5 text-xs text-white/42 sm:mt-1">
                       {isSelfEliminated
                         ? spectatingPlayerId
-                          ? "🙌 Supporting"
+                          ? "Spectating"
                           : "Tap an active player to spectate."
                         : "Drag cards to the table, then end your turn."}
                     </p>
@@ -2470,7 +2478,7 @@ function TableChatPanel({
   onKickSupporter?: (supporterPlayerId: string) => void
 }) {
   const {
-    addMention,
+    applyMention,
     changeText,
     channel,
     channelMessages,
@@ -2540,16 +2548,16 @@ function TableChatPanel({
         className="mt-3 flex-1 pr-1"
       />
 
-      {error && (
-        <p className="mt-2 rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-2 text-xs text-red-100 shadow-[0_12px_26px_rgba(0,0,0,0.22)]">
-          {error}
-        </p>
-      )}
+      <RoomErrorBanner
+        message={error}
+        className="mt-2 rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-2 text-xs text-red-100 shadow-[0_12px_26px_rgba(0,0,0,0.22)]"
+      />
 
       <ChatComposer
         text={text}
         tray={tray}
         roomCode={room?.code ?? ""}
+        players={players}
         mentionablePlayers={mentionablePlayers}
         voteKickTargets={voteKickTargetsForRoom(room, selfPlayerId)}
         canStartVoteKick={
@@ -2557,7 +2565,7 @@ function TableChatPanel({
           Boolean(onStartVoteKick) &&
           canPlayerStartVoteKick(room, selfPlayerId)
         }
-        onMention={addMention}
+        onApplyMention={applyMention}
         onStartVoteKick={onStartVoteKick}
         onTextChange={changeText}
         onTrayChange={setTray}
@@ -2598,7 +2606,7 @@ function MobileChatSheet({
   const [open, setOpen] = useState(false)
   const haptic = useWebHaptics()
   const {
-    addMention,
+    applyMention,
     changeText,
     channel,
     channelMessages,
@@ -2741,11 +2749,10 @@ function MobileChatSheet({
                 className="flex-1 px-4 py-3"
               />
 
-              {error && (
-                <p className="mx-4 mb-2 rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-2 text-xs text-red-100">
-                  {error}
-                </p>
-              )}
+              <RoomErrorBanner
+                message={error}
+                className="mx-4 mb-2 rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-2 text-xs text-red-100"
+              />
 
               <div className="shrink-0 border-t border-white/10 p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]">
                 <ChatComposer
@@ -2753,6 +2760,7 @@ function MobileChatSheet({
                   tray={tray}
                   comfortable
                   roomCode={room?.code ?? ""}
+                  players={players}
                   mentionablePlayers={mentionablePlayers}
                   voteKickTargets={voteKickTargetsForRoom(room, selfPlayerId)}
                   canStartVoteKick={
@@ -2760,7 +2768,7 @@ function MobileChatSheet({
                     Boolean(onStartVoteKick) &&
                     canPlayerStartVoteKick(room, selfPlayerId)
                   }
-                  onMention={addMention}
+                  onApplyMention={applyMention}
                   onStartVoteKick={onStartVoteKick}
                   onTextChange={changeText}
                   onTrayChange={setTray}
@@ -2829,20 +2837,32 @@ function MobileSeatingRing({
         const isWinner = winnerPlacement?.position === 1
         const fadedOpacity = eliminated || voteKicked || !candidate.connected
         const showName = !dense || isYou
-        const supporterCount =
-          game?.supportLinks.filter(
-            (link) => link.supportedPlayerId === candidate.id
-          ).length ?? 0
-        const supporterNames =
+        const spectators =
           game?.supportLinks
             .filter((link) => link.supportedPlayerId === candidate.id)
-            .map(
-              (link) =>
-                room.players.find(
-                  (supporter) => supporter.id === link.supporterPlayerId
-                )?.name
-            )
-            .filter((name): name is string => Boolean(name)) ?? []
+            .map((link) => {
+              const supporter = room.players.find(
+                (player) => player.id === link.supporterPlayerId
+              )
+              if (!supporter) return null
+              return {
+                id: supporter.id,
+                name: supporter.name,
+                avatarUrl:
+                  avatarUrls.get(supporter.id) ?? PLAYER_AVATARS[0]!,
+              }
+            })
+            .filter(
+              (
+                spectator
+              ): spectator is {
+                id: string
+                name: string
+                avatarUrl: string
+              } => Boolean(spectator)
+            ) ?? []
+        const supporterCount = spectators.length
+        const supporterNames = spectators.map((spectator) => spectator.name)
         const latestReaction = game?.avatarEmojiReactions
           .slice()
           .reverse()
@@ -2938,8 +2958,16 @@ function MobileSeatingRing({
                     : handCount}
               </span>
               {supporterCount > 0 && (
-                <span className="absolute -bottom-1.5 -left-1.5 rounded-full border border-pink-200/25 bg-pink-300/18 px-1 text-[8px] font-semibold text-pink-50 shadow-[0_4px_10px_rgba(0,0,0,0.32)]">
-                  🙌 {supporterCount}
+                <span
+                  className="absolute -bottom-1.5 -left-1.5 inline-flex items-center gap-0.5 rounded-full border border-white/12 bg-black/45 px-1 py-0.5 text-[8px] font-semibold text-white/62 shadow-[0_4px_10px_rgba(0,0,0,0.22)] backdrop-blur-md"
+                  title={
+                    supporterNames.length > 0
+                      ? `Spectating: ${supporterNames.join(", ")}`
+                      : `${supporterCount} spectating`
+                  }
+                >
+                  <Eye className="size-2.5" strokeWidth={2.4} />
+                  <span className="tabular-nums">{supporterCount}</span>
                 </span>
               )}
               <span
@@ -2978,13 +3006,26 @@ function MobileSeatingRing({
                 {isYou ? "You" : candidate.name}
               </p>
             )}
-            {supporterNames.length > 0 && (
-              <p
-                className="mt-0.5 max-w-[72px] truncate text-center text-[8px] text-pink-100/72"
-                title={supporterNames.join(", ")}
+            {spectators.length > 0 && (
+              <div
+                className="mt-0.5 flex max-w-[84px] flex-wrap justify-center gap-0.5"
+                title={`Spectating: ${supporterNames.join(", ")}`}
               >
-                🙌 {supporterNames.join(", ")}
-              </p>
+                {spectators.slice(0, 3).map((spectator) => (
+                  <span
+                    key={spectator.id}
+                    className="inline-flex max-w-full items-center gap-0.5 rounded-full border border-white/12 bg-white/[0.06] py-0.5 pr-1 pl-0.5 text-[8px] font-medium text-white/68"
+                  >
+                    <img
+                      src={spectator.avatarUrl}
+                      alt=""
+                      className="size-3 shrink-0 rounded-full object-cover"
+                      draggable={false}
+                    />
+                    <span className="truncate">{spectator.name}</span>
+                  </span>
+                ))}
+              </div>
             )}
             {drawStack && (
               <div className="pointer-events-auto absolute -bottom-1.5 flex items-center gap-1 rounded-full border border-white/14 bg-neutral-950 px-1.5 py-0.5 text-[9px] font-semibold text-red-100 shadow-[0_8px_18px_rgba(0,0,0,0.32)]">
@@ -3053,9 +3094,17 @@ function SquadRosterPanel({
               key={member.id}
               className="flex items-center gap-1.5 rounded-full border border-white/10 bg-black/30 px-2 py-1 text-[11px] text-white/72"
             >
-              <span className="max-w-28 truncate">
-                {isSupported ? "🎮" : "🙌"} {member.name}
-                {isSelf ? " · you" : ""}
+              <span className="inline-flex max-w-28 items-center gap-1 truncate">
+                {!isSupported && (
+                  <Eye
+                    className="size-3 shrink-0 text-white/55"
+                    strokeWidth={2.2}
+                  />
+                )}
+                <span className="truncate">
+                  {member.name}
+                  {isSelf ? " · you" : ""}
+                </span>
               </span>
               {canKick && !isSupported && (
                 <button
@@ -3205,7 +3254,6 @@ function ChatMessageList({
               key={message.id}
               message={message}
               isSelf={message.playerId === selfPlayerId}
-              isMentioned={message.mentionPlayerIds.includes(selfPlayerId)}
               selfPlayerId={selfPlayerId}
               players={players}
               roomCode={roomCode}
@@ -3220,11 +3268,12 @@ function ChatComposer({
   text,
   tray,
   roomCode = "",
+  players = [],
   mentionablePlayers = [],
   voteKickTargets = [],
   canStartVoteKick = false,
   comfortable = false,
-  onMention,
+  onApplyMention,
   onStartVoteKick,
   onTextChange,
   onTrayChange,
@@ -3234,17 +3283,62 @@ function ChatComposer({
   text: string
   tray: ChatTray | null
   roomCode?: string
+  players?: Array<Player>
   mentionablePlayers?: Array<Player>
   voteKickTargets?: Array<VoteKickTarget>
   canStartVoteKick?: boolean
   comfortable?: boolean
-  onMention?: (player: Player) => void
+  onApplyMention?: (
+    player: Player,
+    range: { start: number; end: number }
+  ) => number
   onStartVoteKick?: (targetPlayerId: string) => void
   onTextChange: (value: string) => void
   onTrayChange: (tray: ChatTray | null) => void
   onSend: (input: SendChatMessageInput) => void
   onSendText: () => void
 }) {
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const [caret, setCaret] = useState(0)
+  const [highlightIndex, setHighlightIndex] = useState(0)
+  const [pendingCaret, setPendingCaret] = useState<number | null>(null)
+  const [dismissedMentionStart, setDismissedMentionStart] = useState<
+    number | null
+  >(null)
+
+  const activeMention = getActiveMention(text, caret)
+  const mentionOpen =
+    activeMention !== null && dismissedMentionStart !== activeMention.start
+  const mentionMatches = mentionOpen
+    ? filterMentionCandidates(mentionablePlayers, activeMention.query)
+    : []
+  const safeHighlight =
+    mentionMatches.length === 0
+      ? 0
+      : Math.min(highlightIndex, mentionMatches.length - 1)
+  const avatarUrls = avatarsByPlayerId(
+    roomCode,
+    players.length > 0 ? players : mentionablePlayers
+  )
+
+  useEffect(() => {
+    setHighlightIndex(0)
+  }, [activeMention?.start, activeMention?.query])
+
+  useEffect(() => {
+    if (mentionOpen && tray) onTrayChange(null)
+  }, [mentionOpen, tray, onTrayChange])
+
+  useEffect(() => {
+    if (pendingCaret == null) return
+    const node = textareaRef.current
+    if (!node) return
+    node.focus()
+    node.setSelectionRange(pendingCaret, pendingCaret)
+    setCaret(pendingCaret)
+    setPendingCaret(null)
+  }, [text, pendingCaret])
+
   function toggleTray(nextTray: ChatTray) {
     onTrayChange(tray === nextTray ? null : nextTray)
   }
@@ -3254,6 +3348,22 @@ function ChatComposer({
     onTrayChange(null)
   }
 
+  function syncCaretFromTextarea() {
+    const node = textareaRef.current
+    if (!node) return
+    setCaret(node.selectionStart)
+  }
+
+  function selectMention(player: Player) {
+    if (!activeMention || !onApplyMention) return
+    const nextCaret = onApplyMention(player, {
+      start: activeMention.start,
+      end: activeMention.end,
+    })
+    setDismissedMentionStart(null)
+    setPendingCaret(nextCaret)
+  }
+
   return (
     <div
       className={
@@ -3261,19 +3371,15 @@ function ChatComposer({
         (comfortable ? "rounded-2xl p-2" : "rounded-xl p-1.5")
       }
     >
-      {tray === "mentions" ? (
-        <div className="uno-scrollbar flex max-h-32 flex-wrap gap-1.5 overflow-y-auto pr-1">
-          {mentionablePlayers.map((player) => (
-            <button
-              key={player.id}
-              type="button"
-              onClick={() => onMention?.(player)}
-              className="rounded-full border border-white/10 bg-white/[0.055] px-2.5 py-1.5 text-xs text-white/72 hover:bg-white/[0.09] hover:text-white"
-            >
-              @{player.name} · seat {player.seat}
-            </button>
-          ))}
-        </div>
+      {mentionOpen ? (
+        <MentionSuggestionList
+          players={mentionMatches}
+          avatarUrls={avatarUrls}
+          highlightIndex={safeHighlight}
+          query={activeMention.query}
+          onHighlight={setHighlightIndex}
+          onSelect={selectMention}
+        />
       ) : tray === "voteKick" ? (
         <VoteKickTargetTray
           targets={voteKickTargets}
@@ -3291,50 +3397,84 @@ function ChatComposer({
         />
       ) : null}
 
-      <div className={tray ? "mt-2" : ""}>
+      <div className={mentionOpen || tray ? "mt-2" : ""}>
         <div
           className={
             (comfortable ? "mb-2" : "mb-1.5") + " flex items-center gap-1"
           }
         >
           <ChatToolButton
-            active={tray === "presets"}
+            active={tray === "presets" && !mentionOpen}
             label="Presets"
             icon={<Sparkles className="size-3" strokeWidth={1.9} />}
             onClick={() => toggleTray("presets")}
           />
           <ChatToolButton
-            active={tray === "mentions"}
-            label="Mention player"
-            icon={<span className="text-[11px] font-bold">@</span>}
-            onClick={() => toggleTray("mentions")}
-          />
-          <ChatToolButton
-            active={tray === "emoji"}
+            active={tray === "emoji" && !mentionOpen}
             label="Emoji"
             icon={<Smile className="size-3" strokeWidth={1.9} />}
             onClick={() => toggleTray("emoji")}
           />
           <ChatToolButton
-            active={tray === "gifs"}
+            active={tray === "gifs" && !mentionOpen}
             label="GIFs"
             icon={<ImageIcon className="size-3" strokeWidth={1.9} />}
             onClick={() => toggleTray("gifs")}
           />
           <ChatToolButton
-            active={tray === "voteKick"}
+            active={tray === "voteKick" && !mentionOpen}
             disabled={!canStartVoteKick}
-            label="Vote-kick"
-            icon={<Vote className="size-3" strokeWidth={1.9} />}
+            label="Kick"
+            showLabel
+            icon={<SportShoe className="size-3" strokeWidth={1.9} />}
             onClick={() => toggleTray("voteKick")}
           />
         </div>
 
         <div className="flex items-end gap-1.5">
           <textarea
+            ref={textareaRef}
             value={text}
-            onChange={(event) => onTextChange(event.target.value)}
+            onChange={(event) => {
+              onTextChange(event.target.value)
+              setCaret(event.target.selectionStart)
+              setDismissedMentionStart(null)
+            }}
+            onClick={syncCaretFromTextarea}
+            onKeyUp={syncCaretFromTextarea}
+            onSelect={syncCaretFromTextarea}
             onKeyDown={(event) => {
+              if (mentionOpen && mentionMatches.length > 0) {
+                if (event.key === "ArrowDown") {
+                  event.preventDefault()
+                  setHighlightIndex(
+                    (current) => (current + 1) % mentionMatches.length
+                  )
+                  return
+                }
+                if (event.key === "ArrowUp") {
+                  event.preventDefault()
+                  setHighlightIndex(
+                    (current) =>
+                      (current - 1 + mentionMatches.length) %
+                      mentionMatches.length
+                  )
+                  return
+                }
+                if (event.key === "Enter" || event.key === "Tab") {
+                  event.preventDefault()
+                  const selected =
+                    mentionMatches[safeHighlight] ?? mentionMatches[0]
+                  if (selected) selectMention(selected)
+                  return
+                }
+                if (event.key === "Escape") {
+                  event.preventDefault()
+                  setDismissedMentionStart(activeMention.start)
+                  return
+                }
+              }
+
               if (event.key !== "Enter" || event.shiftKey) return
               event.preventDefault()
               onSendText()
@@ -3371,12 +3511,118 @@ function ChatComposer({
   )
 }
 
+function MentionSuggestionList({
+  players,
+  avatarUrls,
+  highlightIndex,
+  query,
+  onHighlight,
+  onSelect,
+}: {
+  players: Array<Player>
+  avatarUrls: Map<string, string>
+  highlightIndex: number
+  query: string
+  onHighlight: (index: number) => void
+  onSelect: (player: Player) => void
+}) {
+  if (players.length === 0) {
+    return (
+      <div className="rounded-lg border border-white/8 bg-white/[0.035] px-3 py-3 text-center text-xs text-white/48">
+        {query ? `No one matches “${query}”` : "No one to mention"}
+      </div>
+    )
+  }
+
+  return (
+    <div
+      role="listbox"
+      aria-label="Mention player"
+      className="uno-scrollbar flex max-h-36 flex-col gap-0.5 overflow-y-auto rounded-lg border border-white/10 bg-neutral-950/80 p-1 shadow-[0_12px_28px_rgba(0,0,0,0.28)]"
+    >
+      {players.map((player, index) => {
+        const active = index === highlightIndex
+        return (
+          <button
+            key={player.id}
+            type="button"
+            role="option"
+            aria-selected={active}
+            onMouseEnter={() => onHighlight(index)}
+            onClick={() => onSelect(player)}
+            className={
+              "flex min-h-10 items-center gap-2.5 rounded-md px-2 py-1.5 text-left transition-[background-color,color] duration-150 " +
+              (active
+                ? "bg-white/[0.12] text-white"
+                : "text-white/78 hover:bg-white/[0.08] hover:text-white")
+            }
+          >
+            <img
+              src={avatarUrls.get(player.id) ?? PLAYER_AVATARS[0]!}
+              alt=""
+              className="size-7 shrink-0 rounded-full border border-white/12 object-cover"
+              draggable={false}
+            />
+            <span className="min-w-0 flex-1 truncate text-sm font-medium">
+              {player.name}
+            </span>
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+function getActiveMention(
+  value: string,
+  caret: number
+): { start: number; end: number; query: string } | null {
+  const safeCaret = Math.max(0, Math.min(caret, value.length))
+  const before = value.slice(0, safeCaret)
+  const match = /(^|[\s([{])@([^\s@]*)$/.exec(before)
+  if (!match) return null
+  const query = match[2] ?? ""
+  const start = before.length - query.length - 1
+  return { start, end: safeCaret, query }
+}
+
+function filterMentionCandidates(players: Array<Player>, query: string) {
+  const ranked = players
+    .map((player) => ({
+      player,
+      score: fuzzyMentionScore(query, player.name),
+    }))
+    .filter(
+      (entry): entry is { player: Player; score: number } =>
+        entry.score !== null
+    )
+    .sort((a, b) => b.score - a.score || a.player.name.localeCompare(b.player.name))
+
+  return ranked.map((entry) => entry.player)
+}
+
+function fuzzyMentionScore(query: string, name: string): number | null {
+  const needle = query.trim().toLowerCase()
+  const haystack = name.toLowerCase()
+  if (!needle) return 1
+  if (haystack.startsWith(needle)) return 100 - (haystack.length - needle.length) * 0.01
+  const includesAt = haystack.indexOf(needle)
+  if (includesAt >= 0) return 60 - includesAt * 0.5
+
+  let qi = 0
+  for (let i = 0; i < haystack.length && qi < needle.length; i += 1) {
+    if (haystack[i] === needle[qi]) qi += 1
+  }
+  if (qi === needle.length) return 20
+  return null
+}
+
 function ChatQuickTray({
   tray,
   comfortable = false,
   onSend,
 }: {
-  tray: Exclude<ChatTray, "mentions" | "voteKick">
+  tray: Exclude<ChatTray, "voteKick">
   comfortable?: boolean
   onSend: (input: SendChatMessageInput) => void
 }) {
@@ -3446,47 +3692,59 @@ function VoteKickTargetTray({
     targets.map((target) => target.player)
   )
 
-  if (targets.length === 0) {
-    return (
-      <div className="rounded-lg border border-white/8 bg-white/[0.035] px-3 py-4 text-center text-xs text-white/48">
-        No vote-kick targets available.
-      </div>
-    )
-  }
-
   return (
-    <div className="uno-scrollbar flex max-h-36 flex-col gap-1 overflow-y-auto pr-1">
-      {targets.map((target) => {
-        const cooldownMs = target.cooldownExpiresAt
-          ? Date.parse(target.cooldownExpiresAt) - now
-          : 0
-        const cooldownSeconds = Math.max(0, Math.ceil(cooldownMs / 1000))
-        const disabled = cooldownSeconds > 0
-        return (
-          <button
-            key={target.player.id}
-            type="button"
-            disabled={disabled}
-            onClick={() => onSelect(target.player.id)}
-            className="flex min-h-10 items-center gap-2.5 rounded-lg border border-white/10 bg-white/[0.055] px-2 py-1.5 text-left transition-[background-color,border-color,color,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] hover:border-white/18 hover:bg-white/[0.085] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-55"
-          >
-            <img
-              src={avatarUrls.get(target.player.id) ?? PLAYER_AVATARS[0]!}
-              alt=""
-              className="size-7 shrink-0 rounded-full border border-white/12 object-cover"
-              draggable={false}
-            />
-            <span className="min-w-0 flex-1 truncate text-sm font-medium text-white/82">
-              {target.player.name}
-            </span>
-            {disabled && (
-              <span className="shrink-0 rounded-full border border-red-200/20 bg-red-400/12 px-2 py-0.5 text-[10px] font-semibold text-red-100 tabular-nums">
-                {cooldownSeconds}s
-              </span>
-            )}
-          </button>
-        )
-      })}
+    <div className="flex flex-col gap-2">
+      <div className="flex items-start gap-2 px-0.5">
+        <span className="mt-0.5 grid size-6 shrink-0 place-items-center rounded-md border border-white/10 bg-white/[0.06] text-white/70">
+          <SportShoe className="size-3" strokeWidth={1.9} />
+        </span>
+        <div className="min-w-0">
+          <p className="text-xs font-semibold text-white/84">Kick from room</p>
+          <p className="mt-0.5 text-[11px] leading-snug text-white/45">
+            Soft-kick someone out of this room. The table votes yes or no.
+          </p>
+        </div>
+      </div>
+
+      {targets.length === 0 ? (
+        <div className="rounded-lg border border-white/8 bg-white/[0.035] px-3 py-4 text-center text-xs text-white/48">
+          No kick targets available.
+        </div>
+      ) : (
+        <div className="uno-scrollbar flex max-h-36 flex-col gap-1 overflow-y-auto pr-1">
+          {targets.map((target) => {
+            const cooldownMs = target.cooldownExpiresAt
+              ? Date.parse(target.cooldownExpiresAt) - now
+              : 0
+            const cooldownSeconds = Math.max(0, Math.ceil(cooldownMs / 1000))
+            const disabled = cooldownSeconds > 0
+            return (
+              <button
+                key={target.player.id}
+                type="button"
+                disabled={disabled}
+                onClick={() => onSelect(target.player.id)}
+                className="flex min-h-10 items-center gap-2.5 rounded-lg border border-white/10 bg-white/[0.055] px-2 py-1.5 text-left transition-[background-color,border-color,color,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] hover:border-white/18 hover:bg-white/[0.085] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-55"
+              >
+                <img
+                  src={avatarUrls.get(target.player.id) ?? PLAYER_AVATARS[0]!}
+                  alt=""
+                  className="size-7 shrink-0 rounded-full border border-white/12 object-cover"
+                  draggable={false}
+                />
+                <span className="min-w-0 flex-1 truncate text-sm font-medium text-white/82">
+                  {target.player.name}
+                </span>
+                {disabled && (
+                  <span className="shrink-0 rounded-full border border-red-200/20 bg-red-400/12 px-2 py-0.5 text-[10px] font-semibold text-red-100 tabular-nums">
+                    {cooldownSeconds}s
+                  </span>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
@@ -3496,12 +3754,14 @@ function ChatToolButton({
   disabled = false,
   icon,
   label,
+  showLabel = false,
   onClick,
 }: {
   active: boolean
   disabled?: boolean
   icon: ReactNode
   label: string
+  showLabel?: boolean
   onClick: () => void
 }) {
   return (
@@ -3513,21 +3773,64 @@ function ChatToolButton({
       aria-label={active ? `Hide ${label}` : `Show ${label}`}
       aria-pressed={active}
       className={
-        "grid size-7 shrink-0 place-items-center rounded-md border transition-[background-color,border-color,color,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-35 " +
+        "inline-flex shrink-0 items-center justify-center rounded-md border transition-[background-color,border-color,color,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-35 " +
+        (showLabel ? "h-7 gap-1 px-2" : "size-7") +
+        " " +
         (active
           ? "border-white/24 bg-white text-neutral-950 shadow-[0_10px_22px_rgba(0,0,0,0.22)]"
           : "border-white/8 bg-white/[0.045] text-white/54 hover:border-white/16 hover:bg-white/[0.075] hover:text-white/78")
       }
     >
       {icon}
+      {showLabel && (
+        <span className="text-[10px] font-semibold tracking-wide uppercase">
+          {label}
+        </span>
+      )}
     </button>
+  )
+}
+
+function RoomErrorBanner({
+  message,
+  className,
+}: {
+  message: string | null | undefined
+  className?: string
+}) {
+  const [display, setDisplay] = useState<string | null>(null)
+  const [opaque, setOpaque] = useState(false)
+
+  useEffect(() => {
+    if (!message) {
+      setOpaque(false)
+      const hideTimer = window.setTimeout(() => setDisplay(null), 280)
+      return () => window.clearTimeout(hideTimer)
+    }
+
+    setDisplay(message)
+    const frame = window.requestAnimationFrame(() => setOpaque(true))
+    return () => window.cancelAnimationFrame(frame)
+  }, [message])
+
+  if (!display) return null
+
+  return (
+    <p
+      className={
+        "transition-opacity duration-300 ease-out " +
+        (opaque ? "opacity-100" : "opacity-0") +
+        (className ? ` ${className}` : "")
+      }
+    >
+      {display}
+    </p>
   )
 }
 
 function ChatMessageBubble({
   message,
   isSelf,
-  isMentioned,
   selfPlayerId,
   players,
   roomCode,
@@ -3535,7 +3838,6 @@ function ChatMessageBubble({
 }: {
   message: ChatMessage
   isSelf: boolean
-  isMentioned: boolean
   selfPlayerId: string
   players: Array<Player>
   roomCode: string
@@ -3551,7 +3853,6 @@ function ChatMessageBubble({
             players={players}
             roomCode={roomCode}
             selfPlayerId={selfPlayerId}
-            isMentioned={isMentioned}
             onVote={onVoteKick}
           />
         </div>
@@ -3590,16 +3891,21 @@ function ChatMessageBubble({
             "overflow-hidden rounded-2xl px-3 py-2 shadow-[0_10px_24px_rgba(0,0,0,0.22)] " +
             (isSelf
               ? "rounded-br-md bg-white text-neutral-950"
-              : "rounded-bl-md bg-white/[0.085] text-white/82 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.07),0_10px_24px_rgba(0,0,0,0.22)]") +
-            (isMentioned ? " ring-1 ring-pink-300/55" : "")
+              : "rounded-bl-md bg-white/[0.085] text-white/82 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.07),0_10px_24px_rgba(0,0,0,0.22)]")
           }
         >
           {message.kind === "emoji" ? (
             <p className="text-3xl leading-none">{message.body}</p>
           ) : (
-            <p className="text-sm leading-relaxed text-pretty">
-              {message.body}
-            </p>
+            <div className="text-sm text-pretty">
+              <ChatMessageBody
+                body={message.body}
+                mentionPlayerIds={message.mentionPlayerIds}
+                players={players}
+                roomCode={roomCode}
+                isSelf={isSelf}
+              />
+            </div>
           )}
         </div>
       </div>
@@ -3607,19 +3913,181 @@ function ChatMessageBubble({
   )
 }
 
+function ChatMessageBody({
+  body,
+  mentionPlayerIds,
+  players,
+  roomCode,
+  isSelf,
+}: {
+  body: string
+  mentionPlayerIds: Array<string>
+  players: Array<Player>
+  roomCode: string
+  isSelf: boolean
+}) {
+  const avatarUrls = avatarsByPlayerId(roomCode, players)
+  const mentionedPlayers = mentionPlayerIds
+    .map((playerId) => players.find((player) => player.id === playerId))
+    .filter((player): player is Player => Boolean(player))
+    .sort((a, b) => b.name.length - a.name.length)
+
+  if (mentionedPlayers.length === 0) {
+    return <span className="leading-relaxed">{body}</span>
+  }
+
+  const segments = tokenizeChatMentions(body, mentionedPlayers)
+  const parts: Array<
+    | { kind: "avatar"; player: Player; key: string }
+    | { kind: "name"; player: Player; key: string }
+    | { kind: "word"; value: string; key: string }
+  > = []
+
+  segments.forEach((segment, index) => {
+    if (segment.kind === "text") {
+      const words = segment.value.trim().split(/\s+/).filter(Boolean)
+      words.forEach((word, wordIndex) => {
+        parts.push({
+          kind: "word",
+          value: word,
+          key: `w-${index}-${wordIndex}`,
+        })
+      })
+      return
+    }
+
+    parts.push({
+      kind: "avatar",
+      player: segment.player,
+      key: `a-${segment.player.id}-${index}`,
+    })
+    parts.push({
+      kind: "name",
+      player: segment.player,
+      key: `n-${segment.player.id}-${index}`,
+    })
+  })
+
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1 leading-5">
+      {parts.map((part) => {
+        if (part.kind === "word") {
+          return (
+            <span key={part.key} className="leading-5">
+              {part.value}
+            </span>
+          )
+        }
+
+        if (part.kind === "avatar") {
+          return (
+            <img
+              key={part.key}
+              src={avatarUrls.get(part.player.id) ?? PLAYER_AVATARS[0]!}
+              alt=""
+              className="size-3.5 shrink-0 rounded-full object-cover"
+              draggable={false}
+            />
+          )
+        }
+
+        return (
+          <span
+            key={part.key}
+            title={`@${part.player.name}`}
+            className={
+              "text-[13px] font-semibold leading-5 " +
+              (isSelf ? "text-sky-600" : "text-sky-300")
+            }
+          >
+            {part.player.name}
+          </span>
+        )
+      })}
+    </span>
+  )
+}
+
+function tokenizeChatMentions(
+  body: string,
+  mentionedPlayers: Array<Player>
+): Array<
+  | { kind: "text"; value: string }
+  | { kind: "mention"; player: Player; value: string }
+> {
+  if (!body || mentionedPlayers.length === 0) {
+    return [{ kind: "text", value: body }]
+  }
+
+  const patterns = mentionedPlayers.map((player) => ({
+    player,
+    token: `@${player.name}`,
+  }))
+
+  const segments: Array<
+    | { kind: "text"; value: string }
+    | { kind: "mention"; player: Player; value: string }
+  > = []
+  let cursor = 0
+
+  while (cursor < body.length) {
+    let nextMatch: {
+      index: number
+      player: Player
+      token: string
+    } | null = null
+
+    for (const pattern of patterns) {
+      const index = body.indexOf(pattern.token, cursor)
+      if (index < 0) continue
+      if (
+        !nextMatch ||
+        index < nextMatch.index ||
+        (index === nextMatch.index &&
+          pattern.token.length > nextMatch.token.length)
+      ) {
+        nextMatch = {
+          index,
+          player: pattern.player,
+          token: pattern.token,
+        }
+      }
+    }
+
+    if (!nextMatch) {
+      segments.push({ kind: "text", value: body.slice(cursor) })
+      break
+    }
+
+    if (nextMatch.index > cursor) {
+      segments.push({
+        kind: "text",
+        value: body.slice(cursor, nextMatch.index),
+      })
+    }
+
+    segments.push({
+      kind: "mention",
+      player: nextMatch.player,
+      value: nextMatch.token,
+    })
+    cursor = nextMatch.index + nextMatch.token.length
+  }
+
+  return segments
+}
+
 function VoteKickPollBubble({
   poll,
   players,
   roomCode,
   selfPlayerId,
-  isMentioned,
   onVote,
 }: {
   poll: VoteKickPoll
   players: Array<Player>
   roomCode: string
   selfPlayerId: string
-  isMentioned: boolean
   onVote?: (voteKickId: string, choice: VoteKickChoice) => void
 }) {
   const now = useSecondTick(poll.status === "open")
@@ -3636,12 +4104,7 @@ function VoteKickPollBubble({
   const avatarUrls = avatarsByPlayerId(roomCode, players)
 
   return (
-    <div
-      className={
-        "overflow-hidden rounded-2xl rounded-bl-md bg-white/[0.1] px-3 py-2.5 text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.14),0_10px_24px_rgba(0,0,0,0.28)] " +
-        (isMentioned ? " ring-1 ring-pink-300/55" : "")
-      }
-    >
+    <div className="overflow-hidden rounded-2xl rounded-bl-md bg-white/[0.1] px-3 py-2.5 text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.14),0_10px_24px_rgba(0,0,0,0.28)]">
       <div className="flex items-start justify-between gap-2.5">
         <div className="min-w-0">
           <p className="truncate text-sm font-semibold text-white/92">
@@ -4018,16 +4481,30 @@ function TableSeatRing({
                 (link) => link.supportedPlayerId === candidate.id
               ).length ?? 0
             }
-            supporterNames={
+            spectators={
               game?.supportLinks
                 .filter((link) => link.supportedPlayerId === candidate.id)
-                .map(
-                  (link) =>
-                    room.players.find(
-                      (supporter) => supporter.id === link.supporterPlayerId
-                    )?.name
-                )
-                .filter((name): name is string => Boolean(name)) ?? []
+                .map((link) => {
+                  const supporter = room.players.find(
+                    (player) => player.id === link.supporterPlayerId
+                  )
+                  if (!supporter) return null
+                  return {
+                    id: supporter.id,
+                    name: supporter.name,
+                    avatarUrl:
+                      avatarUrls.get(supporter.id) ?? PLAYER_AVATARS[0]!,
+                  }
+                })
+                .filter(
+                  (
+                    spectator
+                  ): spectator is {
+                    id: string
+                    name: string
+                    avatarUrl: string
+                  } => Boolean(spectator)
+                ) ?? []
             }
             latestReaction={
               game?.avatarEmojiReactions
@@ -4149,7 +4626,7 @@ function TableAvatarSeat({
   avatarUrl,
   handCount,
   supporterCount,
-  supporterNames,
+  spectators,
   latestReaction,
   active,
   declaredUno,
@@ -4174,7 +4651,7 @@ function TableAvatarSeat({
   avatarUrl: string
   handCount: number
   supporterCount: number
-  supporterNames: Array<string>
+  spectators: Array<{ id: string; name: string; avatarUrl: string }>
   latestReaction:
     | NonNullable<RoomSnapshot["game"]>["avatarEmojiReactions"][number]
     | null
@@ -4204,6 +4681,7 @@ function TableAvatarSeat({
     : null
   const isFirstPlace = winnerPlacement?.position === 1
   const isUno = declaredUno && !winnerPlacement && !eliminated
+  const supporterNames = spectators.map((spectator) => spectator.name)
   const hasVoiceOn = Boolean(voiceState?.enabled)
   const isMuted = !hasVoiceOn || Boolean(voiceState?.muted)
   const isSpeaking = Boolean(voiceState?.speaking && !isMuted)
@@ -4273,8 +4751,16 @@ function TableAvatarSeat({
           </div>
         )}
         {supporterCount > 0 && (
-          <div className="absolute -top-2 -left-2 rounded-full border border-pink-200/30 bg-pink-300/18 px-2 py-0.5 text-[10px] font-semibold text-pink-50 shadow-[0_8px_18px_rgba(0,0,0,0.28)]">
-            🙌 {supporterCount}
+          <div
+            className="absolute -top-2 -left-2 inline-flex items-center gap-1 rounded-full border border-white/12 bg-black/45 px-1.5 py-0.5 text-[10px] font-semibold text-white/65 shadow-[0_8px_18px_rgba(0,0,0,0.2)] backdrop-blur-md"
+            title={
+              supporterNames.length > 0
+                ? `Spectating: ${supporterNames.join(", ")}`
+                : `${supporterCount} spectating`
+            }
+          >
+            <Eye className="size-3" strokeWidth={2.2} />
+            <span className="tabular-nums">{supporterCount}</span>
           </div>
         )}
         <div
@@ -4389,17 +4875,23 @@ function TableAvatarSeat({
           )}
         </div>
       </div>
-      {supporterNames.length > 0 && (
+      {spectators.length > 0 && (
         <div
           className="pointer-events-auto flex max-w-40 flex-wrap justify-center gap-1"
-          aria-label={`Supporters: ${supporterNames.join(", ")}`}
+          aria-label={`Spectating: ${supporterNames.join(", ")}`}
         >
-          {supporterNames.map((name) => (
+          {spectators.map((spectator) => (
             <span
-              key={name}
-              className="max-w-24 truncate rounded-full border border-pink-200/20 bg-pink-300/12 px-1.5 py-0.5 text-[9px] font-medium text-pink-50/78"
+              key={spectator.id}
+              className="inline-flex max-w-24 items-center gap-1 truncate rounded-full border border-white/12 bg-white/[0.06] py-0.5 pr-1.5 pl-0.5 text-[9px] font-medium text-white/68"
             >
-              🙌 {name}
+              <img
+                src={spectator.avatarUrl}
+                alt=""
+                className="size-3.5 shrink-0 rounded-full object-cover"
+                draggable={false}
+              />
+              <span className="truncate">{spectator.name}</span>
             </span>
           ))}
         </div>
@@ -5456,11 +5948,10 @@ function InviteJoinScreen({
                 <ArrowRight />
               </Button>
             </div>
-            {error && (
-              <p className="mt-3 rounded-xl border border-red-400/20 bg-red-500/10 px-3 py-2 text-sm text-red-100">
-                {error}
-              </p>
-            )}
+            <RoomErrorBanner
+              message={error}
+              className="mt-3 rounded-xl border border-red-400/20 bg-red-500/10 px-3 py-2 text-sm text-red-100"
+            />
           </form>
         </section>
 
@@ -6432,11 +6923,10 @@ function DimmedTablePreview({
             </span>
           </div>
 
-          {error && (
-            <p className="w-full rounded-md border border-red-400/25 bg-red-500/12 px-3 py-2 text-sm text-red-100">
-              {error}
-            </p>
-          )}
+          <RoomErrorBanner
+            message={error}
+            className="w-full rounded-md border border-red-400/25 bg-red-500/12 px-3 py-2 text-sm text-red-100"
+          />
         </div>
       </div>
     </div>

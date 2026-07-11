@@ -139,7 +139,7 @@ describe("avatar reactions and support recap", () => {
     const game = inactiveGame("a")
     expect(supportPlayer(game, context, "a", "b").ok).toBe(true)
 
-    expect(sendAvatarEmojiReaction(game, context, "a", { body: "🔥" }).ok).toBe(
+    expect(sendAvatarEmojiReaction(game, context, "a", { body: "😭" }).ok).toBe(
       true
     )
     expect(sendAvatarEmojiReaction(game, context, "c", { body: "👀" }).ok).toBe(
@@ -147,7 +147,7 @@ describe("avatar reactions and support recap", () => {
     )
 
     expect(game.avatarEmojiReactions).toMatchObject([
-      { playerId: "a", supportedPlayerId: "b", body: "🔥" },
+      { playerId: "a", supportedPlayerId: "b", body: "😭" },
       { playerId: "c", supportedPlayerId: null, body: "👀" },
     ])
   })

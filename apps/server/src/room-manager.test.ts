@@ -109,7 +109,7 @@ describe("RoomManager support squads", () => {
     const { manager, code, hostId, playerBId } = startedRoomWithInactiveHost()
 
     expect(
-      manager.sendAvatarEmojiReaction(code, hostId, { body: "🔥" }).ok
+      manager.sendAvatarEmojiReaction(code, hostId, { body: "😭" }).ok
     ).toBe(true)
     expect(
       manager.sendAvatarEmojiReaction(code, hostId, { body: "😂" })
@@ -206,7 +206,7 @@ describe("RoomManager vote-kicks", () => {
     expect(manager.castVoteKick(code, playerBId, voteKickId, "yes").ok).toBe(
       true
     )
-    vi.advanceTimersByTime(20_000)
+    vi.advanceTimersByTime(25_000)
 
     const lobby = manager.getRoom(code)
     expect(lobby.ok && lobby.data.voteKick.lobbyVoteKickedPlayerIds).toEqual([
@@ -293,7 +293,7 @@ describe("RoomManager vote-kicks", () => {
       true
     )
 
-    vi.advanceTimersByTime(20_000)
+    vi.advanceTimersByTime(25_000)
 
     const failed = manager.getRoom(code)
     const poll = failed.ok
