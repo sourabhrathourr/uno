@@ -242,7 +242,7 @@ describe("RoomManager vote-kicks", () => {
         (message) => message.kind === "vote-kick"
       )?.voteKick?.id ?? ""
 
-    vi.advanceTimersByTime(19_999)
+    vi.advanceTimersByTime(24_999)
     const beforeResolution = manager.getRoom(code)
     expect(
       beforeResolution.ok &&
@@ -319,6 +319,134 @@ describe("RoomManager vote-kicks", () => {
   })
 })
 
+describe("RoomManager waiting players", () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-07-10T00:00:00.000Z"))
+  })
+
+  it("lets a player join an active match as waiting and participate socially", () => {
+    const { manager, code, hostId, playerBId, playerCId } = startedRoom()
+
+    const startedVote = manager.startVoteKick(code, hostId, playerBId)
+    expect(startedVote.ok).toBe(true)
+    if (!startedVote.ok) return
+    const voteKickId =
+      startedVote.data.chatMessages.find(
+        (message) => message.kind === "vote-kick"
+      )?.voteKick?.id ?? ""
+
+    const joinedD = manager.joinRoom({
+      code,
+      playerName: "D",
+      sessionId: "session-d",
+    })
+
+    expect(joinedD.ok).toBe(true)
+    if (!joinedD.ok) return
+    const playerDId = joinedD.data.player.id
+    expect(
+      joinedD.data.room.game?.players.find(
+        (candidate) => candidate.playerId === playerDId
+      )
+    ).toMatchObject({
+      waiting: true,
+      handCount: 0,
+    })
+    expect(manager.getPlayerGame(code, playerDId)?.hand).toEqual([])
+    expect(manager.supportPlayer(code, playerDId, playerBId).ok).toBe(true)
+    expect(manager.getSupportView(code, playerDId)?.playerId).toBe(playerBId)
+    expect(
+      manager.sendAvatarEmojiReaction(code, playerDId, { body: "👀" }).ok
+    ).toBe(true)
+    expect(
+      manager.castVoteKick(code, playerDId, voteKickId, "yes")
+    ).toMatchObject({
+      ok: false,
+      error: { code: "vote-kick-not-eligible" },
+    })
+
+    expect(manager.castVoteKick(code, playerCId, voteKickId, "no").ok).toBe(
+      true
+    )
+    vi.advanceTimersByTime(25_000)
+
+    expect(manager.startVoteKick(code, playerDId, playerCId).ok).toBe(true)
+  })
+
+  it("keeps waiting players out of gameplay until the next match starts", () => {
+    const { manager, code, hostId, playerBId } = twoPlayerStartedRoom()
+    const joinedC = manager.joinRoom({
+      code,
+      playerName: "C",
+      sessionId: "session-c",
+    })
+    expect(joinedC.ok).toBe(true)
+    if (!joinedC.ok) return
+    const playerCId = joinedC.data.player.id
+
+    expect(manager.startVoteKick(code, hostId, playerCId)).toMatchObject({
+      ok: false,
+      error: { code: "vote-kick-target-ineligible" },
+    })
+    expect(manager.drawOne(code, playerCId)).toMatchObject({
+      ok: false,
+      error: { code: "not-your-turn" },
+    })
+
+    const finished = manager.drawOne(code, hostId)
+    expect(finished.ok && finished.data.status).toBe("finished")
+    expect(
+      finished.ok &&
+        finished.data.game?.players.find(
+          (candidate) => candidate.playerId === playerCId
+        )
+    ).toMatchObject({ waiting: true })
+
+    const restarted = manager.restartRoom(code, playerBId)
+    expect(restarted.ok).toBe(true)
+    expect(
+      restarted.ok &&
+        restarted.data.game?.players.find(
+          (candidate) => candidate.playerId === playerCId
+        )
+    ).toMatchObject({
+      waiting: false,
+      handCount: 5,
+    })
+  })
+
+  it("lets players join a finished room as normal next-match participants", () => {
+    const { manager, code, hostId, playerBId } = twoPlayerStartedRoom()
+    expect(manager.drawOne(code, hostId).ok).toBe(true)
+
+    const joinedC = manager.joinRoom({
+      code,
+      playerName: "C",
+      sessionId: "session-c",
+    })
+    expect(joinedC.ok).toBe(true)
+    if (!joinedC.ok) return
+    const playerCId = joinedC.data.player.id
+    expect(
+      joinedC.data.room.game?.players.some(
+        (candidate) => candidate.playerId === playerCId
+      )
+    ).toBe(false)
+
+    const restarted = manager.restartRoom(code, playerBId)
+    expect(
+      restarted.ok &&
+        restarted.data.game?.players.find(
+          (candidate) => candidate.playerId === playerCId
+        )
+    ).toMatchObject({
+      waiting: false,
+      handCount: 5,
+    })
+  })
+})
+
 function startedRoomWithInactiveHost(manager = new RoomManager()) {
   const created = manager.createRoom({
     playerName: "A",
@@ -391,4 +519,26 @@ function startedRoom(manager = new RoomManager()) {
   const started = manager.startRoom(room.code, room.hostId)
   if (!started.ok) throw new Error(started.error.message)
   return room
+}
+
+function twoPlayerStartedRoom(manager = new RoomManager()) {
+  const created = manager.createRoom({
+    playerName: "A",
+    sessionId: "session-a",
+    houseRules: { startingHandSize: 5, mercyHandLimit: 5 },
+  })
+  if (!created.ok) throw new Error(created.error.message)
+  const code = created.data.room.code
+  const hostId = created.data.player.id
+  const joinedB = manager.joinRoom({
+    code,
+    playerName: "B",
+    sessionId: "session-b",
+  })
+  if (!joinedB.ok) throw new Error(joinedB.error.message)
+  const playerBId = joinedB.data.player.id
+  manager.setReady(code, playerBId, true)
+  const started = manager.startRoom(code, hostId)
+  if (!started.ok) throw new Error(started.error.message)
+  return { manager, code, hostId, playerBId }
 }

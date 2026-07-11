@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto"
 
 import {
   ROOM_CODE_LENGTH,
+  addWaitingPlayer,
   CHAT_EMOJIS,
   CHAT_GIFS,
   CHAT_PRESETS,
@@ -211,12 +212,11 @@ export class RoomManager {
       })
     }
 
-    if (room.status !== "lobby") {
-      return fail("room-in-progress", "This game has already started.")
-    }
-
     if (room.players.length >= room.houseRules.maxPlayers) {
       return fail("room-full", "This room is full.")
+    }
+    if (room.status === "playing" && !room.gameState) {
+      return fail("game-not-started", "Start the game first.")
     }
 
     const now = new Date().toISOString()
@@ -229,6 +229,20 @@ export class RoomManager {
 
     room.players.push(player)
     room.sessionToPlayerId.set(sessionId, player.id)
+    if (room.status === "playing" && room.gameState) {
+      const waiting = addWaitingPlayer(
+        room.gameState,
+        gameContext(room),
+        player.id
+      )
+      if (!waiting.ok) {
+        room.players = room.players.filter(
+          (candidate) => candidate.id !== player.id
+        )
+        room.sessionToPlayerId.delete(sessionId)
+        return fail(waiting.error.code, waiting.error.message)
+      }
+    }
     touch(room, now)
 
     return ok({
@@ -1125,6 +1139,7 @@ function validateVoteKickTarget(
   if (
     publicTarget.eliminated ||
     publicTarget.winnerPlacement ||
+    publicTarget.waiting ||
     publicTarget.voteKicked
   ) {
     return fail(

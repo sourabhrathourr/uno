@@ -5,6 +5,7 @@ import {
   Check,
   Circle,
   Clipboard,
+  Clock,
   Eye,
   ImageIcon,
   MessageCircle,
@@ -958,7 +959,10 @@ function GameTable({
 
   const selfState = game?.players.find((p) => p.playerId === player.id)
   const isSelfEliminated = Boolean(
-    selfState?.eliminated || selfState?.winnerPlacement || selfState?.voteKicked
+    selfState?.eliminated ||
+    selfState?.winnerPlacement ||
+    selfState?.voteKicked ||
+    selfState?.waiting
   )
   const supportLink = game?.supportLinks.find(
     (link) => link.supporterPlayerId === player.id
@@ -1036,6 +1040,8 @@ function GameTable({
       return (
         candidate.id !== player.id &&
         !state?.eliminated &&
+        !state?.voteKicked &&
+        !state?.waiting &&
         !state?.winnerPlacement
       )
     }) ?? []
@@ -1176,6 +1182,7 @@ function GameTable({
       !targetState ||
       targetState.eliminated ||
       targetState.voteKicked ||
+      targetState.waiting ||
       targetState.winnerPlacement
     ) {
       setSupportView(null)
@@ -2823,6 +2830,7 @@ function MobileSeatingRing({
         const winnerPlacement = state?.winnerPlacement ?? null
         const eliminated = Boolean(state?.eliminated)
         const voteKicked = Boolean(state?.voteKicked)
+        const waiting = Boolean(state?.waiting)
         const declaredUno = Boolean(state?.declaredUno)
         const isYou = candidate.id === selfPlayerId
         const voiceState = voiceStates[candidate.id]
@@ -2835,7 +2843,8 @@ function MobileSeatingRing({
             : null
         const handCount = state?.handCount ?? 0
         const isWinner = winnerPlacement?.position === 1
-        const fadedOpacity = eliminated || voteKicked || !candidate.connected
+        const fadedOpacity =
+          eliminated || voteKicked || waiting || !candidate.connected
         const showName = !dense || isYou
         const spectators =
           game?.supportLinks
@@ -2878,15 +2887,17 @@ function MobileSeatingRing({
           ? "ring-2 ring-amber-200/85 shadow-[0_0_22px_rgba(252,211,77,0.46)]"
           : voteKicked
             ? "ring-2 ring-red-300/90 shadow-[0_0_22px_rgba(248,113,113,0.5)]"
-            : isSpectated
-              ? "ring-2 ring-cyan-400/90 shadow-[0_0_22px_rgba(34,211,238,0.6)]"
-              : active
-                ? "ring-2 ring-amber-200/80 shadow-[0_0_22px_rgba(252,211,77,0.42)]"
-                : declaredUno
-                  ? "ring-2 ring-yellow-200/65 shadow-[0_0_18px_rgba(250,204,21,0.32)]"
-                  : isYou
-                    ? "ring-2 ring-sky-200/55 shadow-[0_0_18px_rgba(125,211,252,0.24)]"
-                    : "ring-1 ring-white/14"
+            : waiting
+              ? "ring-2 ring-sky-300/75 shadow-[0_0_18px_rgba(125,211,252,0.28)]"
+              : isSpectated
+                ? "ring-2 ring-cyan-400/90 shadow-[0_0_22px_rgba(34,211,238,0.6)]"
+                : active
+                  ? "ring-2 ring-amber-200/80 shadow-[0_0_22px_rgba(252,211,77,0.42)]"
+                  : declaredUno
+                    ? "ring-2 ring-yellow-200/65 shadow-[0_0_18px_rgba(250,204,21,0.32)]"
+                    : isYou
+                      ? "ring-2 ring-sky-200/55 shadow-[0_0_18px_rgba(125,211,252,0.24)]"
+                      : "ring-1 ring-white/14"
 
         return (
           <div
@@ -2931,6 +2942,8 @@ function MobileSeatingRing({
                 fallback={
                   voteKicked ? (
                     <X className="size-4 text-red-100" strokeWidth={2.4} />
+                  ) : waiting ? (
+                    <Clock className="size-4 text-sky-100" strokeWidth={2.2} />
                   ) : winnerPlacement ? (
                     <Trophy className="size-4" strokeWidth={2.1} />
                   ) : (
@@ -2953,9 +2966,11 @@ function MobileSeatingRing({
               >
                 {winnerPlacement
                   ? `#${winnerPlacement.position}`
-                  : declaredUno
-                    ? "UNO"
-                    : handCount}
+                  : waiting
+                    ? "Next"
+                    : declaredUno
+                      ? "UNO"
+                      : handCount}
               </span>
               {supporterCount > 0 && (
                 <span
@@ -4520,6 +4535,7 @@ function TableSeatRing({
             declaredUno={Boolean(state?.declaredUno)}
             eliminated={Boolean(state?.eliminated)}
             voteKicked={Boolean(state?.voteKicked)}
+            waiting={Boolean(state?.waiting)}
             winnerPlacement={state?.winnerPlacement ?? null}
             connected={candidate.connected}
             isYou={candidate.id === selfPlayerId}
@@ -4632,6 +4648,7 @@ function TableAvatarSeat({
   declaredUno,
   eliminated,
   voteKicked,
+  waiting,
   winnerPlacement,
   connected,
   isYou,
@@ -4659,6 +4676,7 @@ function TableAvatarSeat({
   declaredUno: boolean
   eliminated: boolean
   voteKicked: boolean
+  waiting: boolean
   winnerPlacement: NonNullable<
     NonNullable<RoomSnapshot["game"]>["players"][number]["winnerPlacement"]
   > | null
@@ -4680,7 +4698,7 @@ function TableAvatarSeat({
     ? `${ordinalLabel(winnerPlacement.position)} place`
     : null
   const isFirstPlace = winnerPlacement?.position === 1
-  const isUno = declaredUno && !winnerPlacement && !eliminated
+  const isUno = declaredUno && !winnerPlacement && !eliminated && !waiting
   const supporterNames = spectators.map((spectator) => spectator.name)
   const hasVoiceOn = Boolean(voiceState?.enabled)
   const isMuted = !hasVoiceOn || Boolean(voiceState?.muted)
@@ -4692,6 +4710,7 @@ function TableAvatarSeat({
     !isYou &&
     !eliminated &&
     !voteKicked &&
+    !waiting &&
     !winnerPlacement
   )
 
@@ -4707,7 +4726,7 @@ function TableAvatarSeat({
         "absolute flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-1 transition-[opacity,transform,filter] duration-300 " +
         (winnerPlacement
           ? "opacity-100"
-          : eliminated || voteKicked || !connected
+          : eliminated || voteKicked || waiting || !connected
             ? "opacity-45"
             : "opacity-100") +
         " " +
@@ -4726,15 +4745,17 @@ function TableAvatarSeat({
               : "border-white/18 bg-white/[0.075]"
             : voteKicked
               ? "border-red-300/60 bg-red-500/14 shadow-[0_0_0_1px_rgba(248,113,113,0.28),0_0_42px_rgba(248,113,113,0.28),0_18px_38px_rgba(0,0,0,0.34)]"
-              : isSpectated
-                ? "scale-[1.03] border-cyan-400 bg-cyan-950/20 shadow-[0_0_0_1px_rgba(34,211,238,0.3),0_0_42px_rgba(34,211,238,0.4),0_18px_38px_rgba(0,0,0,0.34)]"
-                : isUno
-                  ? "scale-[1.03] border-yellow-200/75 bg-red-500/[0.14] shadow-[0_0_0_1px_rgba(250,204,21,0.26),0_0_44px_rgba(239,68,68,0.28),0_18px_38px_rgba(0,0,0,0.34)]"
-                  : active
-                    ? "scale-[1.03] border-amber-200/70 bg-amber-200/16 shadow-[0_0_0_1px_rgba(252,211,77,0.25),0_0_42px_rgba(252,211,77,0.36),0_18px_38px_rgba(0,0,0,0.34)]"
-                    : isStaging
-                      ? "border-sky-200/45 bg-sky-300/12"
-                      : "border-white/12 bg-black/38")
+              : waiting
+                ? "border-sky-200/45 bg-sky-400/12 shadow-[0_0_0_1px_rgba(125,211,252,0.18),0_0_32px_rgba(125,211,252,0.18),0_18px_38px_rgba(0,0,0,0.34)]"
+                : isSpectated
+                  ? "scale-[1.03] border-cyan-400 bg-cyan-950/20 shadow-[0_0_0_1px_rgba(34,211,238,0.3),0_0_42px_rgba(34,211,238,0.4),0_18px_38px_rgba(0,0,0,0.34)]"
+                  : isUno
+                    ? "scale-[1.03] border-yellow-200/75 bg-red-500/[0.14] shadow-[0_0_0_1px_rgba(250,204,21,0.26),0_0_44px_rgba(239,68,68,0.28),0_18px_38px_rgba(0,0,0,0.34)]"
+                    : active
+                      ? "scale-[1.03] border-amber-200/70 bg-amber-200/16 shadow-[0_0_0_1px_rgba(252,211,77,0.25),0_0_42px_rgba(252,211,77,0.36),0_18px_38px_rgba(0,0,0,0.34)]"
+                      : isStaging
+                        ? "border-sky-200/45 bg-sky-300/12"
+                        : "border-white/12 bg-black/38")
         }
       >
         {winnerPlacement && (
@@ -4772,23 +4793,32 @@ function TableAvatarSeat({
                 : "border-white/18 bg-white/[0.08] text-white/74"
               : voteKicked
                 ? "border-red-200/70 bg-red-400/18 text-red-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.24),0_0_24px_rgba(248,113,113,0.24)]"
-                : active
-                  ? "border-amber-100/65 bg-amber-100/24 text-amber-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_0_24px_rgba(252,211,77,0.24)]"
-                  : isUno
-                    ? "border-yellow-100/70 bg-red-400/[0.18] text-yellow-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.24),0_0_24px_rgba(250,204,21,0.22)]"
-                    : "border-white/12 bg-white/[0.075] text-white/74")
+                : waiting
+                  ? "border-sky-100/45 bg-sky-300/14 text-sky-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_0_20px_rgba(125,211,252,0.18)]"
+                  : active
+                    ? "border-amber-100/65 bg-amber-100/24 text-amber-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_0_24px_rgba(252,211,77,0.24)]"
+                    : isUno
+                      ? "border-yellow-100/70 bg-red-400/[0.18] text-yellow-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.24),0_0_24px_rgba(250,204,21,0.22)]"
+                      : "border-white/12 bg-white/[0.075] text-white/74")
           }
         >
           <ReactionAvatarContent
             reaction={latestReaction}
             emojiClassName="text-3xl sm:text-4xl"
             fallback={
-              <img
-                src={avatarUrl}
-                alt={`${player.name} avatar`}
-                draggable={false}
-                className="size-full rounded-full object-cover"
-              />
+              waiting ? (
+                <Clock
+                  className="size-5 text-sky-100 sm:size-6"
+                  strokeWidth={2.2}
+                />
+              ) : (
+                <img
+                  src={avatarUrl}
+                  alt={`${player.name} avatar`}
+                  draggable={false}
+                  className="size-full rounded-full object-cover"
+                />
+              )
             }
           />
         </div>
@@ -4800,21 +4830,23 @@ function TableAvatarSeat({
           <p className="mt-0.5 text-[11px] text-white/45">
             {voteKicked
               ? "Vote-kicked"
-              : winnerPlacement
-                ? isFirstPlace
-                  ? "Winner"
-                  : placementText
-                : eliminated
-                  ? "Eliminated"
-                  : isUno
-                    ? "On UNO"
-                    : active
-                      ? "Taking turn"
-                      : isStaging
-                        ? "Staging"
-                        : connected
-                          ? "At table"
-                          : "Away"}
+              : waiting
+                ? "Next match"
+                : winnerPlacement
+                  ? isFirstPlace
+                    ? "Winner"
+                    : placementText
+                  : eliminated
+                    ? "Eliminated"
+                    : isUno
+                      ? "On UNO"
+                      : active
+                        ? "Taking turn"
+                        : isStaging
+                          ? "Staging"
+                          : connected
+                            ? "At table"
+                            : "Away"}
           </p>
         </div>
         {winnerPlacement ? (
@@ -4831,6 +4863,10 @@ function TableAvatarSeat({
         ) : voteKicked ? (
           <span className="rounded-full border border-red-200/35 bg-red-400/15 px-1.5 py-0.5 text-[11px] font-semibold text-red-100 tabular-nums sm:px-2 sm:text-xs">
             Out
+          </span>
+        ) : waiting ? (
+          <span className="rounded-full border border-sky-100/30 bg-sky-300/14 px-1.5 py-0.5 text-[11px] font-semibold text-sky-100 tabular-nums sm:px-2 sm:text-xs">
+            Next
           </span>
         ) : (
           <span
@@ -4943,10 +4979,10 @@ function canPlayerStartVoteKick(
   if (room.status === "lobby") {
     return !room.voteKick.lobbyVoteKickedPlayerIds.includes(playerId)
   }
-  return !Boolean(
-    room.game?.players.find((candidate) => candidate.playerId === playerId)
-      ?.voteKicked
+  const state = room.game?.players.find(
+    (candidate) => candidate.playerId === playerId
   )
+  return Boolean(state && !state.voteKicked)
 }
 
 function voteKickTargetsForRoom(
@@ -4975,6 +5011,7 @@ function voteKickTargetsForRoom(
         state &&
         !state.eliminated &&
         !state.voteKicked &&
+        !state.waiting &&
         !state.winnerPlacement
       )
     })

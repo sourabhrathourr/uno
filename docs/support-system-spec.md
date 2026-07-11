@@ -4,11 +4,17 @@
 
 - A match is one deal from its start until no player can make another play.
 - A hand is the set of cards currently held by one player.
-- Starting a new match resets support links, support blocks, avatar emoji reactions, and the support recap source data.
+- Starting a new match resets support links, support blocks, avatar emoji reactions, Waiting Player state, and the support recap source data.
+- A Waiting Player joins while a match is actively playing, is inactive during that match, and becomes active automatically when the next match starts.
+- A player who joins after a match has finished but before the next match starts is not a Waiting Player; they are a normal seated participant for the next match.
+- A Waiting Player is visually distinct from eliminated and Vote-Kicked Players, using a waiting or next-match treatment rather than eliminated/out treatment.
+- A Waiting Player who disconnects remains seated and is still included when the next match starts, following the same room membership rule as other disconnected players.
+- A Waiting Player is blocked from gameplay mechanics, including turns, card play, drawing, missed-UNO calls, draw penalties, and hand swap or rotation effects.
+- The room's maximum player count applies to all seated participants, including Waiting Players.
 
 ## Support links
 
-- A player who has won or been eliminated is inactive and may optionally support one active player.
+- A player who has won, been eliminated, or is waiting for the next match is inactive and may optionally support one active player.
 - Choosing support requires an explicit confirmation and does not reveal candidate hands before confirmation.
 - The server owns and enforces the support link.
 - A supporter cannot switch while the supported player remains active.
@@ -43,3 +49,4 @@
 - A supporter’s reaction is visually directed toward their supported player; other reactions originate from the sender.
 - Emoji reactions use a short anti-spam cooldown and never affect gameplay.
 - The finished match displays a Support Recap with the allegiance journey and cosmetic titles.
+- Waiting Player support activity appears in the finished match's Support Recap.

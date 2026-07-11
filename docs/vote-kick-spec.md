@@ -10,6 +10,7 @@ Players need a public way to remove a disruptive or inactive participant from ac
 - Any seated participant who is not currently in Vote-Kicked Player state may initiate a Vote-Kick, including active players, players inactive due to winning or elimination, supporters, and players in the lobby.
 - In the lobby, a Vote-Kick may target any seated player who is not already vote-kicked for the upcoming match.
 - During a match, a Vote-Kick targets an active player who is not already inactive, eliminated, winner-finished, or vote-kicked.
+- During a match, a Vote-Kick cannot target a Waiting Player.
 - The target receives a soft kick when the vote passes: they become inactive for the rest of the current match, can no longer participate in gameplay, and may still remain socially present and use other app features.
 - A player made inactive by Vote-Kick enters the Vote-Kicked Player state.
 - Vote-Kicked Player state is stored separately from normal elimination state so the UI can distinguish the red vote-kicked treatment from regular UNO elimination.
@@ -36,6 +37,8 @@ Players need a public way to remove a disruptive or inactive participant from ac
 - A Vote-Kick always stays open for the full 25 seconds and resolves only when the timer expires.
 - A reconnecting player who was included in the original eligible-voter snapshot sees an in-progress Vote-Kick with the remaining shared countdown and may vote.
 - A player who joins the lobby after a Vote-Kick starts can see the in-progress poll but cannot vote in it.
+- A player who joins during an active match becomes a Waiting Player. They can see an in-progress Vote-Kick but cannot vote in it unless they were included in the poll's original eligible-voter snapshot.
+- A Waiting Player may initiate and vote in new in-match Vote-Kicks started after they joined, unless they are in Vote-Kicked Player state.
 - The target sees the Public Chat poll but cannot vote on their own Vote-Kick. Until the Vote-Kick resolves and passes, the target remains fully active.
 - A Vote-Kick passes when more than 50% of eligible voters choose Yes before the vote resolves.
 - During a match, eligible voters are seated participants who are not in Vote-Kicked Player state, excluding the target.
