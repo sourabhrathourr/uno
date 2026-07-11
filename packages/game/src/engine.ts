@@ -17,16 +17,29 @@ import type {
 import { AVATAR_REACTION_EMOJIS } from "./reactions"
 import type { CommandResult } from "./realtime"
 
-export function createGame(context: GameContext): GameState {
+export function createGame(
+  context: GameContext,
+  options: { voteKickedPlayerIds?: string[] } = {}
+): GameState {
   const playerOrder = context.players
     .slice()
     .sort((a, b) => a.seat - b.seat)
     .map((player) => player.id)
+  const voteKickedPlayerIds = unique(
+    options.voteKickedPlayerIds?.filter((playerId) =>
+      playerOrder.includes(playerId)
+    ) ?? []
+  )
+  const voteKickedPlayers = new Set(voteKickedPlayerIds)
 
   const deck = shuffleCards(createNoMercyDeck())
   const handsByPlayerId: Record<string, Card[]> = {}
 
   for (const playerId of playerOrder) {
+    if (voteKickedPlayers.has(playerId)) {
+      handsByPlayerId[playerId] = []
+      continue
+    }
     handsByPlayerId[playerId] = deck.splice(
       0,
       context.houseRules.startingHandSize
@@ -51,11 +64,13 @@ export function createGame(context: GameContext): GameState {
     playerOrder,
     direction: 1,
     currentColor: colorFor(firstDiscard),
-    turnPlayerId: playerOrder[0] ?? null,
+    turnPlayerId:
+      playerOrder.find((playerId) => !voteKickedPlayers.has(playerId)) ?? null,
     drawPile: deck,
     discardPile,
     handsByPlayerId,
     eliminatedPlayerIds: [],
+    voteKickedPlayerIds,
     knockedOutCards: [],
     drawStack: null,
     pendingChoice: null,
@@ -110,6 +125,7 @@ export function projectPublicGame(
             handCount === 1 &&
             (game.unoDeclaredPlayerIds ?? []).includes(player.id),
           eliminated: game.eliminatedPlayerIds.includes(player.id),
+          voteKicked: game.voteKickedPlayerIds.includes(player.id),
           winnerPlacement: winnerPlacement ? { ...winnerPlacement } : null,
           connected: player.connected,
           ready: player.ready,
@@ -318,6 +334,36 @@ export function kickSupporter(
       supporterPlayerId
     )} from their squad.`,
   })
+  return ok(game)
+}
+
+export function voteKickPlayer(
+  game: GameState,
+  context: GameContext,
+  targetPlayerId: string
+): CommandResult<GameState> {
+  if (isGameFinished(game)) {
+    return fail("game-finished", "This match is finished.")
+  }
+  if (!game.playerOrder.includes(targetPlayerId)) {
+    return fail("player-not-found", "That player is not part of this match.")
+  }
+  if (!isPlayerActive(game, targetPlayerId)) {
+    return fail("player-inactive", "Choose an active player to vote-kick.")
+  }
+
+  game.voteKickedPlayerIds = unique([
+    ...game.voteKickedPlayerIds,
+    targetPlayerId,
+  ])
+  removePlayerFromActivePlay(game, targetPlayerId)
+  pushEvent(game, {
+    type: "player-vote-kicked",
+    playerId: targetPlayerId,
+    message: `${playerName(context, targetPlayerId)} was vote-kicked from this match.`,
+  })
+  finishGameIfComplete(game, context)
+  normalizeInactiveTurnState(game, targetPlayerId)
   return ok(game)
 }
 
@@ -1500,12 +1546,7 @@ function checkMercyEliminations(game: GameState, context: GameContext) {
     if (hand.length <= context.houseRules.mercyHandLimit) continue
 
     game.eliminatedPlayerIds.push(playerId)
-    game.knockedOutCards.push(...hand)
-    game.handsByPlayerId[playerId] = []
-    game.unoVulnerablePlayerIds = game.unoVulnerablePlayerIds.filter(
-      (targetPlayerId) => targetPlayerId !== playerId
-    )
-    clearUnoDeclaration(game, playerId)
+    removePlayerFromActivePlay(game, playerId)
     pushEvent(game, {
       type: "player-eliminated",
       playerId,
@@ -1519,6 +1560,25 @@ function checkMercyEliminations(game: GameState, context: GameContext) {
     return
   }
 
+  normalizeInactiveTurnState(game)
+}
+
+function removePlayerFromActivePlay(game: GameState, playerId: string) {
+  const hand = game.handsByPlayerId[playerId] ?? []
+  if (hand.length > 0) {
+    game.knockedOutCards.push(...hand)
+    game.handsByPlayerId[playerId] = []
+  }
+  game.unoVulnerablePlayerIds = game.unoVulnerablePlayerIds.filter(
+    (targetPlayerId) => targetPlayerId !== playerId
+  )
+  clearUnoDeclaration(game, playerId)
+}
+
+function normalizeInactiveTurnState(
+  game: GameState,
+  fallbackFromPlayerId?: string
+) {
   if (game.drawStack && !isPlayerActive(game, game.drawStack.targetPlayerId)) {
     game.drawStack = null
   }
@@ -1531,7 +1591,11 @@ function checkMercyEliminations(game: GameState, context: GameContext) {
   }
 
   if (game.turnPlayerId && !isPlayerActive(game, game.turnPlayerId)) {
-    game.turnPlayerId = nextPlayerId(game, game.turnPlayerId, 1)
+    game.turnPlayerId = nextPlayerId(
+      game,
+      fallbackFromPlayerId ?? game.turnPlayerId,
+      1
+    )
     game.drawnThisTurnPlayerId = null
     game.stagedPlay = null
   } else if (
@@ -1588,6 +1652,7 @@ function finishGameIfComplete(game: GameState, context: GameContext) {
   game.stagedPlay = null
   game.unoVulnerablePlayerIds = []
   game.unoDeclaredPlayerIds = []
+  game.voteKickedPlayerIds = []
 }
 
 function advanceTurn(game: GameState, fromPlayerId: string, steps: number) {
@@ -1680,6 +1745,7 @@ function activePlayerIds(game: GameState): string[] {
 function isPlayerActive(game: GameState, playerId: string): boolean {
   return (
     !game.eliminatedPlayerIds.includes(playerId) &&
+    !(game.voteKickedPlayerIds ?? []).includes(playerId) &&
     !winnerPlacementFor(game, playerId)
   )
 }

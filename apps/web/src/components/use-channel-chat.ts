@@ -10,7 +10,7 @@ import type {
 import { mentionablePlayersForChannel } from "@/components/support-experience"
 import { playFx } from "@/lib/sound"
 
-export type ChatTray = "presets" | "emoji" | "gifs" | "mentions"
+export type ChatTray = "presets" | "emoji" | "gifs" | "mentions" | "voteKick"
 
 export function useChannelChat({
   messages,

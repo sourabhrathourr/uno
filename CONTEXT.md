@@ -17,7 +17,7 @@ A player who can still take turns in the current match because they have neither
 _Avoid_: Contender, playing player
 
 **Inactive Player**:
-A player who has won or been eliminated and can no longer take turns in the current match. An inactive player may remain neutral or choose an active player to support.
+A player who has won, been eliminated, or been vote-kicked and can no longer take turns in the current match. An inactive player may remain neutral or choose an active player to support.
 _Avoid_: Spectator
 
 **Supporter**:
@@ -31,6 +31,14 @@ _Avoid_: Supporter, spectated player, target
 **Support Kick**:
 The supported player's removal of one supporter from their support squad, immediately revoking Support View and Squad Chat access. The kicked player may support someone else but cannot support the player who kicked them again during the same match.
 _Avoid_: Ban, leave squad
+
+**Vote-Kick**:
+A public vote that seated participants use to make another player inactive for the current match, or for the upcoming match when started from the lobby.
+_Avoid_: Ban, hard kick, remove from room
+
+**Vote-Kicked Player**:
+A seated player made inactive by a passed Vote-Kick. A Vote-Kicked Player remains socially present, cannot participate in gameplay or Vote-Kicks until the Vote-Kick effect clears, and is visually marked as vote-kicked.
+_Avoid_: Banned player, removed player, spectator
 
 **Support View**:
 The read-only perspective unlocked after a support link is confirmed, from which a supporter sees their supported player's full hand and live decision state. Information learned in this view may be discussed through the room's social channels.

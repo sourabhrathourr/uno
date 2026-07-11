@@ -7,6 +7,11 @@ export type {
   ChatMessageKind,
   PlayerSocialSnapshot,
   SendChatMessageInput,
+  VoteKickChoice,
+  VoteKickPoll,
+  VoteKickResult,
+  VoteKickStatus,
+  VoteKickVote,
 } from "./chat"
 export { createNoMercyDeck, shuffleCards } from "./deck"
 export type { GifProvider, GifSearchResponse, GifSearchResult } from "./gifs"
@@ -28,6 +33,7 @@ export {
   supportSquadMemberIds,
   supportSquadPlayerIdFor,
   takeDrawPenalty,
+  voteKickPlayer,
 } from "./engine"
 export type {
   CatchUnoInput,
@@ -58,7 +64,14 @@ export type {
 } from "./game"
 export { AVATAR_REACTION_EMOJIS } from "./reactions"
 export type { AvatarReactionEmoji } from "./reactions"
-export type { HouseRules, Player, RoomSnapshot, RoomStatus } from "./rooms"
+export type {
+  HouseRules,
+  Player,
+  RoomSnapshot,
+  RoomStatus,
+  RoomVoteKickSnapshot,
+  VoteKickCooldown,
+} from "./rooms"
 export {
   ROOM_CODE_LENGTH,
   ROOM_CODE_PATTERN,
@@ -71,6 +84,7 @@ export type {
   CommandResult,
   CreateRoomRequest,
   CreateRoomResponse,
+  CastVoteKickInput,
   GameError,
   InterServerEvents,
   JoinRoomInput,
@@ -80,6 +94,7 @@ export type {
   RoomEvent,
   ServerToClientEvents,
   SocketData,
+  StartVoteKickInput,
   SupportPlayerInput,
   VoiceSignal,
   VoiceSignalEvent,

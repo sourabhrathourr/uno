@@ -24,6 +24,7 @@ import {
   supportSquadMemberIds,
   supportSquadPlayerIdFor,
   takeDrawPenalty,
+  voteKickPlayer as applyVoteKickPlayer,
   type CatchUnoInput,
   type ChatMessage,
   type CommandResult,
@@ -41,6 +42,8 @@ import {
   type SendChatMessageInput,
   type SendAvatarEmojiReactionInput,
   type StageCardsInput,
+  type VoteKickChoice,
+  type VoteKickPoll,
 } from "@workspace/game"
 
 type ManagedRoom = RoomSnapshot & {
@@ -49,6 +52,10 @@ type ManagedRoom = RoomSnapshot & {
   connectionIdsByPlayerId: Map<string, Set<string>>
   lastChatAtByPlayerId: Map<string, number>
   lastAvatarEmojiReactionAtByPlayerId: Map<string, number>
+  activeVoteKickId: string | null
+  lobbyVoteKickedPlayerIds: Set<string>
+  voteKickCooldownExpiresAtByTargetId: Map<string, number>
+  voteKickTimersById: Map<string, ReturnType<typeof setTimeout>>
 }
 
 type JoinRoomResult = {
@@ -64,19 +71,24 @@ type ResolvedGif = {
 
 type RoomManagerOptions = {
   resolveGif?: (provider: GifProvider, id: string) => ResolvedGif | null
+  onRoomUpdated?: (code: string, room: RoomSnapshot) => void
 }
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 const CHAT_HISTORY_LIMIT = 250
 const CHAT_RATE_LIMIT_MS = 650
 const AVATAR_EMOJI_REACTION_RATE_LIMIT_MS = 1_200
+const VOTE_KICK_DURATION_MS = 20_000
+const VOTE_KICK_COOLDOWN_MS = 60_000
 
 export class RoomManager {
   private readonly rooms = new Map<string, ManagedRoom>()
   private readonly resolveGif?: RoomManagerOptions["resolveGif"]
+  private readonly onRoomUpdated?: RoomManagerOptions["onRoomUpdated"]
 
   constructor(options: RoomManagerOptions = {}) {
     this.resolveGif = options.resolveGif
+    this.onRoomUpdated = options.onRoomUpdated
   }
 
   createRoom(input: CreateRoomRequest): CommandResult<CreateRoomResponse> {
@@ -109,6 +121,11 @@ export class RoomManager {
       hostPlayerId: host.id,
       players: [host],
       chatMessages: [],
+      voteKick: {
+        activeVoteKickId: null,
+        lobbyVoteKickedPlayerIds: [],
+        cooldowns: [],
+      },
       houseRules,
       game: null,
       gameState: null,
@@ -119,6 +136,10 @@ export class RoomManager {
       connectionIdsByPlayerId: new Map(),
       lastChatAtByPlayerId: new Map(),
       lastAvatarEmojiReactionAtByPlayerId: new Map(),
+      activeVoteKickId: null,
+      lobbyVoteKickedPlayerIds: new Set(),
+      voteKickCooldownExpiresAtByTargetId: new Map(),
+      voteKickTimersById: new Map(),
     }
 
     this.rooms.set(code, room)
@@ -238,6 +259,12 @@ export class RoomManager {
     if (!player) {
       return fail("player-not-found", "You are not seated in this room.")
     }
+    if (room.lobbyVoteKickedPlayerIds.has(playerId)) {
+      return fail(
+        "vote-kicked-player",
+        "Vote-kicked players do not ready up for this match."
+      )
+    }
 
     player.ready = ready
     player.lastSeenAt = new Date().toISOString()
@@ -259,15 +286,24 @@ export class RoomManager {
     if (room.hostPlayerId !== playerId) {
       return fail("host-only", "Only the host can start the game.")
     }
+    if (room.activeVoteKickId) {
+      return fail(
+        "vote-kick-open",
+        "Resolve the open vote-kick before starting."
+      )
+    }
 
-    if (room.players.length < 2) {
+    const activeLobbyPlayers = room.players.filter(
+      (player) => !room.lobbyVoteKickedPlayerIds.has(player.id)
+    )
+    if (activeLobbyPlayers.length < 2) {
       return fail(
         "not-enough-players",
         "At least two players are needed to start."
       )
     }
 
-    const everyoneReady = room.players.every(
+    const everyoneReady = activeLobbyPlayers.every(
       (player) => player.id === room.hostPlayerId || player.ready
     )
     if (!everyoneReady) {
@@ -275,10 +311,16 @@ export class RoomManager {
     }
 
     room.status = "playing"
-    room.gameState = createGame({
-      players: room.players,
-      houseRules: room.houseRules,
-    })
+    room.gameState = createGame(
+      {
+        players: room.players,
+        houseRules: room.houseRules,
+      },
+      {
+        voteKickedPlayerIds: [...room.lobbyVoteKickedPlayerIds],
+      }
+    )
+    room.lobbyVoteKickedPlayerIds.clear()
     room.lastAvatarEmojiReactionAtByPlayerId.clear()
     touch(room)
 
@@ -416,6 +458,157 @@ export class RoomManager {
     room.lastChatAtByPlayerId.set(playerId, nowMs)
     touch(room, now)
 
+    return ok(snapshot(room))
+  }
+
+  startVoteKick(
+    code: string,
+    initiatorPlayerId: string,
+    targetPlayerId: string
+  ): CommandResult<RoomSnapshot> {
+    const room = this.rooms.get(normalizeRoomCode(code))
+    if (!room) {
+      return fail("room-not-found", "That room code does not exist.")
+    }
+    if (room.status !== "lobby" && room.status !== "playing") {
+      return fail(
+        "vote-kick-unavailable",
+        "Vote-kicks are available in the lobby or during a match."
+      )
+    }
+    if (room.activeVoteKickId) {
+      return fail(
+        "vote-kick-open",
+        "There is already a vote-kick open in this room."
+      )
+    }
+
+    const initiator = findPlayer(room, initiatorPlayerId)
+    if (!initiator) {
+      return fail("player-not-found", "You are not seated in this room.")
+    }
+    const target = findPlayer(room, targetPlayerId)
+    if (!target) {
+      return fail("player-not-found", "That player is not seated here.")
+    }
+    if (initiatorPlayerId === targetPlayerId) {
+      return fail("cannot-vote-kick-self", "Choose another player.")
+    }
+    if (isVoteKicked(room, initiatorPlayerId)) {
+      return fail(
+        "vote-kicked-player",
+        "Vote-kicked players cannot start vote-kicks."
+      )
+    }
+
+    const cooldownExpiresAt =
+      room.voteKickCooldownExpiresAtByTargetId.get(targetPlayerId) ?? 0
+    if (cooldownExpiresAt > Date.now()) {
+      return fail(
+        "vote-kick-cooldown",
+        "That player is cooling down from the last vote-kick."
+      )
+    }
+
+    const targetValidation = validateVoteKickTarget(room, targetPlayerId)
+    if (!targetValidation.ok) return targetValidation
+
+    const eligibleVoterIds = eligibleVoteKickVoterIds(room, targetPlayerId)
+    if (!eligibleVoterIds.includes(initiatorPlayerId)) {
+      return fail(
+        "vote-kick-not-eligible",
+        "You cannot vote in this vote-kick."
+      )
+    }
+
+    const nowMs = Date.now()
+    const createdAt = new Date(nowMs).toISOString()
+    const closesAt = new Date(nowMs + VOTE_KICK_DURATION_MS).toISOString()
+    const id = randomUUID()
+    const poll = projectVoteKickPoll({
+      id,
+      initiatorPlayerId,
+      initiatorPlayerName: initiator.name,
+      targetPlayerId,
+      targetPlayerName: target.name,
+      status: "open",
+      result: null,
+      eligibleVoterIds,
+      votes: [
+        {
+          playerId: initiatorPlayerId,
+          choice: "yes",
+          votedAt: createdAt,
+        },
+      ],
+      createdAt,
+      closesAt,
+      resolvedAt: null,
+    })
+    const message: ChatMessage = {
+      id,
+      playerId: initiatorPlayerId,
+      playerName: initiator.name,
+      channel: "public",
+      kind: "vote-kick",
+      body: `Kick ${target.name}?`,
+      mentionPlayerIds: [],
+      voteKick: poll,
+      createdAt,
+    }
+
+    room.activeVoteKickId = id
+    room.chatMessages = [...room.chatMessages, message].slice(
+      -CHAT_HISTORY_LIMIT
+    )
+    scheduleVoteKickResolution(room, id, () => {
+      const resolved = this.resolveVoteKick(code, id)
+      if (resolved.ok) this.onRoomUpdated?.(resolved.data.code, resolved.data)
+    })
+    touch(room, createdAt)
+    return ok(snapshot(room))
+  }
+
+  castVoteKick(
+    code: string,
+    voterPlayerId: string,
+    voteKickId: string,
+    choice: VoteKickChoice
+  ): CommandResult<RoomSnapshot> {
+    const room = this.rooms.get(normalizeRoomCode(code))
+    if (!room) {
+      return fail("room-not-found", "That room code does not exist.")
+    }
+    const player = findPlayer(room, voterPlayerId)
+    if (!player) {
+      return fail("player-not-found", "You are not seated in this room.")
+    }
+    if (choice !== "yes" && choice !== "no") {
+      return fail("invalid-vote-kick-choice", "Choose Yes or No.")
+    }
+
+    const message = voteKickMessage(room, voteKickId)
+    const poll = message?.voteKick
+    if (!message || !poll) {
+      return fail("vote-kick-not-found", "That vote-kick is not open.")
+    }
+    if (poll.status !== "open" || Date.now() >= Date.parse(poll.closesAt)) {
+      return fail("vote-kick-closed", "That vote-kick has closed.")
+    }
+    if (!poll.eligibleVoterIds.includes(voterPlayerId)) {
+      return fail(
+        "vote-kick-not-eligible",
+        "You cannot vote in this vote-kick."
+      )
+    }
+
+    const votedAt = new Date().toISOString()
+    const votes = [
+      ...poll.votes.filter((vote) => vote.playerId !== voterPlayerId),
+      { playerId: voterPlayerId, choice, votedAt },
+    ]
+    message.voteKick = projectVoteKickPoll({ ...poll, votes })
+    touch(room, votedAt)
     return ok(snapshot(room))
   }
 
@@ -710,6 +903,58 @@ export class RoomManager {
     return snapshot(room)
   }
 
+  private resolveVoteKick(
+    code: string,
+    voteKickId: string
+  ): CommandResult<RoomSnapshot> {
+    const room = this.rooms.get(normalizeRoomCode(code))
+    if (!room) return fail("room-not-found", "That room code does not exist.")
+
+    const message = voteKickMessage(room, voteKickId)
+    const poll = message?.voteKick
+    if (!message || !poll || poll.status !== "open") return ok(snapshot(room))
+
+    const yesCount = poll.votes.filter((vote) => vote.choice === "yes").length
+    const passed = yesCount > poll.eligibleVoterIds.length / 2
+    const resolvedAtMs = Date.now()
+    const resolvedAt = new Date(resolvedAtMs).toISOString()
+
+    if (passed) {
+      if (room.status === "lobby") {
+        room.lobbyVoteKickedPlayerIds.add(poll.targetPlayerId)
+        const target = findPlayer(room, poll.targetPlayerId)
+        if (target) target.ready = false
+      } else if (room.gameState) {
+        const result = applyVoteKickPlayer(
+          room.gameState,
+          gameContext(room),
+          poll.targetPlayerId
+        )
+        if (!result.ok) return result
+        syncRoomStatus(room)
+      }
+    } else {
+      room.voteKickCooldownExpiresAtByTargetId.set(
+        poll.targetPlayerId,
+        resolvedAtMs + VOTE_KICK_COOLDOWN_MS
+      )
+    }
+
+    message.voteKick = projectVoteKickPoll({
+      ...poll,
+      status: passed ? "passed" : "failed",
+      result: passed ? "kicked" : "not-kicked",
+      resolvedAt,
+    })
+    room.activeVoteKickId =
+      room.activeVoteKickId === voteKickId ? null : room.activeVoteKickId
+    const timer = room.voteKickTimersById.get(voteKickId)
+    if (timer) clearTimeout(timer)
+    room.voteKickTimersById.delete(voteKickId)
+    touch(room, resolvedAt)
+    return ok(snapshot(room))
+  }
+
   private createUniqueCode(): string {
     for (let attempt = 0; attempt < 25; attempt += 1) {
       const code = createRoomCode()
@@ -848,6 +1093,106 @@ function findPlayer(room: ManagedRoom, playerId: string): Player | undefined {
   return room.players.find((player) => player.id === playerId)
 }
 
+function isVoteKicked(room: ManagedRoom, playerId: string): boolean {
+  return room.status === "lobby"
+    ? room.lobbyVoteKickedPlayerIds.has(playerId)
+    : Boolean(room.gameState?.voteKickedPlayerIds.includes(playerId))
+}
+
+function validateVoteKickTarget(
+  room: ManagedRoom,
+  targetPlayerId: string
+): CommandResult<null> {
+  if (room.status === "lobby") {
+    if (room.lobbyVoteKickedPlayerIds.has(targetPlayerId)) {
+      return fail(
+        "vote-kick-target-ineligible",
+        "That player is already vote-kicked."
+      )
+    }
+    return ok(null)
+  }
+
+  if (!room.gameState?.playerOrder.includes(targetPlayerId)) {
+    return fail("player-not-found", "That player is not part of this match.")
+  }
+  const publicTarget = projectPublicGame(
+    room.gameState,
+    gameContext(room)
+  ).players.find((playerState) => playerState.playerId === targetPlayerId)
+  if (!publicTarget)
+    return fail("player-not-found", "That player is not part of this match.")
+  if (
+    publicTarget.eliminated ||
+    publicTarget.winnerPlacement ||
+    publicTarget.voteKicked
+  ) {
+    return fail(
+      "vote-kick-target-ineligible",
+      "Choose an active player to vote-kick."
+    )
+  }
+  return ok(null)
+}
+
+function eligibleVoteKickVoterIds(
+  room: ManagedRoom,
+  targetPlayerId: string
+): string[] {
+  const voteKickedPlayerIds =
+    room.status === "lobby"
+      ? room.lobbyVoteKickedPlayerIds
+      : new Set(room.gameState?.voteKickedPlayerIds ?? [])
+  return room.players
+    .filter(
+      (player) =>
+        player.id !== targetPlayerId && !voteKickedPlayerIds.has(player.id)
+    )
+    .map((player) => player.id)
+}
+
+function voteKickMessage(
+  room: ManagedRoom,
+  voteKickId: string
+): ChatMessage | undefined {
+  return room.chatMessages.find(
+    (message) =>
+      message.kind === "vote-kick" && message.voteKick?.id === voteKickId
+  )
+}
+
+function projectVoteKickPoll(
+  poll: Omit<VoteKickPoll, "yesCount" | "noCount"> & {
+    yesCount?: number
+    noCount?: number
+  }
+): VoteKickPoll {
+  const yesCount = poll.votes.filter((vote) => vote.choice === "yes").length
+  const noCount = poll.votes.filter((vote) => vote.choice === "no").length
+  return {
+    ...poll,
+    yesCount,
+    noCount,
+    eligibleVoterIds: [...poll.eligibleVoterIds],
+    votes: poll.votes.map((vote) => ({ ...vote })),
+  }
+}
+
+function scheduleVoteKickResolution(
+  room: ManagedRoom,
+  voteKickId: string,
+  resolve: () => void
+) {
+  const message = voteKickMessage(room, voteKickId)
+  const closesAt = message?.voteKick?.closesAt
+  if (!closesAt) return
+
+  const delay = Math.max(0, Date.parse(closesAt) - Date.now())
+  const existing = room.voteKickTimersById.get(voteKickId)
+  if (existing) clearTimeout(existing)
+  room.voteKickTimersById.set(voteKickId, setTimeout(resolve, delay))
+}
+
 function touch(room: ManagedRoom, now = new Date().toISOString()) {
   room.version += 1
   room.updatedAt = now
@@ -862,6 +1207,16 @@ function snapshot(room: ManagedRoom): RoomSnapshot {
     chatMessages: room.chatMessages
       .filter((message) => message.channel === "public")
       .map(cloneChatMessage),
+    voteKick: {
+      activeVoteKickId: room.activeVoteKickId,
+      lobbyVoteKickedPlayerIds: [...room.lobbyVoteKickedPlayerIds],
+      cooldowns: Array.from(room.voteKickCooldownExpiresAtByTargetId.entries())
+        .filter(([, expiresAt]) => expiresAt > Date.now())
+        .map(([targetPlayerId, expiresAt]) => ({
+          targetPlayerId,
+          expiresAt: new Date(expiresAt).toISOString(),
+        })),
+    },
     houseRules: { ...room.houseRules },
     game: room.gameState
       ? projectPublicGame(room.gameState, gameContext(room))
@@ -892,6 +1247,9 @@ function cloneChatMessage(message: ChatMessage): ChatMessage {
   return {
     ...message,
     mentionPlayerIds: [...message.mentionPlayerIds],
+    voteKick: message.voteKick
+      ? projectVoteKickPoll(message.voteKick)
+      : undefined,
   }
 }
 

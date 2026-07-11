@@ -16,6 +16,7 @@ import {
   Sparkles,
   Trophy,
   UsersRound,
+  Vote,
   Volume2,
   VolumeX,
   X,
@@ -48,6 +49,8 @@ import type {
   SendAvatarEmojiReactionInput,
   SendChatMessageInput,
   StageCardsInput,
+  VoteKickChoice,
+  VoteKickPoll,
 } from "@workspace/game"
 import type { PointerEvent, ReactNode } from "react"
 import type { Options as ConfettiOptions } from "canvas-confetti"
@@ -86,6 +89,10 @@ type DeckDrawFlightState = {
   targetPlayerId: string
   cardCount: number
 }
+type VoteKickTarget = {
+  player: Player
+  cooldownExpiresAt: string | null
+}
 
 export const Route = createFileRoute("/room/$roomCode")({
   component: RoomPage,
@@ -118,6 +125,8 @@ function RoomPage() {
   const seenInitialGameSnapshotRef = useRef(false)
   const seenMentionMessageIdsRef = useRef(new Set<string>())
   const mentionSnapshotInitializedRef = useRef(false)
+  const seenVoteKickStatusesRef = useRef(new Map<string, string>())
+  const voteKickSnapshotInitializedRef = useRef(false)
   useSoundSystem()
   const haptic = useWebHaptics()
 
@@ -197,6 +206,8 @@ function RoomPage() {
     applyPlayerSocialSnapshot(null)
     seenMentionMessageIdsRef.current.clear()
     mentionSnapshotInitializedRef.current = false
+    seenVoteKickStatusesRef.current.clear()
+    voteKickSnapshotInitializedRef.current = false
   }
 
   function applyJoinFailure(nextError: GameError) {
@@ -339,6 +350,37 @@ function RoomPage() {
   }, [room?.chatMessages, playerSocial?.squadChatMessages, player?.id])
 
   useEffect(() => {
+    const voteKickMessages =
+      room?.chatMessages.filter(
+        (message) => message.kind === "vote-kick" && message.voteKick
+      ) ?? []
+    if (!voteKickSnapshotInitializedRef.current) {
+      voteKickSnapshotInitializedRef.current = true
+      for (const message of voteKickMessages) {
+        if (message.voteKick) {
+          seenVoteKickStatusesRef.current.set(
+            message.id,
+            message.voteKick.status
+          )
+        }
+      }
+      return
+    }
+
+    for (const message of voteKickMessages) {
+      const status = message.voteKick?.status
+      if (!status) continue
+      const previousStatus = seenVoteKickStatusesRef.current.get(message.id)
+      if (!previousStatus) {
+        playFx("notify", { volume: 0.24, playbackRate: 1.06 })
+      } else if (previousStatus === "open" && status === "passed") {
+        playFx("blocked", { volume: 0.42 })
+      }
+      seenVoteKickStatusesRef.current.set(message.id, status)
+    }
+  }, [room?.chatMessages])
+
+  useEffect(() => {
     if (!room) return
     const previousStatus = lastStatusRef.current
     lastStatusRef.current = room.status
@@ -466,6 +508,8 @@ function RoomPage() {
     applyPlayerSocialSnapshot(null)
     seenMentionMessageIdsRef.current.clear()
     mentionSnapshotInitializedRef.current = false
+    seenVoteKickStatusesRef.current.clear()
+    voteKickSnapshotInitializedRef.current = false
     setError(null)
 
     async function loadPreview() {
@@ -591,6 +635,32 @@ function RoomPage() {
     if (!socket) return
     setError(null)
     socket.emit("room:sendChatMessage", input, (result) => {
+      if (!result.ok) {
+        applyCommandError(result.error)
+        return
+      }
+
+      applyRoomSnapshot(result.data)
+    })
+  }
+
+  function startVoteKick(targetPlayerId: string) {
+    if (!socket) return
+    setError(null)
+    socket.emit("room:startVoteKick", { targetPlayerId }, (result) => {
+      if (!result.ok) {
+        applyCommandError(result.error)
+        return
+      }
+
+      applyRoomSnapshot(result.data)
+    })
+  }
+
+  function castVoteKick(voteKickId: string, choice: VoteKickChoice) {
+    if (!socket) return
+    setError(null)
+    socket.emit("room:castVoteKick", { voteKickId, choice }, (result) => {
       if (!result.ok) {
         applyCommandError(result.error)
         return
@@ -782,6 +852,8 @@ function RoomPage() {
           onKickSupporter={kickSupporter}
           onSendAvatarEmojiReaction={sendAvatarEmojiReaction}
           onSendChatMessage={sendChatMessage}
+          onStartVoteKick={startVoteKick}
+          onCastVoteKick={castVoteKick}
           onRestartGame={restartGame}
           voice={voice}
           socket={socket}
@@ -812,6 +884,8 @@ function RoomPage() {
       onStart={startGame}
       onCopyInvite={copyInvite}
       onSendChatMessage={sendChatMessage}
+      onStartVoteKick={startVoteKick}
+      onCastVoteKick={castVoteKick}
       voice={voice}
     />
   )
@@ -836,6 +910,8 @@ function GameTable({
   onKickSupporter,
   onSendAvatarEmojiReaction,
   onSendChatMessage,
+  onStartVoteKick,
+  onCastVoteKick,
   onRestartGame,
   voice,
   socket,
@@ -858,6 +934,8 @@ function GameTable({
   onKickSupporter: (supporterPlayerId: string) => void
   onSendAvatarEmojiReaction: (input: SendAvatarEmojiReactionInput) => void
   onSendChatMessage: (input: SendChatMessageInput) => void
+  onStartVoteKick: (targetPlayerId: string) => void
+  onCastVoteKick: (voteKickId: string, choice: VoteKickChoice) => void
   onRestartGame: () => void
   voice: RoomVoiceController
   socket: GameSocket | null
@@ -867,7 +945,7 @@ function GameTable({
 
   const selfState = game?.players.find((p) => p.playerId === player.id)
   const isSelfEliminated = Boolean(
-    selfState?.eliminated || selfState?.winnerPlacement
+    selfState?.eliminated || selfState?.winnerPlacement || selfState?.voteKicked
   )
   const supportLink = game?.supportLinks.find(
     (link) => link.supporterPlayerId === player.id
@@ -1081,7 +1159,12 @@ function GameTable({
     const targetState = game?.players.find(
       (p) => p.playerId === spectatingPlayerId
     )
-    if (!targetState || targetState.eliminated || targetState.winnerPlacement) {
+    if (
+      !targetState ||
+      targetState.eliminated ||
+      targetState.voteKicked ||
+      targetState.winnerPlacement
+    ) {
       setSupportView(null)
       return
     }
@@ -1487,7 +1570,10 @@ function GameTable({
                   selfPlayerId={player.id}
                   error={error}
                   onSendMessage={onSendChatMessage}
+                  onStartVoteKick={onStartVoteKick}
+                  onCastVoteKick={onCastVoteKick}
                   onKickSupporter={onKickSupporter}
+                  room={room}
                 />
               </div>
             </header>
@@ -2158,7 +2244,10 @@ function GameTable({
               selfPlayerId={player.id}
               error={error}
               onSendMessage={onSendChatMessage}
+              onStartVoteKick={onStartVoteKick}
+              onCastVoteKick={onCastVoteKick}
               onKickSupporter={onKickSupporter}
+              room={room}
             />
           </section>
         </div>
@@ -2354,6 +2443,7 @@ function deckDrawFlightFromEvent(event: GameEvent): DeckDrawFlightState | null {
 }
 
 function TableChatPanel({
+  room,
   messages,
   squadMessages = [],
   squadPlayerId = null,
@@ -2362,8 +2452,11 @@ function TableChatPanel({
   selfPlayerId,
   error,
   onSendMessage,
+  onStartVoteKick,
+  onCastVoteKick,
   onKickSupporter,
 }: {
+  room: RoomSnapshot | null
   messages: Array<ChatMessage>
   squadMessages?: Array<ChatMessage>
   squadPlayerId?: string | null
@@ -2372,6 +2465,8 @@ function TableChatPanel({
   selfPlayerId: string
   error: string | null
   onSendMessage: (input: SendChatMessageInput) => void
+  onStartVoteKick?: (targetPlayerId: string) => void
+  onCastVoteKick?: (voteKickId: string, choice: VoteKickChoice) => void
   onKickSupporter?: (supporterPlayerId: string) => void
 }) {
   const {
@@ -2439,6 +2534,9 @@ function TableChatPanel({
       <ChatMessageList
         messages={channelMessages}
         selfPlayerId={selfPlayerId}
+        players={players}
+        roomCode={room?.code ?? ""}
+        onVoteKick={onCastVoteKick}
         className="mt-3 flex-1 pr-1"
       />
 
@@ -2452,7 +2550,14 @@ function TableChatPanel({
         text={text}
         tray={tray}
         mentionablePlayers={mentionablePlayers}
+        voteKickTargets={voteKickTargetsForRoom(room, selfPlayerId)}
+        canStartVoteKick={
+          channel === "public" &&
+          Boolean(onStartVoteKick) &&
+          canPlayerStartVoteKick(room, selfPlayerId)
+        }
         onMention={addMention}
+        onStartVoteKick={onStartVoteKick}
         onTextChange={changeText}
         onTrayChange={setTray}
         onSend={send}
@@ -2463,6 +2568,7 @@ function TableChatPanel({
 }
 
 function MobileChatSheet({
+  room,
   messages,
   squadMessages = [],
   squadPlayerId = null,
@@ -2471,8 +2577,11 @@ function MobileChatSheet({
   selfPlayerId,
   error,
   onSendMessage,
+  onStartVoteKick,
+  onCastVoteKick,
   onKickSupporter,
 }: {
+  room: RoomSnapshot | null
   messages: Array<ChatMessage>
   squadMessages?: Array<ChatMessage>
   squadPlayerId?: string | null
@@ -2481,6 +2590,8 @@ function MobileChatSheet({
   selfPlayerId: string
   error: string | null
   onSendMessage: (input: SendChatMessageInput) => void
+  onStartVoteKick?: (targetPlayerId: string) => void
+  onCastVoteKick?: (voteKickId: string, choice: VoteKickChoice) => void
   onKickSupporter?: (supporterPlayerId: string) => void
 }) {
   const [open, setOpen] = useState(false)
@@ -2622,6 +2733,9 @@ function MobileChatSheet({
               <ChatMessageList
                 messages={channelMessages}
                 selfPlayerId={selfPlayerId}
+                players={players}
+                roomCode={room?.code ?? ""}
+                onVoteKick={onCastVoteKick}
                 emptyVariant="sheet"
                 className="flex-1 px-4 py-3"
               />
@@ -2638,7 +2752,14 @@ function MobileChatSheet({
                   tray={tray}
                   comfortable
                   mentionablePlayers={mentionablePlayers}
+                  voteKickTargets={voteKickTargetsForRoom(room, selfPlayerId)}
+                  canStartVoteKick={
+                    channel === "public" &&
+                    Boolean(onStartVoteKick) &&
+                    canPlayerStartVoteKick(room, selfPlayerId)
+                  }
                   onMention={addMention}
+                  onStartVoteKick={onStartVoteKick}
                   onTextChange={changeText}
                   onTrayChange={setTray}
                   onSend={send}
@@ -2691,6 +2812,7 @@ function MobileSeatingRing({
         const active = game?.turnPlayerId === candidate.id
         const winnerPlacement = state?.winnerPlacement ?? null
         const eliminated = Boolean(state?.eliminated)
+        const voteKicked = Boolean(state?.voteKicked)
         const declaredUno = Boolean(state?.declaredUno)
         const isYou = candidate.id === selfPlayerId
         const voiceState = voiceStates[candidate.id]
@@ -2703,7 +2825,7 @@ function MobileSeatingRing({
             : null
         const handCount = state?.handCount ?? 0
         const isWinner = winnerPlacement?.position === 1
-        const fadedOpacity = eliminated || !candidate.connected
+        const fadedOpacity = eliminated || voteKicked || !candidate.connected
         const showName = !dense || isYou
         const supporterCount =
           game?.supportLinks.filter(
@@ -2732,15 +2854,17 @@ function MobileSeatingRing({
 
         const ringClass = isWinner
           ? "ring-2 ring-amber-200/85 shadow-[0_0_22px_rgba(252,211,77,0.46)]"
-          : isSpectated
-            ? "ring-2 ring-cyan-400/90 shadow-[0_0_22px_rgba(34,211,238,0.6)]"
-            : active
-              ? "ring-2 ring-amber-200/80 shadow-[0_0_22px_rgba(252,211,77,0.42)]"
-              : declaredUno
-                ? "ring-2 ring-yellow-200/65 shadow-[0_0_18px_rgba(250,204,21,0.32)]"
-                : isYou
-                  ? "ring-2 ring-sky-200/55 shadow-[0_0_18px_rgba(125,211,252,0.24)]"
-                  : "ring-1 ring-white/14"
+          : voteKicked
+            ? "ring-2 ring-red-300/90 shadow-[0_0_22px_rgba(248,113,113,0.5)]"
+            : isSpectated
+              ? "ring-2 ring-cyan-400/90 shadow-[0_0_22px_rgba(34,211,238,0.6)]"
+              : active
+                ? "ring-2 ring-amber-200/80 shadow-[0_0_22px_rgba(252,211,77,0.42)]"
+                : declaredUno
+                  ? "ring-2 ring-yellow-200/65 shadow-[0_0_18px_rgba(250,204,21,0.32)]"
+                  : isYou
+                    ? "ring-2 ring-sky-200/55 shadow-[0_0_18px_rgba(125,211,252,0.24)]"
+                    : "ring-1 ring-white/14"
 
         return (
           <div
@@ -2783,7 +2907,9 @@ function MobileSeatingRing({
                 reaction={latestReaction ?? null}
                 emojiClassName={dense ? "text-xl" : "text-2xl"}
                 fallback={
-                  winnerPlacement ? (
+                  voteKicked ? (
+                    <X className="size-4 text-red-100" strokeWidth={2.4} />
+                  ) : winnerPlacement ? (
                     <Trophy className="size-4" strokeWidth={2.1} />
                   ) : (
                     <img
@@ -2995,11 +3121,17 @@ function ChatChannelTabs({
 function ChatMessageList({
   messages,
   selfPlayerId,
+  players,
+  roomCode,
+  onVoteKick,
   emptyVariant = "panel",
   className,
 }: {
   messages: Array<ChatMessage>
   selfPlayerId: string
+  players: Array<Player>
+  roomCode: string
+  onVoteKick?: (voteKickId: string, choice: VoteKickChoice) => void
   emptyVariant?: "panel" | "sheet"
   className?: string
 }) {
@@ -3072,6 +3204,10 @@ function ChatMessageList({
               message={message}
               isSelf={message.playerId === selfPlayerId}
               isMentioned={message.mentionPlayerIds.includes(selfPlayerId)}
+              selfPlayerId={selfPlayerId}
+              players={players}
+              roomCode={roomCode}
+              onVoteKick={onVoteKick}
             />
           ))}
     </div>
@@ -3082,8 +3218,11 @@ function ChatComposer({
   text,
   tray,
   mentionablePlayers = [],
+  voteKickTargets = [],
+  canStartVoteKick = false,
   comfortable = false,
   onMention,
+  onStartVoteKick,
   onTextChange,
   onTrayChange,
   onSend,
@@ -3092,8 +3231,11 @@ function ChatComposer({
   text: string
   tray: ChatTray | null
   mentionablePlayers?: Array<Player>
+  voteKickTargets?: Array<VoteKickTarget>
+  canStartVoteKick?: boolean
   comfortable?: boolean
   onMention?: (player: Player) => void
+  onStartVoteKick?: (targetPlayerId: string) => void
   onTextChange: (value: string) => void
   onTrayChange: (tray: ChatTray | null) => void
   onSend: (input: SendChatMessageInput) => void
@@ -3128,6 +3270,14 @@ function ChatComposer({
             </button>
           ))}
         </div>
+      ) : tray === "voteKick" ? (
+        <VoteKickTargetTray
+          targets={voteKickTargets}
+          onSelect={(targetPlayerId) => {
+            onStartVoteKick?.(targetPlayerId)
+            onTrayChange(null)
+          }}
+        />
       ) : tray ? (
         <ChatQuickTray
           tray={tray}
@@ -3165,6 +3315,13 @@ function ChatComposer({
             label="GIFs"
             icon={<ImageIcon className="size-3" strokeWidth={1.9} />}
             onClick={() => toggleTray("gifs")}
+          />
+          <ChatToolButton
+            active={tray === "voteKick"}
+            disabled={!canStartVoteKick}
+            label="Vote-kick"
+            icon={<Vote className="size-3" strokeWidth={1.9} />}
+            onClick={() => toggleTray("voteKick")}
           />
         </div>
 
@@ -3214,7 +3371,7 @@ function ChatQuickTray({
   comfortable = false,
   onSend,
 }: {
-  tray: Exclude<ChatTray, "mentions">
+  tray: Exclude<ChatTray, "mentions" | "voteKick">
   comfortable?: boolean
   onSend: (input: SendChatMessageInput) => void
 }) {
@@ -3267,13 +3424,65 @@ function ChatQuickTray({
   return <GifPicker comfortable={comfortable} onSelect={onSend} />
 }
 
+function VoteKickTargetTray({
+  targets,
+  onSelect,
+}: {
+  targets: Array<VoteKickTarget>
+  onSelect: (targetPlayerId: string) => void
+}) {
+  const now = useSecondTick(
+    targets.some((target) => Boolean(target.cooldownExpiresAt))
+  )
+
+  if (targets.length === 0) {
+    return (
+      <div className="rounded-lg border border-white/8 bg-white/[0.035] px-3 py-4 text-center text-xs text-white/48">
+        No vote-kick targets available.
+      </div>
+    )
+  }
+
+  return (
+    <div className="uno-scrollbar flex max-h-36 flex-col gap-1.5 overflow-y-auto pr-1">
+      {targets.map((target) => {
+        const cooldownMs = target.cooldownExpiresAt
+          ? Date.parse(target.cooldownExpiresAt) - now
+          : 0
+        const cooldownSeconds = Math.max(0, Math.ceil(cooldownMs / 1000))
+        const disabled = cooldownSeconds > 0
+        return (
+          <button
+            key={target.player.id}
+            type="button"
+            disabled={disabled}
+            onClick={() => onSelect(target.player.id)}
+            className="flex min-h-9 items-center justify-between gap-2 rounded-lg border border-white/10 bg-white/[0.055] px-2.5 py-1.5 text-left text-xs text-white/72 transition-[background-color,border-color,color,scale] hover:border-white/18 hover:bg-white/[0.085] hover:text-white active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-55"
+          >
+            <span className="min-w-0 truncate">
+              {target.player.name} · seat {target.player.seat}
+            </span>
+            {disabled && (
+              <span className="shrink-0 rounded-full border border-red-200/20 bg-red-400/12 px-2 py-0.5 text-[10px] font-semibold text-red-100 tabular-nums">
+                {cooldownSeconds}s
+              </span>
+            )}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 function ChatToolButton({
   active,
+  disabled = false,
   icon,
   label,
   onClick,
 }: {
   active: boolean
+  disabled?: boolean
   icon: ReactNode
   label: string
   onClick: () => void
@@ -3281,12 +3490,13 @@ function ChatToolButton({
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={onClick}
       title={label}
       aria-label={active ? `Hide ${label}` : `Show ${label}`}
       aria-pressed={active}
       className={
-        "grid size-7 shrink-0 place-items-center rounded-md border transition-[background-color,border-color,color,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] active:scale-[0.96] " +
+        "grid size-7 shrink-0 place-items-center rounded-md border transition-[background-color,border-color,color,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-35 " +
         (active
           ? "border-white/24 bg-white text-neutral-950 shadow-[0_10px_22px_rgba(0,0,0,0.22)]"
           : "border-white/8 bg-white/[0.045] text-white/54 hover:border-white/16 hover:bg-white/[0.075] hover:text-white/78")
@@ -3301,11 +3511,37 @@ function ChatMessageBubble({
   message,
   isSelf,
   isMentioned,
+  selfPlayerId,
+  players,
+  roomCode,
+  onVoteKick,
 }: {
   message: ChatMessage
   isSelf: boolean
   isMentioned: boolean
+  selfPlayerId: string
+  players: Array<Player>
+  roomCode: string
+  onVoteKick?: (voteKickId: string, choice: VoteKickChoice) => void
 }) {
+  if (message.kind === "vote-kick" && message.voteKick) {
+    return (
+      <div className={"flex " + (isSelf ? "justify-end" : "justify-start")}>
+        <div className="w-[240px] max-w-[94%]">
+          <ChatMessageMeta message={message} isSelf={isSelf} />
+          <VoteKickPollBubble
+            poll={message.voteKick}
+            players={players}
+            roomCode={roomCode}
+            selfPlayerId={selfPlayerId}
+            isMentioned={isMentioned}
+            onVote={onVoteKick}
+          />
+        </div>
+      </div>
+    )
+  }
+
   if (message.kind === "gif") {
     return (
       <div className={"flex " + (isSelf ? "justify-end" : "justify-start")}>
@@ -3354,6 +3590,185 @@ function ChatMessageBubble({
   )
 }
 
+function VoteKickPollBubble({
+  poll,
+  players,
+  roomCode,
+  selfPlayerId,
+  isMentioned,
+  onVote,
+}: {
+  poll: VoteKickPoll
+  players: Array<Player>
+  roomCode: string
+  selfPlayerId: string
+  isMentioned: boolean
+  onVote?: (voteKickId: string, choice: VoteKickChoice) => void
+}) {
+  const now = useSecondTick(poll.status === "open")
+  const remainingSeconds = Math.max(
+    0,
+    Math.ceil((Date.parse(poll.closesAt) - now) / 1000)
+  )
+  const selectedChoice =
+    poll.votes.find((vote) => vote.playerId === selfPlayerId)?.choice ?? null
+  const canVote =
+    poll.status === "open" &&
+    remainingSeconds > 0 &&
+    poll.eligibleVoterIds.includes(selfPlayerId)
+  const avatarUrls = avatarsByPlayerId(roomCode, players)
+
+  return (
+    <div
+      className={
+        "overflow-hidden rounded-2xl rounded-bl-md bg-[#104c31] px-3 py-3 text-white shadow-[inset_0_0_0_1px_rgba(255,255,255,0.09),0_10px_24px_rgba(0,0,0,0.24)] " +
+        (isMentioned ? " ring-1 ring-pink-300/55" : "")
+      }
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-base font-semibold text-white">
+            Kick {poll.targetPlayerName}?
+          </p>
+          <p className="mt-1 text-xs font-medium text-white/58">
+            {poll.status === "open"
+              ? `${remainingSeconds}s left`
+              : poll.result === "kicked"
+                ? "Kicked"
+                : "Not kicked"}
+          </p>
+        </div>
+        <span
+          className={
+            "shrink-0 rounded-full border px-2 py-1 text-[10px] font-semibold tracking-wide uppercase " +
+            (poll.status === "passed"
+              ? "border-red-100/35 bg-red-400/18 text-red-50"
+              : poll.status === "failed"
+                ? "border-white/14 bg-white/[0.08] text-white/62"
+                : "border-emerald-100/35 bg-emerald-300/16 text-emerald-50")
+          }
+        >
+          {poll.status === "open" ? "Open" : poll.result}
+        </span>
+      </div>
+
+      <div className="mt-3 space-y-2">
+        <VoteKickOptionRow
+          label="Yes"
+          choice="yes"
+          poll={poll}
+          selected={selectedChoice === "yes"}
+          disabled={!canVote}
+          players={players}
+          avatarUrls={avatarUrls}
+          onVote={onVote}
+        />
+        <VoteKickOptionRow
+          label="No"
+          choice="no"
+          poll={poll}
+          selected={selectedChoice === "no"}
+          disabled={!canVote}
+          players={players}
+          avatarUrls={avatarUrls}
+          onVote={onVote}
+        />
+      </div>
+    </div>
+  )
+}
+
+function VoteKickOptionRow({
+  label,
+  choice,
+  poll,
+  selected,
+  disabled,
+  players,
+  avatarUrls,
+  onVote,
+}: {
+  label: string
+  choice: VoteKickChoice
+  poll: VoteKickPoll
+  selected: boolean
+  disabled: boolean
+  players: Array<Player>
+  avatarUrls: Map<string, string>
+  onVote?: (voteKickId: string, choice: VoteKickChoice) => void
+}) {
+  const votes = poll.votes.filter((vote) => vote.choice === choice)
+  const count = choice === "yes" ? poll.yesCount : poll.noCount
+  const progress =
+    poll.eligibleVoterIds.length > 0
+      ? Math.min(100, (count / poll.eligibleVoterIds.length) * 100)
+      : 0
+  const visibleVotes = votes.slice(0, 6)
+  const overflowCount = Math.max(0, votes.length - visibleVotes.length)
+
+  return (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={() => onVote?.(poll.id, choice)}
+      className="group w-full rounded-xl text-left outline-none disabled:cursor-default"
+    >
+      <div className="flex items-center gap-2">
+        <span
+          className={
+            "grid size-8 shrink-0 place-items-center rounded-full border transition-colors " +
+            (selected
+              ? "border-emerald-200 bg-emerald-300 text-emerald-950"
+              : "border-white/55 text-white/40 group-enabled:group-hover:border-white/85 group-enabled:group-hover:text-white/70")
+          }
+        >
+          {selected && <Check className="size-4" strokeWidth={3} />}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-sm font-semibold text-white">
+          {label}
+        </span>
+        <span className="text-sm font-semibold text-white tabular-nums">
+          {count}
+        </span>
+      </div>
+      <div className="mt-1.5 ml-10 h-2 overflow-hidden rounded-full bg-white/14">
+        <div
+          className={
+            "h-full rounded-full transition-[width] duration-300 " +
+            (choice === "yes" ? "bg-emerald-300" : "bg-white/26")
+          }
+          style={{ width: `${progress}%` }}
+        />
+      </div>
+      {votes.length > 0 && (
+        <div className="mt-1.5 ml-10 flex items-center gap-1">
+          <div className="flex -space-x-1.5">
+            {visibleVotes.map((vote) => {
+              const voter = players.find(
+                (candidate) => candidate.id === vote.playerId
+              )
+              return (
+                <img
+                  key={vote.playerId}
+                  src={avatarUrls.get(vote.playerId) ?? PLAYER_AVATARS[0]!}
+                  alt={voter ? `${voter.name} avatar` : "Voter avatar"}
+                  className="size-5 rounded-full border border-[#104c31] object-cover"
+                  draggable={false}
+                />
+              )
+            })}
+          </div>
+          {overflowCount > 0 && (
+            <span className="text-[11px] font-semibold text-white/72">
+              +{overflowCount}
+            </span>
+          )}
+        </div>
+      )}
+    </button>
+  )
+}
+
 function ChatMessageMeta({
   message,
   isSelf,
@@ -3383,6 +3798,20 @@ function formatChatTime(value: string) {
     .getMinutes()
     .toString()
     .padStart(2, "0")}`
+}
+
+function useSecondTick(active: boolean) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!active) {
+      setNow(Date.now())
+      return
+    }
+
+    const intervalId = window.setInterval(() => setNow(Date.now()), 250)
+    return () => window.clearInterval(intervalId)
+  }, [active])
+  return now
 }
 
 function FirstPlaceCelebration({ playerName }: { playerName: string }) {
@@ -3592,6 +4021,7 @@ function TableSeatRing({
             active={game?.turnPlayerId === candidate.id}
             declaredUno={Boolean(state?.declaredUno)}
             eliminated={Boolean(state?.eliminated)}
+            voteKicked={Boolean(state?.voteKicked)}
             winnerPlacement={state?.winnerPlacement ?? null}
             connected={candidate.connected}
             isYou={candidate.id === selfPlayerId}
@@ -3703,6 +4133,7 @@ function TableAvatarSeat({
   active,
   declaredUno,
   eliminated,
+  voteKicked,
   winnerPlacement,
   connected,
   isYou,
@@ -3729,6 +4160,7 @@ function TableAvatarSeat({
   active: boolean
   declaredUno: boolean
   eliminated: boolean
+  voteKicked: boolean
   winnerPlacement: NonNullable<
     NonNullable<RoomSnapshot["game"]>["players"][number]["winnerPlacement"]
   > | null
@@ -3760,6 +4192,7 @@ function TableAvatarSeat({
     isSelfEliminated &&
     !isYou &&
     !eliminated &&
+    !voteKicked &&
     !winnerPlacement
   )
 
@@ -3775,7 +4208,7 @@ function TableAvatarSeat({
         "absolute flex -translate-x-1/2 -translate-y-1/2 flex-col items-center gap-1 transition-[opacity,transform,filter] duration-300 " +
         (winnerPlacement
           ? "opacity-100"
-          : eliminated || !connected
+          : eliminated || voteKicked || !connected
             ? "opacity-45"
             : "opacity-100") +
         " " +
@@ -3792,15 +4225,17 @@ function TableAvatarSeat({
             ? isFirstPlace
               ? "border-amber-200/80 bg-amber-200/20 shadow-[0_0_0_1px_rgba(252,211,77,0.3),0_0_46px_rgba(252,211,77,0.34),0_18px_38px_rgba(0,0,0,0.34)]"
               : "border-white/18 bg-white/[0.075]"
-            : isSpectated
-              ? "scale-[1.03] border-cyan-400 bg-cyan-950/20 shadow-[0_0_0_1px_rgba(34,211,238,0.3),0_0_42px_rgba(34,211,238,0.4),0_18px_38px_rgba(0,0,0,0.34)]"
-              : isUno
-                ? "scale-[1.03] border-yellow-200/75 bg-red-500/[0.14] shadow-[0_0_0_1px_rgba(250,204,21,0.26),0_0_44px_rgba(239,68,68,0.28),0_18px_38px_rgba(0,0,0,0.34)]"
-                : active
-                  ? "scale-[1.03] border-amber-200/70 bg-amber-200/16 shadow-[0_0_0_1px_rgba(252,211,77,0.25),0_0_42px_rgba(252,211,77,0.36),0_18px_38px_rgba(0,0,0,0.34)]"
-                  : isStaging
-                    ? "border-sky-200/45 bg-sky-300/12"
-                    : "border-white/12 bg-black/38")
+            : voteKicked
+              ? "border-red-300/60 bg-red-500/14 shadow-[0_0_0_1px_rgba(248,113,113,0.28),0_0_42px_rgba(248,113,113,0.28),0_18px_38px_rgba(0,0,0,0.34)]"
+              : isSpectated
+                ? "scale-[1.03] border-cyan-400 bg-cyan-950/20 shadow-[0_0_0_1px_rgba(34,211,238,0.3),0_0_42px_rgba(34,211,238,0.4),0_18px_38px_rgba(0,0,0,0.34)]"
+                : isUno
+                  ? "scale-[1.03] border-yellow-200/75 bg-red-500/[0.14] shadow-[0_0_0_1px_rgba(250,204,21,0.26),0_0_44px_rgba(239,68,68,0.28),0_18px_38px_rgba(0,0,0,0.34)]"
+                  : active
+                    ? "scale-[1.03] border-amber-200/70 bg-amber-200/16 shadow-[0_0_0_1px_rgba(252,211,77,0.25),0_0_42px_rgba(252,211,77,0.36),0_18px_38px_rgba(0,0,0,0.34)]"
+                    : isStaging
+                      ? "border-sky-200/45 bg-sky-300/12"
+                      : "border-white/12 bg-black/38")
         }
       >
         {winnerPlacement && (
@@ -3828,11 +4263,13 @@ function TableAvatarSeat({
               ? isFirstPlace
                 ? "border-amber-100/75 bg-amber-100/24 text-amber-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.32),0_0_28px_rgba(252,211,77,0.28)]"
                 : "border-white/18 bg-white/[0.08] text-white/74"
-              : active
-                ? "border-amber-100/65 bg-amber-100/24 text-amber-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_0_24px_rgba(252,211,77,0.24)]"
-                : isUno
-                  ? "border-yellow-100/70 bg-red-400/[0.18] text-yellow-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.24),0_0_24px_rgba(250,204,21,0.22)]"
-                  : "border-white/12 bg-white/[0.075] text-white/74")
+              : voteKicked
+                ? "border-red-200/70 bg-red-400/18 text-red-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.24),0_0_24px_rgba(248,113,113,0.24)]"
+                : active
+                  ? "border-amber-100/65 bg-amber-100/24 text-amber-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_0_24px_rgba(252,211,77,0.24)]"
+                  : isUno
+                    ? "border-yellow-100/70 bg-red-400/[0.18] text-yellow-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.24),0_0_24px_rgba(250,204,21,0.22)]"
+                    : "border-white/12 bg-white/[0.075] text-white/74")
           }
         >
           <ReactionAvatarContent
@@ -3854,21 +4291,23 @@ function TableAvatarSeat({
             {isYou ? " · You" : ""}
           </p>
           <p className="mt-0.5 text-[11px] text-white/45">
-            {winnerPlacement
-              ? isFirstPlace
-                ? "Winner"
-                : placementText
-              : eliminated
-                ? "Eliminated"
-                : isUno
-                  ? "On UNO"
-                  : active
-                    ? "Taking turn"
-                    : isStaging
-                      ? "Staging"
-                      : connected
-                        ? "At table"
-                        : "Away"}
+            {voteKicked
+              ? "Vote-kicked"
+              : winnerPlacement
+                ? isFirstPlace
+                  ? "Winner"
+                  : placementText
+                : eliminated
+                  ? "Eliminated"
+                  : isUno
+                    ? "On UNO"
+                    : active
+                      ? "Taking turn"
+                      : isStaging
+                        ? "Staging"
+                        : connected
+                          ? "At table"
+                          : "Away"}
           </p>
         </div>
         {winnerPlacement ? (
@@ -3881,6 +4320,10 @@ function TableAvatarSeat({
             }
           >
             #{winnerPlacement.position}
+          </span>
+        ) : voteKicked ? (
+          <span className="rounded-full border border-red-200/35 bg-red-400/15 px-1.5 py-0.5 text-[11px] font-semibold text-red-100 tabular-nums sm:px-2 sm:text-xs">
+            Out
           </span>
         ) : (
           <span
@@ -3976,6 +4419,56 @@ function orderPlayersAroundSelf(players: Array<Player>, selfPlayerId: string) {
   )
   if (selfIndex < 0) return players
   return [...players.slice(selfIndex), ...players.slice(0, selfIndex)]
+}
+
+function canPlayerStartVoteKick(
+  room: RoomSnapshot | null,
+  playerId: string
+): boolean {
+  if (!room || room.voteKick.activeVoteKickId) return false
+  if (room.status !== "lobby" && room.status !== "playing") return false
+  if (room.status === "lobby") {
+    return !room.voteKick.lobbyVoteKickedPlayerIds.includes(playerId)
+  }
+  return !Boolean(
+    room.game?.players.find((candidate) => candidate.playerId === playerId)
+      ?.voteKicked
+  )
+}
+
+function voteKickTargetsForRoom(
+  room: RoomSnapshot | null,
+  selfPlayerId: string
+): Array<VoteKickTarget> {
+  if (!room) return []
+  const cooldownsByTarget = new Map(
+    room.voteKick.cooldowns.map((cooldown) => [
+      cooldown.targetPlayerId,
+      cooldown.expiresAt,
+    ])
+  )
+
+  return room.players
+    .filter((player) => {
+      if (player.id === selfPlayerId) return false
+      if (room.status === "lobby") {
+        return !room.voteKick.lobbyVoteKickedPlayerIds.includes(player.id)
+      }
+      if (room.status !== "playing") return false
+      const state = room.game?.players.find(
+        (candidate) => candidate.playerId === player.id
+      )
+      return Boolean(
+        state &&
+        !state.eliminated &&
+        !state.voteKicked &&
+        !state.winnerPlacement
+      )
+    })
+    .map((player) => ({
+      player,
+      cooldownExpiresAt: cooldownsByTarget.get(player.id) ?? null,
+    }))
 }
 
 function tableSeatPosition(index: number, total: number, compact: boolean) {
@@ -5660,6 +6153,8 @@ function LobbyWaitingRoom({
   onStart,
   onCopyInvite,
   onSendChatMessage,
+  onStartVoteKick,
+  onCastVoteKick,
   voice,
 }: {
   room: RoomSnapshot | null
@@ -5673,14 +6168,22 @@ function LobbyWaitingRoom({
   onStart: () => void
   onCopyInvite: () => Promise<void>
   onSendChatMessage: (input: SendChatMessageInput) => void
+  onStartVoteKick: (targetPlayerId: string) => void
+  onCastVoteKick: (voteKickId: string, choice: VoteKickChoice) => void
   voice: RoomVoiceController
 }) {
   const players = room?.players ?? []
   const seatCount = players.length
-  const readyCount = players.filter(
+  const lobbyVoteKickedPlayerIds = room?.voteKick.lobbyVoteKickedPlayerIds ?? []
+  const activeLobbyPlayers = players.filter(
+    (candidate) => !lobbyVoteKickedPlayerIds.includes(candidate.id)
+  )
+  const readyCount = activeLobbyPlayers.filter(
     (candidate) => candidate.ready || candidate.id === room?.hostPlayerId
   ).length
-  const everyoneReady = seatCount >= 2 && readyCount === seatCount
+  const everyoneReady =
+    activeLobbyPlayers.length >= 2 && readyCount === activeLobbyPlayers.length
+  const selfLobbyVoteKicked = lobbyVoteKickedPlayerIds.includes(player.id)
   const messages = room?.chatMessages ?? []
   const visibleError = error ?? voice.error
 
@@ -5717,6 +6220,9 @@ function LobbyWaitingRoom({
                 selfPlayerId={player.id}
                 error={visibleError}
                 onSendMessage={onSendChatMessage}
+                onStartVoteKick={onStartVoteKick}
+                onCastVoteKick={onCastVoteKick}
+                room={room}
               />
             </div>
             <CopyInviteButton iconOnly onCopy={onCopyInvite} />
@@ -5729,9 +6235,11 @@ function LobbyWaitingRoom({
             player={player}
             seatCount={seatCount}
             readyCount={readyCount}
+            activeSeatCount={activeLobbyPlayers.length}
             everyoneReady={everyoneReady}
             isHost={isHost}
             currentPlayerReady={currentPlayerReady}
+            selfLobbyVoteKicked={selfLobbyVoteKicked}
             voiceStates={voice.voiceStates}
             onReady={onReady}
             onStart={onStart}
@@ -5745,6 +6253,9 @@ function LobbyWaitingRoom({
             selfPlayerId={player.id}
             error={visibleError}
             onSendMessage={onSendChatMessage}
+            onStartVoteKick={onStartVoteKick}
+            onCastVoteKick={onCastVoteKick}
+            room={room}
           />
         </section>
       </div>
@@ -5757,9 +6268,11 @@ function DimmedTablePreview({
   player,
   seatCount,
   readyCount,
+  activeSeatCount,
   everyoneReady,
   isHost,
   currentPlayerReady,
+  selfLobbyVoteKicked,
   voiceStates,
   onReady,
   onStart,
@@ -5770,9 +6283,11 @@ function DimmedTablePreview({
   player: Player
   seatCount: number
   readyCount: number
+  activeSeatCount: number
   everyoneReady: boolean
   isHost: boolean
   currentPlayerReady: boolean
+  selfLobbyVoteKicked: boolean
   voiceStates: RoomVoiceController["voiceStates"]
   onReady: (ready: boolean) => void
   onStart: () => void
@@ -5801,6 +6316,7 @@ function DimmedTablePreview({
         players={players}
         hostPlayerId={room?.hostPlayerId ?? null}
         selfPlayerId={player.id}
+        voteKickedPlayerIds={room?.voteKick.lobbyVoteKickedPlayerIds ?? []}
         voiceStates={voiceStates}
         compact={compactSurface}
       />
@@ -5838,7 +6354,7 @@ function DimmedTablePreview({
                 ? "Need at least one more seat"
                 : everyoneReady
                   ? "Table is ready"
-                  : `${readyCount}/${seatCount} players ready`}
+                  : `${readyCount}/${activeSeatCount} players ready`}
             </p>
             <p className="mt-1.5 text-sm text-white/55">
               {seatCount < 2
@@ -5849,12 +6365,14 @@ function DimmedTablePreview({
                     : "Waiting for the host to start the game."
                   : isHost
                     ? "You can start anytime — the rest will catch up."
-                    : "Ready up when you're set."}
+                    : selfLobbyVoteKicked
+                      ? "You are sitting this match out."
+                      : "Ready up when you're set."}
             </p>
           </div>
 
           <div className="flex flex-wrap items-center justify-center gap-2">
-            {!isHost && (
+            {!isHost && !selfLobbyVoteKicked && (
               <Button
                 type="button"
                 size="sm"
@@ -5868,6 +6386,11 @@ function DimmedTablePreview({
                 <Check />
                 {currentPlayerReady ? "Mark not ready" : "Ready up"}
               </Button>
+            )}
+            {selfLobbyVoteKicked && (
+              <span className="rounded-full border border-red-300/30 bg-red-400/12 px-3 py-1.5 text-sm font-semibold text-red-100">
+                Vote-kicked
+              </span>
             )}
             {isHost && seatCount < 2 && (
               <CopyInviteButton onCopy={onCopyInvite} />
@@ -5904,6 +6427,7 @@ function DimmedSeatRing({
   players,
   hostPlayerId,
   selfPlayerId,
+  voteKickedPlayerIds,
   voiceStates,
   compact,
 }: {
@@ -5911,6 +6435,7 @@ function DimmedSeatRing({
   players: Array<Player>
   hostPlayerId: string | null
   selfPlayerId: string
+  voteKickedPlayerIds: Array<string>
   voiceStates: RoomVoiceController["voiceStates"]
   compact: boolean
 }) {
@@ -5923,7 +6448,8 @@ function DimmedSeatRing({
         const seat = tableSeatPosition(index, ordered.length, compact)
         const isYou = candidate.id === selfPlayerId
         const isHost = candidate.id === hostPlayerId
-        const readyOrHost = candidate.ready || isHost
+        const voteKicked = voteKickedPlayerIds.includes(candidate.id)
+        const readyOrHost = !voteKicked && (candidate.ready || isHost)
         const voiceState = voiceStates[candidate.id]
         const hasVoiceOn = Boolean(voiceState?.enabled)
         const isMuted = !hasVoiceOn || Boolean(voiceState?.muted)
@@ -5942,14 +6468,18 @@ function DimmedSeatRing({
             <div
               className={
                 "relative z-10 flex min-w-[72px] items-center gap-1.5 rounded-xl border px-1.5 py-1.5 backdrop-blur-md sm:min-w-[144px] sm:gap-2 sm:rounded-2xl sm:px-2.5 sm:py-2 " +
-                (readyOrHost
-                  ? "border-emerald-200/30 bg-emerald-400/10"
-                  : "border-white/10 bg-black/45")
+                (voteKicked
+                  ? "border-red-300/50 bg-red-500/14"
+                  : readyOrHost
+                    ? "border-emerald-200/30 bg-emerald-400/10"
+                    : "border-white/10 bg-black/45")
               }
               style={{
-                boxShadow: readyOrHost
-                  ? "0 0 0 1px rgba(110, 231, 183, 0.18), 0 12px 30px rgba(0, 0, 0, 0.35)"
-                  : "0 12px 30px rgba(0, 0, 0, 0.32)",
+                boxShadow: voteKicked
+                  ? "0 0 0 1px rgba(248, 113, 113, 0.24), 0 12px 30px rgba(0, 0, 0, 0.35)"
+                  : readyOrHost
+                    ? "0 0 0 1px rgba(110, 231, 183, 0.18), 0 12px 30px rgba(0, 0, 0, 0.35)"
+                    : "0 12px 30px rgba(0, 0, 0, 0.32)",
               }}
             >
               <div className="grid size-9 shrink-0 place-items-center overflow-hidden rounded-full border border-white/12 bg-white/[0.06] text-white/72 sm:size-12">
@@ -5968,22 +6498,26 @@ function DimmedSeatRing({
                 <p className="mt-0.5 text-[11px] text-white/45">
                   {!candidate.connected
                     ? "Away"
-                    : readyOrHost
-                      ? isHost
-                        ? "Host · Ready"
-                        : "Ready"
-                      : "Waiting"}
+                    : voteKicked
+                      ? "Vote-kicked"
+                      : readyOrHost
+                        ? isHost
+                          ? "Host · Ready"
+                          : "Ready"
+                        : "Waiting"}
                 </p>
               </div>
               <span
                 className={
                   "rounded-full border px-1.5 py-0.5 text-[10px] tabular-nums sm:px-2 sm:text-[11px] " +
-                  (readyOrHost
-                    ? "border-emerald-200/35 bg-emerald-400/15 text-emerald-100"
-                    : "border-white/12 bg-black/35 text-white/55")
+                  (voteKicked
+                    ? "border-red-200/35 bg-red-400/15 text-red-100"
+                    : readyOrHost
+                      ? "border-emerald-200/35 bg-emerald-400/15 text-emerald-100"
+                      : "border-white/12 bg-black/35 text-white/55")
                 }
               >
-                {readyOrHost ? "✓" : "..."}
+                {voteKicked ? "Out" : readyOrHost ? "✓" : "..."}
               </span>
               <span
                 className={

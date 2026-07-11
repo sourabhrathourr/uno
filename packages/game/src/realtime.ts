@@ -5,12 +5,20 @@ import type {
   SendAvatarEmojiReactionInput,
   StageCardsInput,
 } from "./game"
+import type { VoteKickChoice } from "./chat"
 
 export type SupportPlayerInput = {
   supportedPlayerId: string
 }
 export type KickSupporterInput = {
   supporterPlayerId: string
+}
+export type StartVoteKickInput = {
+  targetPlayerId: string
+}
+export type CastVoteKickInput = {
+  voteKickId: string
+  choice: VoteKickChoice
 }
 import type { PlayerSocialSnapshot, SendChatMessageInput } from "./chat"
 import type { HouseRules, Player, RoomSnapshot } from "./rooms"
@@ -127,6 +135,14 @@ export type ClientToServerEvents = {
   "room:restart": (ack: (result: CommandResult<RoomSnapshot>) => void) => void
   "room:sendChatMessage": (
     input: SendChatMessageInput,
+    ack: (result: CommandResult<RoomSnapshot>) => void
+  ) => void
+  "room:startVoteKick": (
+    input: StartVoteKickInput,
+    ack: (result: CommandResult<RoomSnapshot>) => void
+  ) => void
+  "room:castVoteKick": (
+    input: CastVoteKickInput,
     ack: (result: CommandResult<RoomSnapshot>) => void
   ) => void
   "voice:requestStates": () => void
