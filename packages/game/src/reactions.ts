@@ -1,5 +1,5 @@
 export const AVATAR_REACTION_EMOJIS = [
-  "🔥",
+  "😭",
   "😱",
   "😂",
   "🙌",

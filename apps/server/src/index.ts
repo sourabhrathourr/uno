@@ -50,6 +50,9 @@ const gifs = new GiphyService({
 const rooms = new RoomManager({
   resolveGif: (provider, id) =>
     provider === "giphy" ? gifs.resolveApprovedGif(id) : null,
+  onRoomUpdated: (code, room) => {
+    void emitRoomState(code, room)
+  },
 })
 const voiceStatesByRoomCode = new Map<
   string,
@@ -290,6 +293,22 @@ io.on("connection", (socket) => {
   socket.on("room:sendChatMessage", (input, ack) => {
     const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
       rooms.sendChatMessage(roomCode, playerId, input)
+    )
+    ack(result)
+    if (result.ok) void emitRoomState(result.data.code, result.data)
+  })
+
+  socket.on("room:startVoteKick", (input, ack) => {
+    const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
+      rooms.startVoteKick(roomCode, playerId, input.targetPlayerId)
+    )
+    ack(result)
+    if (result.ok) void emitRoomState(result.data.code, result.data)
+  })
+
+  socket.on("room:castVoteKick", (input, ack) => {
+    const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
+      rooms.castVoteKick(roomCode, playerId, input.voteKickId, input.choice)
     )
     ack(result)
     if (result.ok) void emitRoomState(result.data.code, result.data)
