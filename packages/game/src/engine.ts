@@ -1341,6 +1341,13 @@ function validateDrawStackPlay(
     )
   }
 
+  if (cards.length > 1 && !sameDrawGroup(cards)) {
+    return fail(
+      "multi-card-group-mismatch",
+      "Grouped draw cards must share the same draw type."
+    )
+  }
+
   if (!canStackDrawCards(game, cards)) {
     return fail(
       "draw-stack-too-low",
@@ -1460,7 +1467,9 @@ function canPlaySingleCard(
 }
 
 function canStackDrawCards(game: GameState, cards: Card[]): boolean {
-  if (!game.drawStack || cards.length === 0) return false
+  if (!game.drawStack || cards.length === 0 || !sameDrawGroup(cards)) {
+    return false
+  }
 
   const minimum = game.drawStack.minimum
   const top = topDiscard(game)
