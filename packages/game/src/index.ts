@@ -1,17 +1,22 @@
 export type { Card, CardColor, CardFace, NumberValue } from "./cards"
-export {
-  CHAT_EMOJIS,
-  CHAT_GIFS,
-  CHAT_PRESETS,
-} from "./chat"
+export { CHAT_EMOJIS, CHAT_GIFS, CHAT_PRESETS } from "./chat"
 export type {
   ChatGifPreset,
+  ChatChannel,
   ChatMessage,
   ChatMessageKind,
+  PlayerSocialSnapshot,
   SendChatMessageInput,
+  VoteKickChoice,
+  VoteKickPoll,
+  VoteKickResult,
+  VoteKickStatus,
+  VoteKickVote,
 } from "./chat"
 export { createNoMercyDeck, shuffleCards } from "./deck"
+export type { GifProvider, GifSearchResponse, GifSearchResult } from "./gifs"
 export {
+  addWaitingPlayer,
   catchUno,
   createGame,
   drawRouletteCard,
@@ -20,8 +25,16 @@ export {
   playCards,
   projectPlayerGame,
   projectPublicGame,
+  projectSupportView,
+  kickSupporter,
+  releaseInactiveSupportLinks,
+  sendAvatarEmojiReaction,
   stageCards,
+  supportPlayer,
+  supportSquadMemberIds,
+  supportSquadPlayerIdFor,
   takeDrawPenalty,
+  voteKickPlayer,
 } from "./engine"
 export type {
   CatchUnoInput,
@@ -29,8 +42,10 @@ export type {
   DrawStack,
   GameEvent,
   GameState,
+  GameContext,
   PendingChoice,
   PlayerGameSnapshot,
+  PlayDecision,
   PlayCardsInput,
   PlayColor,
   PlayerGamePublic,
@@ -38,13 +53,25 @@ export type {
   StageCardsInput,
   StagedPlayPublic,
   StagedPlayState,
+  SupportBlock,
+  SupportEndReason,
+  SupportHistoryEntry,
+  SupportLink,
+  AvatarEmojiReaction,
+  SendAvatarEmojiReactionInput,
+  SupportRecap,
+  SupportRecapTitle,
   WinnerPlacement,
 } from "./game"
+export { AVATAR_REACTION_EMOJIS } from "./reactions"
+export type { AvatarReactionEmoji } from "./reactions"
 export type {
   HouseRules,
   Player,
   RoomSnapshot,
   RoomStatus,
+  RoomVoteKickSnapshot,
+  VoteKickCooldown,
 } from "./rooms"
 export {
   ROOM_CODE_LENGTH,
@@ -58,14 +85,18 @@ export type {
   CommandResult,
   CreateRoomRequest,
   CreateRoomResponse,
+  CastVoteKickInput,
   GameError,
   InterServerEvents,
   JoinRoomInput,
   JoinRoomResponse,
+  KickSupporterInput,
   ReadyInput,
   RoomEvent,
   ServerToClientEvents,
   SocketData,
+  StartVoteKickInput,
+  SupportPlayerInput,
   VoiceSignal,
   VoiceSignalEvent,
   VoiceSignalInput,

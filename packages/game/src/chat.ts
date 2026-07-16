@@ -1,18 +1,61 @@
-export type ChatMessageKind = "text" | "emoji" | "gif" | "preset"
+import type { GifProvider } from "./gifs"
+
+export type ChatMessageKind = "text" | "emoji" | "gif" | "preset" | "vote-kick"
+export type ChatChannel = "public" | "squad"
+export type VoteKickChoice = "yes" | "no"
+export type VoteKickStatus = "open" | "passed" | "failed"
+export type VoteKickResult = "kicked" | "not-kicked"
 
 export type SendChatMessageInput = {
+  channel?: ChatChannel
   kind: ChatMessageKind
   body: string
+  gifProvider?: GifProvider
+  mentionPlayerIds?: string[]
 }
 
 export type ChatMessage = {
   id: string
   playerId: string
   playerName: string
+  channel: ChatChannel
+  squadPlayerId?: string
+  matchId?: string
   kind: ChatMessageKind
   body: string
+  mentionPlayerIds: string[]
   label?: string
+  voteKick?: VoteKickPoll
   createdAt: string
+}
+
+export type VoteKickVote = {
+  playerId: string
+  choice: VoteKickChoice
+  votedAt: string
+}
+
+export type VoteKickPoll = {
+  id: string
+  initiatorPlayerId: string
+  initiatorPlayerName: string
+  targetPlayerId: string
+  targetPlayerName: string
+  status: VoteKickStatus
+  result: VoteKickResult | null
+  eligibleVoterIds: string[]
+  votes: VoteKickVote[]
+  yesCount: number
+  noCount: number
+  createdAt: string
+  closesAt: string
+  resolvedAt: string | null
+}
+
+export type PlayerSocialSnapshot = {
+  squadPlayerId: string | null
+  squadChatMessages: ChatMessage[]
+  blockedSupportedPlayerIds: string[]
 }
 
 export type ChatGifPreset = {

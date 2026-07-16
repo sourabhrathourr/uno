@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
+import InCallManager from 'react-native-incall-manager';
 import {
   mediaDevices,
   MediaStream,
@@ -153,6 +154,19 @@ function cloneVoicePeerConfig(): VoicePeerConfig {
 
 function isRoomVoiceDebugEnabled() {
   return __DEV__ || process.env.EXPO_PUBLIC_VOICE_DEBUG === 'true';
+}
+
+function startVoiceAudioRoute() {
+  if (Platform.OS !== 'android') return;
+
+  InCallManager.start({ media: 'audio', auto: true });
+  InCallManager.setForceSpeakerphoneOn(true);
+}
+
+function stopVoiceAudioRoute() {
+  if (Platform.OS !== 'android') return;
+
+  InCallManager.stop();
 }
 
 function logRoomVoiceDebug(
@@ -711,6 +725,7 @@ export function useRoomVoice({
     setConnecting(false);
     setEnabled(false);
     setMuted(true);
+    stopVoiceAudioRoute();
     stopLocalStream();
     closeAllPeers(true);
     emitVoiceState({ enabled: false, muted: true, speaking: false });
@@ -748,6 +763,7 @@ export function useRoomVoice({
 
     try {
       await loadVoicePeerConfig();
+      startVoiceAudioRoute();
       const stream = await mediaDevices.getUserMedia({
         audio: true,
         video: false,
@@ -775,6 +791,7 @@ export function useRoomVoice({
       await syncAllPeers();
       connectToEnabledPeers();
     } catch (cause) {
+      stopVoiceAudioRoute();
       stopLocalStream();
       enabledRef.current = false;
       mutedRef.current = true;

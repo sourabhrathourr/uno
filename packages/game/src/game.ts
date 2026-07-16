@@ -1,4 +1,5 @@
 import type { Card, CardColor } from "./cards"
+import type { AvatarReactionEmoji } from "./reactions"
 import type { HouseRules, Player } from "./rooms"
 
 export type PlayColor = Exclude<CardColor, "wild">
@@ -20,7 +21,12 @@ export type GameEventType =
   | "uno-called"
   | "uno-caught"
   | "player-eliminated"
+  | "player-waiting"
   | "game-won"
+  | "player-vote-kicked"
+  | "support-started"
+  | "support-ended"
+  | "support-kicked"
 
 export type GameEvent = {
   id: string
@@ -40,43 +46,96 @@ export type WinnerPlacement = {
   createdAt: string
 }
 
+export type SupportEndReason =
+  | "supported-player-inactive"
+  | "supporter-kicked"
+  | "match-finished"
+
+export type SupportLink = {
+  supporterPlayerId: string
+  supportedPlayerId: string
+  createdAt: string
+}
+
+export type SupportHistoryEntry = SupportLink & {
+  endedAt: string | null
+  endReason: SupportEndReason | null
+}
+
+export type SupportBlock = {
+  supporterPlayerId: string
+  supportedPlayerId: string
+  createdAt: string
+}
+
+export type SendAvatarEmojiReactionInput = {
+  body: AvatarReactionEmoji
+}
+
+export type AvatarEmojiReaction = SendAvatarEmojiReactionInput & {
+  id: string
+  playerId: string
+  supportedPlayerId: string | null
+  createdAt: string
+}
+
+export type SupportRecapTitle = {
+  label: "Early Believer" | "Crowd Favorite"
+  playerId: string
+  description: string
+}
+
+export type SupportRecap = {
+  journey: SupportHistoryEntry[]
+  titles: SupportRecapTitle[]
+}
+
 export type DrawStack = {
   amount: number
   minimum: number
   targetPlayerId: string
 }
 
-export type PendingChoice =
-  | {
-      type: "roulette-draw"
-      playerId: string
-      color: PlayColor
-      drawnCards: Card[]
-    }
+export type PendingChoice = {
+  type: "roulette-draw"
+  playerId: string
+  color: PlayColor
+  drawnCards: Card[]
+}
 
 export type PlayerGamePublic = {
   playerId: string
   handCount: number
   declaredUno: boolean
   eliminated: boolean
+  voteKicked: boolean
+  waiting: boolean
   winnerPlacement: WinnerPlacement | null
   connected: boolean
   ready: boolean
 }
 
-export type StagedPlayPublic = {
+export type PlayDecision = {
+  chosenColor?: PlayColor
+  declaredUno?: boolean
+  rotateHands?: boolean
+  swapWithPlayerId?: string
+}
+
+export type StagedPlayPublic = PlayDecision & {
   playerId: string
   kind: "play" | "roulette"
   cards: Card[]
 }
 
-export type StagedPlayState = {
+export type StagedPlayState = PlayDecision & {
   playerId: string
   kind: "play" | "roulette"
   cardIds: string[]
 }
 
 export type PublicGameSnapshot = {
+  matchId: string
   direction: Direction
   currentColor: PlayColor
   turnPlayerId: string | null
@@ -90,6 +149,9 @@ export type PublicGameSnapshot = {
   events: GameEvent[]
   winnerPlacements: WinnerPlacement[]
   winnerPlayerId: string | null
+  supportLinks: SupportLink[]
+  avatarEmojiReactions: AvatarEmojiReaction[]
+  supportRecap: SupportRecap | null
 }
 
 export type PlayerGameSnapshot = {
@@ -104,6 +166,7 @@ export type PlayerGameSnapshot = {
 }
 
 export type GameState = {
+  matchId: string
   playerOrder: string[]
   direction: Direction
   currentColor: PlayColor
@@ -112,6 +175,8 @@ export type GameState = {
   discardPile: Card[]
   handsByPlayerId: Record<string, Card[]>
   eliminatedPlayerIds: string[]
+  voteKickedPlayerIds: string[]
+  waitingPlayerIds: string[]
   knockedOutCards: Card[]
   drawStack: DrawStack | null
   pendingChoice: PendingChoice | null
@@ -121,20 +186,20 @@ export type GameState = {
   stagedPlay: StagedPlayState | null
   winnerPlacements: WinnerPlacement[]
   winnerPlayerId: string | null
+  supportLinks: SupportLink[]
+  supportHistory: SupportHistoryEntry[]
+  supportBlocks: SupportBlock[]
+  avatarEmojiReactions: AvatarEmojiReaction[]
   events: GameEvent[]
 }
 
-export type PlayCardsInput = {
+export type PlayCardsInput = PlayDecision & {
   cardIds: string[]
-  declaredUno?: boolean
-  chosenColor?: PlayColor
   discardCardIds?: string[]
   topCardId?: string
-  swapWithPlayerId?: string
-  rotateHands?: boolean
 }
 
-export type StageCardsInput = {
+export type StageCardsInput = PlayDecision & {
   cardIds: string[]
 }
 

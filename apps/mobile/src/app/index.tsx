@@ -7,6 +7,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -173,10 +174,18 @@ export default function PlayScreen() {
     <View style={styles.root}>
       <SafeAreaView style={styles.safe}>
         <KeyboardAvoidingView
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
           style={styles.keyboard}
         >
-          <View style={[styles.content, compact && styles.contentCompact]}>
+          <ScrollView
+            contentContainerStyle={[
+              styles.content,
+              compact && styles.contentCompact,
+            ]}
+            keyboardDismissMode="on-drag"
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator={false}
+          >
             <View style={styles.header}>
               <Text style={styles.kicker}>UNO No Mercy</Text>
               <Text style={[styles.title, compact && styles.titleCompact]}>
@@ -288,7 +297,7 @@ export default function PlayScreen() {
 
               {error ? <Text style={styles.error}>{error}</Text> : null}
             </View>
-          </View>
+          </ScrollView>
         </KeyboardAvoidingView>
       </SafeAreaView>
     </View>
@@ -343,7 +352,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   content: {
-    flex: 1,
+    flexGrow: 1,
     justifyContent: 'space-between',
     paddingHorizontal: Spacing.four,
     paddingTop: Spacing.four,

@@ -14,11 +14,19 @@ const projectRoot = __dirname;
 const workspaceRoot = path.resolve(projectRoot, '..', '..');
 
 const config = getDefaultConfig(projectRoot);
+const msModulePath = path.resolve(projectRoot, 'src/shims/ms.js');
 
 config.watchFolders = [workspaceRoot];
 config.resolver.nodeModulesPaths = [
   path.resolve(projectRoot, 'node_modules'),
   path.resolve(workspaceRoot, 'node_modules'),
 ];
+config.resolver.resolveRequest = (context, moduleName, platform) => {
+  if (moduleName === 'ms') {
+    return { type: 'sourceFile', filePath: msModulePath };
+  }
+
+  return context.resolveRequest(context, moduleName, platform);
+};
 
 module.exports = config;
