@@ -6,9 +6,12 @@ import type {
   CommandResult,
   CreateRoomRequest,
   CreateRoomResponse,
+  GifSearchResponse,
   RoomSnapshot,
   ServerToClientEvents,
 } from '@workspace/game';
+
+import { getPlayerSessionId } from '@/lib/session';
 
 export type GameSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 
@@ -61,4 +64,39 @@ export async function getRoomPreview(
 ): Promise<CommandResult<RoomSnapshot>> {
   const response = await fetch(`${getRealtimeUrl()}/rooms/${code}`);
   return (await response.json()) as CommandResult<RoomSnapshot>;
+}
+
+export async function searchGifs({
+  roomCode,
+  query,
+  offset,
+  signal,
+}: {
+  roomCode: string;
+  query: string;
+  offset: number;
+  signal?: AbortSignal;
+}): Promise<GifSearchResponse> {
+  const url = new URL(`${getRealtimeUrl()}/gifs/search`);
+  if (query.trim()) url.searchParams.set('q', query.trim());
+  if (offset > 0) url.searchParams.set('offset', String(offset));
+
+  const response = await fetch(url.toString(), {
+    signal,
+    headers: {
+      'X-Room-Code': roomCode.toUpperCase(),
+      'X-Player-Session-Id': await getPlayerSessionId(),
+    },
+  });
+
+  if (!response.ok) {
+    const body = (await response.json().catch(() => null)) as {
+      error?: { message?: string };
+    } | null;
+    throw new Error(
+      body?.error?.message ?? 'GIF search is temporarily unavailable.',
+    );
+  }
+
+  return (await response.json()) as GifSearchResponse;
 }

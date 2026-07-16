@@ -1,12 +1,21 @@
 import type {
+  AvatarReactionEmoji,
   Card,
+  ChatMessage,
   GameError,
   PlayColor,
   Player,
   PlayerGameSnapshot,
+  PlayerSocialSnapshot,
   RoomSnapshot,
+  SendChatMessageInput,
+  VoteKickChoice,
 } from '@workspace/game';
-import { isRoomCode, normalizeRoomCode } from '@workspace/game';
+import {
+  AVATAR_REACTION_EMOJIS,
+  isRoomCode,
+  normalizeRoomCode,
+} from '@workspace/game';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -20,15 +29,21 @@ import {
   RotateCcw,
   RotateCw,
   SkipForward,
-  User,
   Volume2,
   VolumeX,
   X,
 } from 'lucide-react-native';
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   AppState,
   ActivityIndicator,
+  Alert,
   Pressable,
   ScrollView,
   Share,
@@ -49,6 +64,8 @@ import Animated, {
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { UnoCardMobile } from '@/components/uno-card-mobile';
+import { PlayerAvatar } from '@/components/player-avatar';
+import { RoomSocialSheet } from '@/components/room-social-sheet';
 import { Spacing } from '@/constants/theme';
 import {
   getGameSocket,
@@ -64,6 +81,7 @@ import {
   saveActiveRoomSeat,
   savePlayerName,
 } from '@/lib/session';
+import { availableSupportCandidates } from '@/lib/social';
 import {
   playCardSound,
   playFx,
@@ -71,15 +89,13 @@ import {
   playWinnerSound,
   useSoundSystem,
 } from '@/lib/sound';
-import {
-  useRoomVoice,
-  type RoomVoiceController,
-} from '@/lib/use-room-voice';
+import { useRoomVoice, type RoomVoiceController } from '@/lib/use-room-voice';
 
 const colorOptions: PlayColor[] = ['red', 'yellow', 'green', 'blue'];
 
 function impact(kind: 'light' | 'medium' | 'selection' | 'error') {
-  if (kind === 'selection') return Haptics.selectionAsync().catch(() => undefined);
+  if (kind === 'selection')
+    return Haptics.selectionAsync().catch(() => undefined);
   if (kind === 'error') {
     return Haptics.notificationAsync(
       Haptics.NotificationFeedbackType.Warning,
@@ -105,6 +121,16 @@ export default function RoomScreen() {
   const [room, setRoom] = useState<RoomSnapshot | null>(null);
   const [player, setPlayer] = useState<Player | null>(null);
   const [playerGame, setPlayerGame] = useState<PlayerGameSnapshot | null>(null);
+  const [playerSocial, setPlayerSocial] = useState<PlayerSocialSnapshot | null>(
+    null,
+  );
+  const [supportView, setSupportView] = useState<PlayerGameSnapshot | null>(
+    null,
+  );
+  const [socialOpen, setSocialOpen] = useState(false);
+  const [seenSocialMessageIds, setSeenSocialMessageIds] = useState(
+    () => new Set<string>(),
+  );
   const [playerName, setPlayerName] = useState('');
   const [sessionReady, setSessionReady] = useState(false);
   const [connected, setConnected] = useState(false);
@@ -135,7 +161,8 @@ export default function RoomScreen() {
     playerGame?.playableCardIds ?? [],
     room?.game?.drawStack ?? null,
   );
-  const remainingAfterPlay = (playerGame?.hand.length ?? 0) - stagedCards.length;
+  const remainingAfterPlay =
+    (playerGame?.hand.length ?? 0) - stagedCards.length;
   const needsColor = stagedCards.some((card) => card.color === 'wild');
   const finishesWithForbiddenPower =
     remainingAfterPlay === 0 &&
@@ -154,6 +181,48 @@ export default function RoomScreen() {
     players: room?.players ?? [],
   });
   const activeError = voice.error ?? error;
+  const socialMessages = useMemo(
+    () => [
+      ...(room?.chatMessages ?? []),
+      ...(playerSocial?.squadChatMessages ?? []),
+    ],
+    [room?.chatMessages, playerSocial?.squadChatMessages],
+  );
+  const unreadSocialCount = useMemo(
+    () =>
+      socialMessages.filter(
+        (message) =>
+          message.playerId !== player?.id &&
+          !seenSocialMessageIds.has(message.id),
+      ).length,
+    [player?.id, seenSocialMessageIds, socialMessages],
+  );
+  const supportedPlayerId = room?.game?.supportLinks.find(
+    (link) => link.supporterPlayerId === player?.id,
+  )?.supportedPlayerId;
+  const applyRoomSnapshot = useCallback((nextRoom: RoomSnapshot) => {
+    setRoom((currentRoom) => {
+      if (
+        currentRoom?.code === nextRoom.code &&
+        nextRoom.version < currentRoom.version
+      ) {
+        return currentRoom;
+      }
+      return nextRoom;
+    });
+  }, []);
+  const markSocialMessagesRead = useCallback((messages: ChatMessage[]) => {
+    setSeenSocialMessageIds((current) => {
+      const next = new Set(current);
+      let changed = false;
+      for (const message of messages) {
+        if (next.has(message.id)) continue;
+        next.add(message.id);
+        changed = true;
+      }
+      return changed ? next : current;
+    });
+  }, []);
 
   /** +2 / +4 stack — take full penalty in one tap (server draws all at once). */
   const drawPenaltyTakeAmount = useMemo(() => {
@@ -228,9 +297,21 @@ export default function RoomScreen() {
 
             setPlayer(result.data.player);
             setActivePlayerId(result.data.player.id);
-            setRoom(result.data.room);
+            applyRoomSnapshot(result.data.room);
             setPlayerGame(result.data.playerGame ?? null);
-            void saveActiveRoomSeat(result.data.room.code, result.data.player.id);
+            setPlayerSocial(result.data.playerSocial ?? null);
+            setSeenSocialMessageIds(
+              new Set(
+                [
+                  ...result.data.room.chatMessages,
+                  ...(result.data.playerSocial?.squadChatMessages ?? []),
+                ].map((message) => message.id),
+              ),
+            );
+            void saveActiveRoomSeat(
+              result.data.room.code,
+              result.data.player.id,
+            );
           },
         );
       } catch (cause) {
@@ -245,7 +326,7 @@ export default function RoomScreen() {
         );
       }
     },
-    [playerName, roomCode],
+    [applyRoomSnapshot, playerName, roomCode],
   );
 
   useEffect(() => {
@@ -305,7 +386,7 @@ export default function RoomScreen() {
         const result = await getRoomPreview(roomCode);
         if (cancelled) return;
         if (result.ok) {
-          setRoom(result.data);
+          applyRoomSnapshot(result.data);
         } else {
           setError(result.error.message);
         }
@@ -318,7 +399,7 @@ export default function RoomScreen() {
     return () => {
       cancelled = true;
     };
-  }, [roomCode]);
+  }, [applyRoomSnapshot, roomCode]);
 
   useEffect(() => {
     const activeSocket = getGameSocket();
@@ -338,11 +419,15 @@ export default function RoomScreen() {
 
     function handleSnapshot(snapshot: RoomSnapshot) {
       if (snapshot.code !== roomCode) return;
-      setRoom(snapshot);
+      applyRoomSnapshot(snapshot);
     }
 
     function handlePlayerState(snapshot: PlayerGameSnapshot) {
       setPlayerGame(snapshot);
+    }
+
+    function handlePlayerSocial(snapshot: PlayerSocialSnapshot) {
+      setPlayerSocial(snapshot);
     }
 
     function handleError(nextError: GameError) {
@@ -353,6 +438,7 @@ export default function RoomScreen() {
     activeSocket.on('disconnect', handleDisconnect);
     activeSocket.on('room:snapshot', handleSnapshot);
     activeSocket.on('game:playerState', handlePlayerState);
+    activeSocket.on('room:playerSocial', handlePlayerSocial);
     activeSocket.on('room:error', handleError);
     if (!activeSocket.connected) activeSocket.connect();
 
@@ -361,9 +447,30 @@ export default function RoomScreen() {
       activeSocket.off('disconnect', handleDisconnect);
       activeSocket.off('room:snapshot', handleSnapshot);
       activeSocket.off('game:playerState', handlePlayerState);
+      activeSocket.off('room:playerSocial', handlePlayerSocial);
       activeSocket.off('room:error', handleError);
     };
-  }, [joinRoom, playerName, roomCode, sessionReady]);
+  }, [applyRoomSnapshot, joinRoom, playerName, roomCode, sessionReady]);
+
+  useEffect(() => {
+    if (!socket || !supportedPlayerId || room?.status !== 'playing') {
+      setSupportView(null);
+      return;
+    }
+
+    let cancelled = false;
+    socket.emit('game:getSupportView', (result) => {
+      if (cancelled) return;
+      setSupportView(
+        result.ok && result.data?.playerId === supportedPlayerId
+          ? result.data
+          : null,
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [room?.status, room?.version, socket, supportedPlayerId]);
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (nextState) => {
@@ -447,7 +554,9 @@ export default function RoomScreen() {
           break;
         case 'uno-caught':
           playFx('blocked', { volume: 0.5 });
-          void impact(nextEvent.targetPlayerId === player?.id ? 'error' : 'medium');
+          void impact(
+            nextEvent.targetPlayerId === player?.id ? 'error' : 'medium',
+          );
           break;
         case 'player-eliminated':
           playFx('blocked', { volume: 0.6 });
@@ -492,6 +601,7 @@ export default function RoomScreen() {
     event:
       | 'room:setReady'
       | 'room:start'
+      | 'room:restart'
       | 'game:drawOne'
       | 'game:endTurn'
       | 'game:takeDrawPenalty'
@@ -509,7 +619,9 @@ export default function RoomScreen() {
     socket.emit(event, handleRoomAck);
   }
 
-  function handleRoomAck(result: { ok: true; data: RoomSnapshot } | { ok: false; error: GameError }) {
+  function handleRoomAck(
+    result: { ok: true; data: RoomSnapshot } | { ok: false; error: GameError },
+  ) {
     if (!result.ok) {
       setError(result.error.message);
       void impact('error');
@@ -517,7 +629,46 @@ export default function RoomScreen() {
       return;
     }
 
-    setRoom(result.data);
+    applyRoomSnapshot(result.data);
+  }
+
+  function sendChatMessage(input: SendChatMessageInput) {
+    if (!socket) return;
+    setError(null);
+    socket.emit('room:sendChatMessage', input, handleRoomAck);
+  }
+
+  function startVoteKick(targetPlayerId: string) {
+    if (!socket) return;
+    setError(null);
+    socket.emit('room:startVoteKick', { targetPlayerId }, handleRoomAck);
+  }
+
+  function castVoteKick(voteKickId: string, choice: VoteKickChoice) {
+    if (!socket) return;
+    setError(null);
+    socket.emit('room:castVoteKick', { voteKickId, choice }, handleRoomAck);
+  }
+
+  function supportPlayer(supportedId: string) {
+    if (!socket) return;
+    setError(null);
+    socket.emit(
+      'game:supportPlayer',
+      { supportedPlayerId: supportedId },
+      handleRoomAck,
+    );
+  }
+
+  function kickSupporter(supporterPlayerId: string) {
+    if (!socket) return;
+    setError(null);
+    socket.emit('game:kickSupporter', { supporterPlayerId }, handleRoomAck);
+  }
+
+  function sendAvatarReaction(body: AvatarReactionEmoji) {
+    if (!socket) return;
+    socket.emit('game:sendAvatarEmojiReaction', { body }, handleRoomAck);
   }
 
   function emitStageCards(cardIds: string[]) {
@@ -531,7 +682,7 @@ export default function RoomScreen() {
       }
 
       setError(null);
-      setRoom(result.data);
+      applyRoomSnapshot(result.data);
     });
   }
 
@@ -621,7 +772,7 @@ export default function RoomScreen() {
         }
 
         setStagedCardIds([]);
-        setRoom(result.data);
+        applyRoomSnapshot(result.data);
       },
     );
   }
@@ -653,8 +804,13 @@ export default function RoomScreen() {
     return (
       <ScreenShell>
         <Text style={styles.title}>Bad invite</Text>
-        <Text style={styles.copy}>This link is missing a 6-character room code.</Text>
-        <Pressable onPress={() => router.replace('/')} style={styles.primaryButton}>
+        <Text style={styles.copy}>
+          This link is missing a 6-character room code.
+        </Text>
+        <Pressable
+          onPress={() => router.replace('/')}
+          style={styles.primaryButton}
+        >
           <Text style={styles.primaryButtonLabel}>Back to lobby</Text>
         </Pressable>
       </ScreenShell>
@@ -663,65 +819,87 @@ export default function RoomScreen() {
 
   if (isPlaying && room && player) {
     return (
-      <GamePlayScreen
-        room={room}
-        player={player}
-        playerGame={playerGame}
-        soundEnabled={sound.enabled}
-        onToggleSound={() => {
-          const next = !sound.enabled;
-          sound.setEnabled(next);
-          playFx(next ? 'toggleOn' : 'toggleOff', { volume: 0.5 });
-          void impact('light');
-        }}
-        onBack={() => router.back()}
-        voice={voice}
-        stagedCards={stagedCards}
-        stagedCardIds={stagedCardIds}
-        canSubmitStagedCards={canSubmitStagedCards}
-        canStageCard={(card) =>
-          canStageCardWithSelection(
-            card,
-            stagedCards,
-            playerGame?.playableCardIds ?? [],
-            Boolean(isMyTurn),
-            room.game?.drawStack ?? null,
-          )
-        }
-        onToggleStage={toggleStagedCard}
-        onClearStage={clearStagedCards}
-        onPlay={playStagedCards}
-        onDraw={() => {
-          void impact('light');
-          playCardSound('draw');
-          emitRoomCommand('game:drawOne');
-        }}
-        drawPenaltyTakeAmount={drawPenaltyTakeAmount}
-        roulettePickupColor={roulettePickupColor}
-        onTakeDrawPenalty={() => {
-          void impact('medium');
-          playCardSound('draw');
-          emitRoomCommand('game:takeDrawPenalty');
-        }}
-        onRoulettePickup={() => {
-          void impact('light');
-          playCardSound('draw');
-          emitRoomCommand('game:drawRouletteCard');
-        }}
-        onEndTurn={() => {
-          void impact('light');
-          playFx('successBling', { volume: 0.5 });
-          emitRoomCommand('game:endTurn');
-        }}
-        chosenColor={chosenColor}
-        setChosenColor={(color) => {
-          setChosenColor(color);
-          void impact('selection');
-          playFx('itemSelect', { volume: 0.4 });
-        }}
-        compact={height < 760 || width < 390}
-        error={activeError}
-      />
+      <>
+        <GamePlayScreen
+          room={room}
+          player={player}
+          playerGame={playerGame}
+          playerSocial={playerSocial}
+          supportView={supportView}
+          soundEnabled={sound.enabled}
+          onToggleSound={() => {
+            const next = !sound.enabled;
+            sound.setEnabled(next);
+            playFx(next ? 'toggleOn' : 'toggleOff', { volume: 0.5 });
+            void impact('light');
+          }}
+          onBack={() => router.back()}
+          onOpenSocial={() => setSocialOpen(true)}
+          unreadSocialCount={unreadSocialCount}
+          onSupportPlayer={supportPlayer}
+          onSendAvatarReaction={sendAvatarReaction}
+          voice={voice}
+          stagedCards={stagedCards}
+          stagedCardIds={stagedCardIds}
+          canSubmitStagedCards={canSubmitStagedCards}
+          canStageCard={(card) =>
+            canStageCardWithSelection(
+              card,
+              stagedCards,
+              playerGame?.playableCardIds ?? [],
+              Boolean(isMyTurn),
+              room.game?.drawStack ?? null,
+            )
+          }
+          onToggleStage={toggleStagedCard}
+          onClearStage={clearStagedCards}
+          onPlay={playStagedCards}
+          onDraw={() => {
+            void impact('light');
+            playCardSound('draw');
+            emitRoomCommand('game:drawOne');
+          }}
+          drawPenaltyTakeAmount={drawPenaltyTakeAmount}
+          roulettePickupColor={roulettePickupColor}
+          onTakeDrawPenalty={() => {
+            void impact('medium');
+            playCardSound('draw');
+            emitRoomCommand('game:takeDrawPenalty');
+          }}
+          onRoulettePickup={() => {
+            void impact('light');
+            playCardSound('draw');
+            emitRoomCommand('game:drawRouletteCard');
+          }}
+          onEndTurn={() => {
+            void impact('light');
+            playFx('successBling', { volume: 0.5 });
+            emitRoomCommand('game:endTurn');
+          }}
+          chosenColor={chosenColor}
+          setChosenColor={(color) => {
+            setChosenColor(color);
+            void impact('selection');
+            playFx('itemSelect', { volume: 0.4 });
+          }}
+          compact={height < 760 || width < 390}
+          error={activeError}
+        />
+        <RoomSocialSheet
+          visible={socialOpen}
+          room={room}
+          selfPlayerId={player.id}
+          playerSocial={playerSocial}
+          seenMessageIds={seenSocialMessageIds}
+          onClose={() => setSocialOpen(false)}
+          onReadMessages={markSocialMessagesRead}
+          onSendMessage={sendChatMessage}
+          onStartVoteKick={startVoteKick}
+          onCastVoteKick={castVoteKick}
+          onKickSupporter={kickSupporter}
+          onReact={sendAvatarReaction}
+        />
+      </>
     );
   }
 
@@ -773,10 +951,20 @@ export default function RoomScreen() {
                 onCopyInvite={() => void copyInvite()}
                 inviteCopied={inviteCopied}
                 voice={voice}
+                onOpenSocial={() => setSocialOpen(true)}
+                unreadSocialCount={unreadSocialCount}
+              />
+            ) : room.status === 'finished' && player ? (
+              <ResultsPanel
+                room={room}
+                selfPlayerId={player.id}
+                onRestart={() => emitRoomCommand('room:restart')}
+                onOpenSocial={() => setSocialOpen(true)}
+                unreadSocialCount={unreadSocialCount}
               />
             ) : (
               <View style={styles.panel}>
-                <Text style={styles.sectionTitle}>This hand is complete.</Text>
+                <Text style={styles.sectionTitle}>The table is syncing.</Text>
               </View>
             )
           ) : null}
@@ -785,7 +973,22 @@ export default function RoomScreen() {
             <Text style={styles.error}>{activeError}</Text>
           ) : null}
         </ScrollView>
-
+        {room && player ? (
+          <RoomSocialSheet
+            visible={socialOpen}
+            room={room}
+            selfPlayerId={player.id}
+            playerSocial={playerSocial}
+            seenMessageIds={seenSocialMessageIds}
+            onClose={() => setSocialOpen(false)}
+            onReadMessages={markSocialMessagesRead}
+            onSendMessage={sendChatMessage}
+            onStartVoteKick={startVoteKick}
+            onCastVoteKick={castVoteKick}
+            onKickSupporter={kickSupporter}
+            onReact={sendAvatarReaction}
+          />
+        ) : null}
       </SafeAreaView>
     </View>
   );
@@ -794,7 +997,9 @@ export default function RoomScreen() {
 function ScreenShell({ children }: { children: React.ReactNode }) {
   return (
     <View style={styles.root}>
-      <SafeAreaView style={[styles.safe, styles.shell]}>{children}</SafeAreaView>
+      <SafeAreaView style={[styles.safe, styles.shell]}>
+        {children}
+      </SafeAreaView>
     </View>
   );
 }
@@ -812,7 +1017,9 @@ function StatusStrip({
       <Text style={styles.statusText}>{connected ? 'Live' : 'Connecting'}</Text>
       <Text style={styles.statusDivider}>·</Text>
       <Text style={styles.statusText}>
-        {room ? `${room.players.length}/${room.houseRules.maxPlayers} seated` : 'Loading table'}
+        {room
+          ? `${room.players.length}/${room.houseRules.maxPlayers} seated`
+          : 'Loading table'}
       </Text>
     </View>
   );
@@ -878,6 +1085,8 @@ function LobbyPanel({
   onCopyInvite,
   inviteCopied,
   voice,
+  onOpenSocial,
+  unreadSocialCount,
 }: {
   room: RoomSnapshot;
   player: Player | null;
@@ -887,9 +1096,15 @@ function LobbyPanel({
   onCopyInvite: () => void;
   inviteCopied: boolean;
   voice: RoomVoiceController;
+  onOpenSocial: () => void;
+  unreadSocialCount: number;
 }) {
   const self = room.players.find((candidate) => candidate.id === player?.id);
-  const nonHostPlayers = room.players.filter(
+  const activeLobbyPlayers = room.players.filter(
+    (candidate) =>
+      !room.voteKick.lobbyVoteKickedPlayerIds.includes(candidate.id),
+  );
+  const nonHostPlayers = activeLobbyPlayers.filter(
     (candidate) => candidate.id !== room.hostPlayerId,
   );
   const readyNonHostCount = nonHostPlayers.filter(
@@ -897,14 +1112,20 @@ function LobbyPanel({
   ).length;
   const allNonHostsReady =
     nonHostPlayers.length > 0 && readyNonHostCount === nonHostPlayers.length;
-  const canStart = isHost && room.players.length >= 2 && allNonHostsReady;
+  const canStart =
+    isHost &&
+    activeLobbyPlayers.length >= 2 &&
+    allNonHostsReady &&
+    !room.voteKick.activeVoteKickId;
   const hostIsWaitingAlone = isHost && nonHostPlayers.length === 0;
   const startLabel =
-    room.players.length < 2
+    activeLobbyPlayers.length < 2
       ? 'Need 2 players'
-      : canStart
-        ? 'Start game'
-        : `${readyNonHostCount}/${nonHostPlayers.length} ready`;
+      : room.voteKick.activeVoteKickId
+        ? 'Vote in progress'
+        : canStart
+          ? 'Start game'
+          : `${readyNonHostCount}/${nonHostPlayers.length} ready`;
   const hostActionLabel = hostIsWaitingAlone
     ? inviteCopied
       ? 'Copied'
@@ -928,22 +1149,47 @@ function LobbyPanel({
           const candidateIsHost = candidate.id === room.hostPlayerId;
           const candidateReady = candidateIsHost || candidate.ready;
           const voiceState = voice.voiceStates[candidate.id];
+          const voteKicked = room.voteKick.lobbyVoteKickedPlayerIds.includes(
+            candidate.id,
+          );
 
           return (
-            <View key={candidate.id} style={styles.playerRow}>
-              <View style={styles.avatar}>
-                <Text style={styles.avatarText}>{candidate.name.slice(0, 1)}</Text>
-              </View>
+            <View
+              key={candidate.id}
+              style={[styles.playerRow, voteKicked && styles.playerRowOut]}
+            >
+              <PlayerAvatar
+                roomCode={room.code}
+                players={room.players}
+                playerId={candidate.id}
+                size={36}
+              />
               <View style={styles.playerMeta}>
                 <Text style={styles.playerName}>{candidate.name}</Text>
                 <Text style={styles.playerSubtext}>
-                  {candidate.connected ? 'Online' : 'Away'}
+                  {voteKicked
+                    ? 'Vote-kicked for this match'
+                    : candidate.connected
+                      ? 'Online'
+                      : 'Away'}
                   {candidateIsHost ? ' · Host' : ''}
                 </Text>
               </View>
               <VoiceStatusPill state={voiceState} />
-              <Text style={[styles.readyText, candidateReady && styles.ready]}>
-                {candidateIsHost ? 'Host' : candidate.ready ? 'Ready' : 'Waiting'}
+              <Text
+                style={[
+                  styles.readyText,
+                  candidateReady && !voteKicked && styles.ready,
+                  voteKicked && styles.outText,
+                ]}
+              >
+                {voteKicked
+                  ? 'Out'
+                  : candidateIsHost
+                    ? 'Host'
+                    : candidate.ready
+                      ? 'Ready'
+                      : 'Waiting'}
               </Text>
             </View>
           );
@@ -953,7 +1199,13 @@ function LobbyPanel({
       {player ? (
         <View style={styles.lobbyActions}>
           <LobbyVoiceButton voice={voice} />
-          {!isHost ? (
+          <SocialButton
+            onPress={onOpenSocial}
+            unreadCount={unreadSocialCount}
+            compact
+          />
+          {!isHost &&
+          !room.voteKick.lobbyVoteKickedPlayerIds.includes(player.id) ? (
             <Pressable
               onPress={onReady}
               style={({ pressed }) => [
@@ -987,13 +1239,145 @@ function LobbyPanel({
   );
 }
 
+function ResultsPanel({
+  room,
+  selfPlayerId,
+  onRestart,
+  onOpenSocial,
+  unreadSocialCount,
+}: {
+  room: RoomSnapshot;
+  selfPlayerId: string;
+  onRestart: () => void;
+  onOpenSocial: () => void;
+  unreadSocialCount: number;
+}) {
+  const game = room.game;
+  const placements = [...(game?.winnerPlacements ?? [])].sort(
+    (left, right) => left.position - right.position,
+  );
+  const placedIds = new Set(placements.map((placement) => placement.playerId));
+  const orderedPlayers = [
+    ...placements
+      .map((placement) =>
+        room.players.find((player) => player.id === placement.playerId),
+      )
+      .filter((player): player is Player => Boolean(player)),
+    ...room.players.filter((player) => !placedIds.has(player.id)),
+  ];
+
+  return (
+    <View style={styles.panel}>
+      <View style={styles.sectionHeader}>
+        <View>
+          <Text style={styles.panelEyebrow}>Match complete</Text>
+          <Text style={styles.sectionTitle}>Final table</Text>
+        </View>
+        <SocialButton onPress={onOpenSocial} unreadCount={unreadSocialCount} />
+      </View>
+
+      <View style={styles.resultList}>
+        {orderedPlayers.map((candidate) => {
+          const gamePlayer = game?.players.find(
+            (state) => state.playerId === candidate.id,
+          );
+          const placement = gamePlayer?.winnerPlacement?.position;
+          const status = !gamePlayer
+            ? 'Ready for next match'
+            : placement
+              ? placement === 1
+                ? 'Winner'
+                : `Finished #${placement}`
+              : gamePlayer.voteKicked
+                ? 'Vote-kicked'
+                : gamePlayer.waiting
+                  ? 'Joined for next match'
+                  : 'Eliminated';
+          return (
+            <View key={candidate.id} style={styles.resultRow}>
+              <PlayerAvatar
+                roomCode={room.code}
+                players={room.players}
+                playerId={candidate.id}
+                size={42}
+              />
+              <View style={styles.playerMeta}>
+                <Text style={styles.playerName}>
+                  {candidate.name}
+                  {candidate.id === selfPlayerId ? ' · You' : ''}
+                </Text>
+                <Text style={styles.playerSubtext}>{status}</Text>
+              </View>
+              <Text
+                style={[
+                  styles.resultPlace,
+                  placement === 1 && styles.resultPlaceWinner,
+                ]}
+              >
+                {placement ? `#${placement}` : '—'}
+              </Text>
+            </View>
+          );
+        })}
+      </View>
+
+      {game?.supportRecap ? <SupportRecapPanel room={room} /> : null}
+
+      <Pressable onPress={onRestart} style={styles.primaryButton}>
+        <Text style={styles.primaryButtonLabel}>Play another match</Text>
+      </Pressable>
+    </View>
+  );
+}
+
+function SupportRecapPanel({ room }: { room: RoomSnapshot }) {
+  const recap = room.game?.supportRecap;
+  if (!recap || (recap.journey.length === 0 && recap.titles.length === 0)) {
+    return null;
+  }
+  const name = (playerId: string) =>
+    room.players.find((player) => player.id === playerId)?.name ?? 'Player';
+  return (
+    <View style={styles.recapPanel}>
+      <Text style={styles.recapTitle}>Support recap</Text>
+      {recap.journey.map((entry) => (
+        <Text
+          key={`${entry.supporterPlayerId}:${entry.supportedPlayerId}:${entry.createdAt}`}
+          style={styles.recapCopy}
+        >
+          {name(entry.supporterPlayerId)} → {name(entry.supportedPlayerId)}
+          {entry.endReason === 'supporter-kicked'
+            ? ' · removed from squad'
+            : entry.endReason === 'supported-player-inactive'
+              ? ' · run ended'
+              : ''}
+        </Text>
+      ))}
+      {recap.titles.map((title) => (
+        <Text
+          key={`${title.label}:${title.playerId}`}
+          style={styles.recapAward}
+        >
+          {title.label}: {name(title.playerId)} · {title.description}
+        </Text>
+      ))}
+    </View>
+  );
+}
+
 function GamePlayScreen({
   room,
   player,
   playerGame,
+  playerSocial,
+  supportView,
   soundEnabled,
   onToggleSound,
   onBack,
+  onOpenSocial,
+  unreadSocialCount,
+  onSupportPlayer,
+  onSendAvatarReaction,
   voice,
   stagedCards,
   stagedCardIds,
@@ -1016,9 +1400,15 @@ function GamePlayScreen({
   room: RoomSnapshot;
   player: Player;
   playerGame: PlayerGameSnapshot | null;
+  playerSocial: PlayerSocialSnapshot | null;
+  supportView: PlayerGameSnapshot | null;
   soundEnabled: boolean;
   onToggleSound: () => void;
   onBack: () => void;
+  onOpenSocial: () => void;
+  unreadSocialCount: number;
+  onSupportPlayer: (supportedPlayerId: string) => void;
+  onSendAvatarReaction: (body: AvatarReactionEmoji) => void;
   voice: RoomVoiceController;
   stagedCards: Card[];
   stagedCardIds: string[];
@@ -1043,6 +1433,15 @@ function GamePlayScreen({
     (candidate) => candidate.id === game?.turnPlayerId,
   );
   const isMyTurn = game?.turnPlayerId === player.id;
+  const selfGame = game?.players.find(
+    (candidate) => candidate.playerId === player.id,
+  );
+  const inactive = Boolean(
+    selfGame?.eliminated ||
+    selfGame?.voteKicked ||
+    selfGame?.waiting ||
+    selfGame?.winnerPlacement,
+  );
   const needsColor = stagedCards.some((card) => card.color === 'wild');
   const rouletteHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
@@ -1065,7 +1464,7 @@ function GamePlayScreen({
     ? stagedCards
     : stagedPlayHidden
       ? []
-    : (game?.stagedPlay?.cards ?? []);
+      : (game?.stagedPlay?.cards ?? []);
   const canEditStaging =
     isMyTurn &&
     game?.pendingChoice?.type !== 'roulette-draw' &&
@@ -1073,8 +1472,7 @@ function GamePlayScreen({
 
   const rouletteActive = Boolean(roulettePickupColor);
 
-  const deckDisabled =
-    rouletteActive ? false : !playerGame?.canDraw;
+  const deckDisabled = rouletteActive ? false : !playerGame?.canDraw;
 
   const deckPressHandler = rouletteActive ? onRoulettePickup : onDraw;
 
@@ -1109,11 +1507,7 @@ function GamePlayScreen({
         rouletteHideTimerRef.current = null;
       }
     };
-  }, [
-    game?.pendingChoice,
-    game?.stagedPlay,
-    stagedPlayKey,
-  ]);
+  }, [game?.pendingChoice, game?.stagedPlay, stagedPlayKey]);
 
   return (
     <View style={styles.gameRoot}>
@@ -1123,6 +1517,8 @@ function GamePlayScreen({
             soundEnabled={soundEnabled}
             onToggleSound={onToggleSound}
             onBack={onBack}
+            onOpenSocial={onOpenSocial}
+            unreadSocialCount={unreadSocialCount}
             voice={voice}
           />
 
@@ -1207,42 +1603,59 @@ function GamePlayScreen({
             </Text>
           ) : null}
 
-          <View style={[styles.handDock, compact && styles.handDockCompact]}>
-            <ScrollView
-              horizontal
-              style={styles.handScrollView}
-              removeClippedSubviews={false}
-              showsHorizontalScrollIndicator={false}
-              contentContainerStyle={styles.handScroll}
-            >
-              {(playerGame?.hand ?? [])
-                .filter((card) => !stagedCardIds.includes(card.id))
-                .map((card) => {
-                  const stageable = canStageCard(card);
-                  return (
-                    <DraggableHandCard
-                      key={card.id}
-                      card={card}
-                      disabled={!isMyTurn || !stageable}
-                      onToggle={onToggleStage}
-                    />
-                  );
-                })}
-            </ScrollView>
-          </View>
+          <AvatarReactionBar onReact={onSendAvatarReaction} />
 
-          <ActionBar
-            stagedCount={stagedCards.length}
-            canPlay={canSubmitStagedCards}
-            playerGame={playerGame}
-            drawPenaltyTakeAmount={drawPenaltyTakeAmount}
-            roulettePickupColor={roulettePickupColor}
-            onPlay={onPlay}
-            onDraw={onDraw}
-            onTakeDrawPenalty={onTakeDrawPenalty}
-            onRoulettePickup={onRoulettePickup}
-            onEndTurn={onEndTurn}
-          />
+          {inactive ? (
+            <InactivePlayerDock
+              room={room}
+              selfPlayerId={player.id}
+              selfGame={selfGame ?? null}
+              playerSocial={playerSocial}
+              supportView={supportView}
+              onSupportPlayer={onSupportPlayer}
+            />
+          ) : (
+            <>
+              <View
+                style={[styles.handDock, compact && styles.handDockCompact]}
+              >
+                <ScrollView
+                  horizontal
+                  style={styles.handScrollView}
+                  removeClippedSubviews={false}
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.handScroll}
+                >
+                  {(playerGame?.hand ?? [])
+                    .filter((card) => !stagedCardIds.includes(card.id))
+                    .map((card) => {
+                      const stageable = canStageCard(card);
+                      return (
+                        <DraggableHandCard
+                          key={card.id}
+                          card={card}
+                          disabled={!isMyTurn || !stageable}
+                          onToggle={onToggleStage}
+                        />
+                      );
+                    })}
+                </ScrollView>
+              </View>
+
+              <ActionBar
+                stagedCount={stagedCards.length}
+                canPlay={canSubmitStagedCards}
+                playerGame={playerGame}
+                drawPenaltyTakeAmount={drawPenaltyTakeAmount}
+                roulettePickupColor={roulettePickupColor}
+                onPlay={onPlay}
+                onDraw={onDraw}
+                onTakeDrawPenalty={onTakeDrawPenalty}
+                onRoulettePickup={onRoulettePickup}
+                onEndTurn={onEndTurn}
+              />
+            </>
+          )}
         </View>
       </SafeAreaView>
     </View>
@@ -1255,7 +1668,13 @@ function DeckPile({ drawPileCount }: { drawPileCount: number }) {
       <View style={[styles.deckLayer, styles.deckLayerBack]} />
       <View style={[styles.deckLayer, styles.deckLayerMid]} />
       <View style={styles.deckCardFace}>
-        <UnoCardMobile card={fallbackCard} size="sm" faceDown static noHaptics />
+        <UnoCardMobile
+          card={fallbackCard}
+          size="sm"
+          faceDown
+          static
+          noHaptics
+        />
       </View>
       <Text style={styles.deckCount}>{drawPileCount}</Text>
     </View>
@@ -1304,11 +1723,15 @@ function TableControls({
   soundEnabled,
   onBack,
   onToggleSound,
+  onOpenSocial,
+  unreadSocialCount,
   voice,
 }: {
   soundEnabled: boolean;
   onBack: () => void;
   onToggleSound: () => void;
+  onOpenSocial: () => void;
+  unreadSocialCount: number;
   voice: RoomVoiceController;
 }) {
   const micOn = Boolean(voice.enabled && !voice.muted);
@@ -1326,6 +1749,11 @@ function TableControls({
       </Pressable>
 
       <View style={styles.chromeControls}>
+        <SocialButton
+          onPress={onOpenSocial}
+          unreadCount={unreadSocialCount}
+          compact
+        />
         <Pressable
           onPress={voice.toggle}
           disabled={voice.connecting}
@@ -1440,6 +1868,17 @@ function SeatRing({
         const isSelf = candidate.id === selfPlayerId;
         const isTurn = game?.turnPlayerId === candidate.id;
         const voiceState = voiceStates[candidate.id];
+        const supporterCount =
+          game?.supportLinks.filter(
+            (link) => link.supportedPlayerId === candidate.id,
+          ).length ?? 0;
+        const latestReaction = [...(game?.avatarEmojiReactions ?? [])]
+          .reverse()
+          .find(
+            (reaction) =>
+              (reaction.supportedPlayerId ?? reaction.playerId) ===
+              candidate.id,
+          );
         const seatStyle: ViewStyle = {
           left: `${position.left}%`,
           top: `${position.top}%`,
@@ -1473,11 +1912,13 @@ function SeatRing({
                 isTurn && styles.seatAvatarTurn,
               ]}
             >
-              <User
-                color={isTurn ? '#141006' : 'rgba(255,255,255,0.72)'}
-                size={denseSeats ? 15 : roomySeats ? 18 : 16}
-                strokeWidth={2.1}
+              <PlayerAvatar
+                roomCode={room.code}
+                players={room.players}
+                playerId={candidate.id}
+                size={denseSeats ? 28 : roomySeats ? 38 : 32}
               />
+              <SeatReaction reaction={latestReaction} />
               <View
                 style={[
                   styles.seatCountPill,
@@ -1508,10 +1949,44 @@ function SeatRing({
               >
                 {isSelf ? 'You' : candidate.name}
               </Text>
+              {supporterCount > 0 ? (
+                <Text style={styles.seatSupporters}>+{supporterCount} 🙌</Text>
+              ) : null}
             </View>
           </View>
         );
       })}
+    </View>
+  );
+}
+
+function SeatReaction({
+  reaction,
+}: {
+  reaction:
+    | NonNullable<RoomSnapshot['game']>['avatarEmojiReactions'][number]
+    | undefined;
+}) {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    if (!reaction) {
+      setVisible(false);
+      return;
+    }
+    const remaining = 3500 - (Date.now() - Date.parse(reaction.createdAt));
+    if (remaining <= 0) {
+      setVisible(false);
+      return;
+    }
+    setVisible(true);
+    const timer = setTimeout(() => setVisible(false), remaining);
+    return () => clearTimeout(timer);
+  }, [reaction]);
+
+  if (!reaction || !visible) return null;
+  return (
+    <View style={styles.seatReaction}>
+      <Text style={styles.seatReactionText}>{reaction.body}</Text>
     </View>
   );
 }
@@ -1544,6 +2019,38 @@ function LobbyVoiceButton({ voice }: { voice: RoomVoiceController }) {
           strokeWidth={2.5}
         />
       )}
+    </Pressable>
+  );
+}
+
+function SocialButton({
+  onPress,
+  unreadCount,
+  compact = false,
+}: {
+  onPress: () => void;
+  unreadCount: number;
+  compact?: boolean;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={compact ? styles.socialButtonCompact : styles.socialButton}
+      accessibilityRole="button"
+      accessibilityLabel={
+        unreadCount > 0
+          ? `Open chat, ${unreadCount} unread messages`
+          : 'Open chat'
+      }
+    >
+      <Text style={styles.socialButtonLabel}>Chat</Text>
+      {unreadCount > 0 ? (
+        <View style={styles.unreadBadge}>
+          <Text style={styles.unreadBadgeText}>
+            {unreadCount > 99 ? '99+' : unreadCount}
+          </Text>
+        </View>
+      ) : null}
     </Pressable>
   );
 }
@@ -1654,6 +2161,150 @@ function getVoiceActionLabel(voice: RoomVoiceController) {
   return 'Mute microphone';
 }
 
+function AvatarReactionBar({
+  onReact,
+}: {
+  onReact: (body: AvatarReactionEmoji) => void;
+}) {
+  return (
+    <View style={styles.avatarReactionBar}>
+      {AVATAR_REACTION_EMOJIS.map((emoji) => (
+        <Pressable
+          key={emoji}
+          onPress={() => onReact(emoji)}
+          style={styles.avatarReactionButton}
+          accessibilityLabel={`React ${emoji}`}
+        >
+          <Text style={styles.avatarReactionEmoji}>{emoji}</Text>
+        </Pressable>
+      ))}
+    </View>
+  );
+}
+
+function InactivePlayerDock({
+  room,
+  selfPlayerId,
+  selfGame,
+  playerSocial,
+  supportView,
+  onSupportPlayer,
+}: {
+  room: RoomSnapshot;
+  selfPlayerId: string;
+  selfGame: NonNullable<RoomSnapshot['game']>['players'][number] | null;
+  playerSocial: PlayerSocialSnapshot | null;
+  supportView: PlayerGameSnapshot | null;
+  onSupportPlayer: (supportedPlayerId: string) => void;
+}) {
+  const supportLink = room.game?.supportLinks.find(
+    (link) => link.supporterPlayerId === selfPlayerId,
+  );
+  const supportedPlayer = room.players.find(
+    (player) => player.id === supportLink?.supportedPlayerId,
+  );
+  const candidates = availableSupportCandidates(
+    room.game?.players ?? [],
+    playerSocial?.blockedSupportedPlayerIds ?? [],
+    selfPlayerId,
+  );
+  const status = selfGame?.voteKicked
+    ? 'Vote-kicked'
+    : selfGame?.waiting
+      ? 'Waiting for next match'
+      : selfGame?.winnerPlacement
+        ? `Finished #${selfGame.winnerPlacement.position}`
+        : 'Eliminated';
+
+  function confirmSupport(playerId: string) {
+    const candidate = room.players.find((player) => player.id === playerId);
+    if (!candidate) return;
+    Alert.alert(
+      `Ride with ${candidate.name}?`,
+      `You’ll see ${candidate.name}’s hand and join their private Squad chat. You cannot switch while they remain active.`,
+      [
+        { text: 'Not yet', style: 'cancel' },
+        {
+          text: 'Support',
+          onPress: () => onSupportPlayer(candidate.id),
+        },
+      ],
+    );
+  }
+
+  return (
+    <View style={styles.inactiveDock}>
+      <View style={styles.inactiveHeader}>
+        <View>
+          <Text style={styles.inactiveStatus}>{status}</Text>
+          <Text style={styles.inactiveCopy}>
+            {supportedPlayer
+              ? `Supporting ${supportedPlayer.name} · read-only hand`
+              : 'Choose an active player to support.'}
+          </Text>
+        </View>
+        {supportedPlayer ? (
+          <PlayerAvatar
+            roomCode={room.code}
+            players={room.players}
+            playerId={supportedPlayer.id}
+            size={36}
+          />
+        ) : null}
+      </View>
+
+      {supportView ? (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.supportHand}
+        >
+          {supportView.hand.map((card) => (
+            <View key={card.id} style={styles.supportCard}>
+              <UnoCardMobile card={card} size="sm" static noHaptics />
+            </View>
+          ))}
+        </ScrollView>
+      ) : !supportLink && candidates.length > 0 ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <View style={styles.supportCandidates}>
+            {candidates.map((candidate) => {
+              const identity = room.players.find(
+                (player) => player.id === candidate.playerId,
+              );
+              if (!identity) return null;
+              return (
+                <Pressable
+                  key={candidate.playerId}
+                  onPress={() => confirmSupport(candidate.playerId)}
+                  style={styles.supportCandidate}
+                >
+                  <PlayerAvatar
+                    roomCode={room.code}
+                    players={room.players}
+                    playerId={candidate.playerId}
+                    size={30}
+                  />
+                  <Text style={styles.supportCandidateName}>
+                    {identity.name}
+                  </Text>
+                  <Text style={styles.supportCandidateAction}>Support</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </ScrollView>
+      ) : (
+        <Text style={styles.inactiveEmpty}>
+          {supportLink
+            ? 'Updating the supported hand…'
+            : 'No active players are available.'}
+        </Text>
+      )}
+    </View>
+  );
+}
+
 function StagingTray({
   cards,
   canEdit,
@@ -1698,12 +2349,7 @@ function StagingTray({
               ]}
             >
               <View style={styles.stagedCardScale}>
-                <UnoCardMobile
-                  card={card}
-                  size="sm"
-                  static
-                  noHaptics
-                />
+                <UnoCardMobile card={card} size="sm" static noHaptics />
               </View>
             </Pressable>
           ))
@@ -1755,8 +2401,7 @@ function DraggableHandCard({
       translateY.value = event.translationY;
     })
     .onEnd((event) => {
-      const shouldStage =
-        event.translationY < -62 || event.velocityY < -620;
+      const shouldStage = event.translationY < -62 || event.velocityY < -620;
       translateX.value = withSpring(0, { damping: 18, stiffness: 260 });
       translateY.value = withSpring(0, { damping: 18, stiffness: 260 });
       scale.value = withSpring(1, { damping: 18, stiffness: 260 });
@@ -1828,8 +2473,7 @@ function ActionBar({
   const primaryEnabled = hasStagedCards ? canPlay : canPass;
   const PrimaryIcon = hasStagedCards ? Play : SkipForward;
 
-  const isRoulettePickup =
-    roulettePickupColor !== null && !hasStagedCards;
+  const isRoulettePickup = roulettePickupColor !== null && !hasStagedCards;
   const isDrawPenaltyTake =
     !isRoulettePickup &&
     drawPenaltyTakeAmount !== null &&
@@ -1865,9 +2509,7 @@ function ActionBar({
         ]}
       >
         <Plus
-          color={
-            isDrawPenaltyTake || isRoulettePickup ? '#ffd7d7' : '#fff8ea'
-          }
+          color={isDrawPenaltyTake || isRoulettePickup ? '#ffd7d7' : '#fff8ea'}
           size={17}
           strokeWidth={2.6}
         />
@@ -2000,9 +2642,9 @@ function canStackDrawCards(
 
     return Boolean(
       amount &&
-        amount >= drawStack.minimum &&
-        group &&
-        playableGroups.has(group),
+      amount >= drawStack.minimum &&
+      group &&
+      playableGroups.has(group),
     );
   });
 }
@@ -2296,7 +2938,8 @@ const styles = StyleSheet.create({
   seatAvatarTurn: {
     backgroundColor: 'rgba(255,243,163,0.96)',
     borderColor: 'rgba(255,243,163,0.8)',
-    boxShadow: '0 0 0 1px rgba(255, 243, 163, 0.2), 0 10px 24px rgba(0, 0, 0, 0.36)',
+    boxShadow:
+      '0 0 0 1px rgba(255, 243, 163, 0.2), 0 10px 24px rgba(0, 0, 0, 0.36)',
   },
   seatNamePlate: {
     maxWidth: '100%',
@@ -2306,6 +2949,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 3,
+  },
+  seatSupporters: {
+    color: '#ffe4a3',
+    fontSize: 7,
+    fontWeight: '800',
   },
   seatName: {
     maxWidth: '100%',
@@ -2398,6 +3046,23 @@ const styles = StyleSheet.create({
   },
   seatCountTextWaiting: {
     color: '#d8f3ff',
+  },
+  seatReaction: {
+    position: 'absolute',
+    left: -9,
+    top: -15,
+    minWidth: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fffdf4',
+    borderWidth: 1,
+    borderColor: 'rgba(0,0,0,0.12)',
+    zIndex: 30,
+  },
+  seatReactionText: {
+    fontSize: 15,
   },
   stagingTray: {
     padding: 6,
@@ -2647,6 +3312,9 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
     paddingVertical: 8,
   },
+  playerRowOut: {
+    opacity: 0.56,
+  },
   avatar: {
     width: 34,
     height: 34,
@@ -2682,6 +3350,9 @@ const styles = StyleSheet.create({
   },
   ready: {
     color: '#42d782',
+  },
+  outText: {
+    color: '#ff9d9d',
   },
   voiceStatusPill: {
     minWidth: 56,
@@ -2753,6 +3424,98 @@ const styles = StyleSheet.create({
     color: '#ffffff',
     fontSize: 14,
     fontWeight: '800',
+  },
+  socialButton: {
+    minWidth: 58,
+    height: 36,
+    borderRadius: 18,
+    paddingHorizontal: 11,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    backgroundColor: 'rgba(255,255,255,0.09)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  socialButtonCompact: {
+    minWidth: 48,
+    height: 40,
+    borderRadius: 20,
+    paddingHorizontal: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  socialButtonLabel: {
+    color: '#fff8ea',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  unreadBadge: {
+    minWidth: 17,
+    height: 17,
+    borderRadius: 8.5,
+    paddingHorizontal: 4,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f65f5f',
+  },
+  unreadBadgeText: {
+    color: '#fff',
+    fontSize: 8,
+    fontWeight: '900',
+  },
+  resultList: {
+    gap: 6,
+  },
+  resultRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    padding: 8,
+  },
+  resultPlace: {
+    minWidth: 34,
+    color: 'rgba(255,255,255,0.48)',
+    fontSize: 15,
+    fontWeight: '900',
+    textAlign: 'center',
+  },
+  resultPlaceWinner: {
+    color: '#fff3a3',
+  },
+  recapPanel: {
+    gap: 5,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: 'rgba(255,221,85,0.16)',
+    backgroundColor: 'rgba(255,221,85,0.07)',
+    padding: 11,
+  },
+  recapTitle: {
+    color: '#ffe887',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  recapCopy: {
+    color: 'rgba(255,255,255,0.65)',
+    fontSize: 11,
+    lineHeight: 16,
+  },
+  recapAward: {
+    color: '#fff3a3',
+    fontSize: 11,
+    lineHeight: 16,
+    fontWeight: '700',
   },
   table: {
     gap: Spacing.three,
@@ -2933,6 +3696,93 @@ const styles = StyleSheet.create({
   },
   handCardShell: {
     alignSelf: 'flex-end',
+  },
+  avatarReactionBar: {
+    alignSelf: 'center',
+    height: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    borderRadius: 17,
+    backgroundColor: 'rgba(255,255,255,0.055)',
+    paddingHorizontal: 5,
+    zIndex: 12,
+  },
+  avatarReactionButton: {
+    width: 30,
+    height: 30,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  avatarReactionEmoji: {
+    fontSize: 18,
+  },
+  inactiveDock: {
+    minHeight: 142,
+    gap: 8,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: 'rgba(125,211,252,0.15)',
+    backgroundColor: 'rgba(125,211,252,0.065)',
+    padding: 10,
+    zIndex: 10,
+  },
+  inactiveHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  inactiveStatus: {
+    color: '#d8f3ff',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  inactiveCopy: {
+    color: 'rgba(216,243,255,0.58)',
+    fontSize: 10,
+    marginTop: 2,
+  },
+  inactiveEmpty: {
+    color: 'rgba(255,255,255,0.4)',
+    fontSize: 11,
+    paddingVertical: 12,
+    textAlign: 'center',
+  },
+  supportCandidates: {
+    flexDirection: 'row',
+    gap: 7,
+  },
+  supportCandidate: {
+    minWidth: 132,
+    height: 44,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 13,
+    backgroundColor: 'rgba(0,0,0,0.24)',
+    paddingHorizontal: 7,
+  },
+  supportCandidateName: {
+    maxWidth: 56,
+    color: '#fff',
+    fontSize: 11,
+    fontWeight: '700',
+  },
+  supportCandidateAction: {
+    color: '#ffe887',
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  supportHand: {
+    gap: 7,
+    paddingRight: 10,
+  },
+  supportCard: {
+    transform: [{ scale: 0.66 }],
+    width: 52,
+    height: 75,
+    transformOrigin: 'top left',
   },
   actionBar: {
     flexDirection: 'row',

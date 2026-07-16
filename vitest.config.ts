@@ -24,6 +24,13 @@ export default defineConfig({
           include: ["apps/web/src/**/*.test.{ts,tsx}"],
         },
       },
+      {
+        test: {
+          name: "mobile",
+          environment: "node",
+          include: ["apps/mobile/src/**/*.test.ts"],
+        },
+      },
     ],
   },
 })
