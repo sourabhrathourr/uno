@@ -2803,6 +2803,8 @@ function canStackDrawCards(
   cards: Card[],
   playableCardIds: string[],
 ) {
+  if (cards.length === 0 || !sameDrawGroup(cards)) return false;
+
   const playableGroups = new Set(
     cards
       .filter((card) => playableCardIds.includes(card.id))

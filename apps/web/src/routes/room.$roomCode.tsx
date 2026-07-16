@@ -5101,7 +5101,7 @@ function canStackDrawCards(
   cards: Array<Card>,
   playableCardIds: Array<string>
 ) {
-  if (!drawStack || cards.length === 0) return false
+  if (!drawStack || cards.length === 0 || !sameDrawGroup(cards)) return false
 
   const minimum = drawStack.minimum
   const playableGroups = new Set(
