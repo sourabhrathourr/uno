@@ -9,6 +9,7 @@ import type {
   PlayerSocialSnapshot,
   RoomSnapshot,
   SendChatMessageInput,
+  StageCardsInput,
   VoteKickChoice,
 } from '@workspace/game';
 import {
@@ -22,6 +23,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
   ArrowLeft,
   LogOut,
+  MessageCircle,
   Mic,
   MicOff,
   Play,
@@ -138,6 +140,9 @@ export default function RoomScreen() {
   const [error, setError] = useState<string | null>(null);
   const [stagedCardIds, setStagedCardIds] = useState<string[]>([]);
   const [chosenColor, setChosenColor] = useState<PlayColor>('red');
+  const [wantsRotate, setWantsRotate] = useState(false);
+  const [wantsSwap, setWantsSwap] = useState(false);
+  const [swapWithPlayerId, setSwapWithPlayerId] = useState('');
   const [inviteCopied, setInviteCopied] = useState(false);
   const [socket, setSocket] = useState<GameSocket | null>(null);
   const [activePlayerId, setActivePlayerId] = useState('');
@@ -163,6 +168,33 @@ export default function RoomScreen() {
   );
   const remainingAfterPlay =
     (playerGame?.hand.length ?? 0) - stagedCards.length;
+  const activeOpponents = useMemo(
+    () =>
+      (room?.players ?? []).filter((candidate) => {
+        const state = room?.game?.players.find(
+          (gamePlayer) => gamePlayer.playerId === candidate.id,
+        );
+        return (
+          candidate.id !== player?.id &&
+          !state?.eliminated &&
+          !state?.voteKicked &&
+          !state?.waiting &&
+          !state?.winnerPlacement
+        );
+      }),
+    [player?.id, room?.game?.players, room?.players],
+  );
+  const canChooseRotate =
+    stagedCards.length === 1 &&
+    stagedCards[0]?.face.kind === 'number' &&
+    stagedCards[0].face.value === 0 &&
+    remainingAfterPlay > 0;
+  const canChooseSwap =
+    stagedCards.length === 1 &&
+    stagedCards[0]?.face.kind === 'number' &&
+    stagedCards[0].face.value === 7 &&
+    remainingAfterPlay > 0 &&
+    activeOpponents.length > 0;
   const needsColor = stagedCards.some((card) => card.color === 'wild');
   const finishesWithForbiddenPower =
     remainingAfterPlay === 0 &&
@@ -172,7 +204,8 @@ export default function RoomScreen() {
     stagedCards.length > 0 &&
     selectedCardsCanPlay &&
     !finishesWithForbiddenPower &&
-    (!needsColor || Boolean(chosenColor));
+    (!needsColor || Boolean(chosenColor)) &&
+    (!canChooseSwap || !wantsSwap || Boolean(swapWithPlayerId));
   const inviteUrl = room ? getInviteUrl(room.code) : getInviteUrl(roomCode);
   const voice = useRoomVoice({
     socket,
@@ -597,6 +630,48 @@ export default function RoomScreen() {
     setStagedCardIds([]);
   }, [isMyTurn]);
 
+  useEffect(() => {
+    setWantsRotate(false);
+    setWantsSwap(false);
+    setSwapWithPlayerId('');
+  }, [stagedCardIds]);
+
+  useEffect(() => {
+    if (!socket || !isMyTurn) return;
+    const input: StageCardsInput = {
+      cardIds: stagedCardIds,
+      chosenColor: needsColor ? chosenColor : undefined,
+      rotateHands: canChooseRotate && wantsRotate ? true : undefined,
+      swapWithPlayerId:
+        canChooseSwap && wantsSwap && swapWithPlayerId
+          ? swapWithPlayerId
+          : undefined,
+    };
+    socket.emit('game:stageCards', input, (result) => {
+      if (!result.ok) {
+        setError(result.error.message);
+        void impact('error');
+        playFx('blocked', { volume: 0.5 });
+        return;
+      }
+
+      setError(null);
+      applyRoomSnapshot(result.data);
+    });
+  }, [
+    socket,
+    isMyTurn,
+    stagedCardIds,
+    chosenColor,
+    needsColor,
+    canChooseRotate,
+    wantsRotate,
+    canChooseSwap,
+    wantsSwap,
+    swapWithPlayerId,
+    applyRoomSnapshot,
+  ]);
+
   function emitRoomCommand(
     event:
       | 'room:setReady'
@@ -671,24 +746,8 @@ export default function RoomScreen() {
     socket.emit('game:sendAvatarEmojiReaction', { body }, handleRoomAck);
   }
 
-  function emitStageCards(cardIds: string[]) {
-    if (!socket || !isMyTurn) return;
-    socket.emit('game:stageCards', { cardIds }, (result) => {
-      if (!result.ok) {
-        setError(result.error.message);
-        void impact('error');
-        playFx('blocked', { volume: 0.5 });
-        return;
-      }
-
-      setError(null);
-      applyRoomSnapshot(result.data);
-    });
-  }
-
   function updateStagedCards(cardIds: string[]) {
     setStagedCardIds(cardIds);
-    emitStageCards(cardIds);
   }
 
   function toggleStagedCard(card: Card) {
@@ -762,6 +821,9 @@ export default function RoomScreen() {
         topCardId: discardActionCard
           ? (stagedCards[stagedCards.length - 1]?.id ?? discardActionCard.id)
           : undefined,
+        rotateHands: canChooseRotate && wantsRotate ? true : undefined,
+        swapWithPlayerId:
+          canChooseSwap && wantsSwap ? swapWithPlayerId : undefined,
       },
       (result) => {
         if (!result.ok) {
@@ -882,6 +944,18 @@ export default function RoomScreen() {
             void impact('selection');
             playFx('itemSelect', { volume: 0.4 });
           }}
+          canChooseRotate={canChooseRotate}
+          wantsRotate={wantsRotate}
+          setWantsRotate={setWantsRotate}
+          canChooseSwap={canChooseSwap}
+          wantsSwap={wantsSwap}
+          setWantsSwap={(enabled) => {
+            setWantsSwap(enabled);
+            if (!enabled) setSwapWithPlayerId('');
+          }}
+          activeOpponents={activeOpponents}
+          swapWithPlayerId={swapWithPlayerId}
+          setSwapWithPlayerId={setSwapWithPlayerId}
           compact={height < 760 || width < 390}
           error={activeError}
         />
@@ -1394,6 +1468,15 @@ function GamePlayScreen({
   onEndTurn,
   chosenColor,
   setChosenColor,
+  canChooseRotate,
+  wantsRotate,
+  setWantsRotate,
+  canChooseSwap,
+  wantsSwap,
+  setWantsSwap,
+  activeOpponents,
+  swapWithPlayerId,
+  setSwapWithPlayerId,
   compact,
   error,
 }: {
@@ -1425,6 +1508,15 @@ function GamePlayScreen({
   onEndTurn: () => void;
   chosenColor: PlayColor;
   setChosenColor: (color: PlayColor) => void;
+  canChooseRotate: boolean;
+  wantsRotate: boolean;
+  setWantsRotate: (enabled: boolean) => void;
+  canChooseSwap: boolean;
+  wantsSwap: boolean;
+  setWantsSwap: (enabled: boolean) => void;
+  activeOpponents: Player[];
+  swapWithPlayerId: string;
+  setSwapWithPlayerId: (playerId: string) => void;
   compact: boolean;
   error: string | null;
 }) {
@@ -1594,6 +1686,53 @@ function GamePlayScreen({
                   accessibilityLabel={`Choose ${color}`}
                 />
               ))}
+            </View>
+          ) : null}
+
+          {canChooseRotate ? (
+            <PlayDecisionToggle
+              label="Cycle hands"
+              selected={wantsRotate}
+              onPress={() => setWantsRotate(!wantsRotate)}
+            />
+          ) : null}
+
+          {canChooseSwap ? (
+            <View style={styles.playDecisionPanel}>
+              <PlayDecisionToggle
+                label="Swap hand"
+                selected={wantsSwap}
+                onPress={() => setWantsSwap(!wantsSwap)}
+              />
+              {wantsSwap ? (
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={styles.swapTargets}
+                >
+                  {activeOpponents.map((candidate) => (
+                    <Pressable
+                      key={candidate.id}
+                      onPress={() => setSwapWithPlayerId(candidate.id)}
+                      style={[
+                        styles.swapTarget,
+                        swapWithPlayerId === candidate.id &&
+                          styles.swapTargetSelected,
+                      ]}
+                    >
+                      <PlayerAvatar
+                        roomCode={room.code}
+                        players={room.players}
+                        playerId={candidate.id}
+                        size={24}
+                      />
+                      <Text style={styles.swapTargetLabel} numberOfLines={1}>
+                        {candidate.name}
+                      </Text>
+                    </Pressable>
+                  ))}
+                </ScrollView>
+              ) : null}
             </View>
           ) : null}
 
@@ -2043,7 +2182,10 @@ function SocialButton({
           : 'Open chat'
       }
     >
-      <Text style={styles.socialButtonLabel}>Chat</Text>
+      <MessageCircle color="#fff8ea" size={14} strokeWidth={2.4} />
+      <Text style={styles.socialButtonLabel}>
+        {compact ? 'Social' : 'Chat & Squad'}
+      </Text>
       {unreadCount > 0 ? (
         <View style={styles.unreadBadge}>
           <Text style={styles.unreadBadgeText}>
@@ -2051,6 +2193,38 @@ function SocialButton({
           </Text>
         </View>
       ) : null}
+    </Pressable>
+  );
+}
+
+function PlayDecisionToggle({
+  label,
+  selected,
+  onPress,
+}: {
+  label: string;
+  selected: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={[
+        styles.playDecisionToggle,
+        selected && styles.playDecisionToggleSelected,
+      ]}
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked: selected }}
+    >
+      <View
+        style={[
+          styles.playDecisionCheck,
+          selected && styles.playDecisionCheckSelected,
+        ]}
+      >
+        {selected ? <Text style={styles.playDecisionCheckmark}>✓</Text> : null}
+      </View>
+      <Text style={styles.playDecisionLabel}>{label}</Text>
     </Pressable>
   );
 }
@@ -3439,7 +3613,7 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.08)',
   },
   socialButtonCompact: {
-    minWidth: 48,
+    minWidth: 72,
     height: 40,
     borderRadius: 20,
     paddingHorizontal: 8,
@@ -3673,6 +3847,75 @@ const styles = StyleSheet.create({
   },
   colorPickButtonActive: {
     borderColor: '#ffffff',
+  },
+  playDecisionPanel: {
+    alignItems: 'center',
+    gap: 7,
+  },
+  playDecisionToggle: {
+    minHeight: 38,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 19,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+    backgroundColor: 'rgba(255,255,255,0.07)',
+    paddingHorizontal: 13,
+  },
+  playDecisionToggleSelected: {
+    borderColor: 'rgba(255,232,135,0.75)',
+    backgroundColor: 'rgba(255,232,135,0.14)',
+  },
+  playDecisionCheck: {
+    width: 18,
+    height: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.35)',
+  },
+  playDecisionCheckSelected: {
+    borderColor: '#ffe887',
+    backgroundColor: '#ffe887',
+  },
+  playDecisionCheckmark: {
+    color: '#17130a',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  playDecisionLabel: {
+    color: '#fff8ea',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  swapTargets: {
+    gap: 7,
+    paddingHorizontal: 8,
+  },
+  swapTarget: {
+    minWidth: 100,
+    height: 38,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 19,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: 'rgba(0,0,0,0.22)',
+    paddingHorizontal: 7,
+  },
+  swapTargetSelected: {
+    borderColor: '#ffe887',
+    backgroundColor: 'rgba(255,232,135,0.12)',
+  },
+  swapTargetLabel: {
+    maxWidth: 68,
+    color: '#fff8ea',
+    fontSize: 11,
+    fontWeight: '800',
   },
   handDock: {
     minHeight: 116,

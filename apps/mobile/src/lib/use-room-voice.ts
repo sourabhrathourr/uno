@@ -160,7 +160,6 @@ function startVoiceAudioRoute() {
   if (Platform.OS !== 'android') return;
 
   InCallManager.start({ media: 'audio', auto: true });
-  InCallManager.setForceSpeakerphoneOn(true);
 }
 
 function stopVoiceAudioRoute() {

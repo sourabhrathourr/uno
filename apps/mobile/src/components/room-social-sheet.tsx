@@ -217,6 +217,13 @@ export function RoomSocialSheet({
             )}
           </View>
 
+          {!squadPlayerId ? (
+            <Text style={styles.squadHint}>
+              Squad chat unlocks when you support an active player or another
+              player joins your squad.
+            </Text>
+          ) : null}
+
           {channel === 'squad' && squadPlayerId ? (
             <SquadRoster
               room={room}
@@ -824,6 +831,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    marginBottom: 8,
+  },
+  squadHint: {
+    color: 'rgba(255,255,255,0.52)',
+    fontSize: 11,
+    lineHeight: 15,
     marginBottom: 8,
   },
   channelButton: {
