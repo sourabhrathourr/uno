@@ -2,7 +2,7 @@
   "expo": {
     "name": "uno",
     "slug": "uno",
-    "version": "1.0.1",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "uno",
@@ -15,7 +15,7 @@
       ]
     },
     "android": {
-      "versionCode": 2,
+      "versionCode": 3,
       "package": "com.tanaybetterstacks.uno",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
@@ -48,6 +48,7 @@
     },
     "plugins": [
       "expo-router",
+      "./plugins/with-cleartext-traffic",
       [
         "expo-splash-screen",
         {
