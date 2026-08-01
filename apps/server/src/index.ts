@@ -17,7 +17,7 @@ import type {
 } from "@workspace/game"
 
 import { GiphyService } from "./giphy"
-import { RoomManager } from "./room-manager"
+import { ROOM_MEMORY_CLEANUP_INTERVAL_MS, RoomManager } from "./room-manager"
 
 type IceServerConfig = {
   urls: string | string[]
@@ -47,17 +47,18 @@ const gifs = new GiphyService({
     10
   ),
 })
+const voiceStatesByRoomCode = new Map<
+  string,
+  Map<string, { enabled: boolean; muted: boolean; speaking: boolean }>
+>()
 const rooms = new RoomManager({
   resolveGif: (provider, id) =>
     provider === "giphy" ? gifs.resolveApprovedGif(id) : null,
   onRoomUpdated: (code, room) => {
     void emitRoomState(code, room)
   },
+  onRoomExpired: clearExpiredRoomRuntimeState,
 })
-const voiceStatesByRoomCode = new Map<
-  string,
-  Map<string, { enabled: boolean; muted: boolean; speaking: boolean }>
->()
 
 const httpServer = createServer(async (req, res) => {
   setCorsHeaders(req, res)
@@ -506,6 +507,11 @@ io.on("connection", (socket) => {
   })
 })
 
+const roomCleanupInterval = setInterval(() => {
+  rooms.pruneExpiredRooms()
+}, ROOM_MEMORY_CLEANUP_INTERVAL_MS)
+roomCleanupInterval.unref()
+
 httpServer.listen(port, () => {
   console.log(`UNO No Mercy server listening on http://localhost:${port}`)
 })
@@ -529,6 +535,15 @@ function setCorsHeaders(req: IncomingMessage, res: ServerResponse) {
 
 function firstHeader(value: string | Array<string> | undefined): string {
   return Array.isArray(value) ? (value[0] ?? "") : (value ?? "")
+}
+
+function clearExpiredRoomRuntimeState(roomCode: string) {
+  voiceStatesByRoomCode.delete(roomCode)
+  io.to(roomCode).emit("room:error", {
+    code: "room-expired",
+    message: "This room expired after 7 days of inactivity.",
+  })
+  io.in(roomCode).socketsLeave(roomCode)
 }
 
 function sendJson(

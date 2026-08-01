@@ -77,6 +77,7 @@ type ResolvedGif = {
 type RoomManagerOptions = {
   resolveGif?: (provider: GifProvider, id: string) => ResolvedGif | null
   onRoomUpdated?: (code: string, room: RoomSnapshot) => void
+  onRoomExpired?: (code: string) => void
 }
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -85,18 +86,24 @@ const CHAT_RATE_LIMIT_MS = 650
 const AVATAR_EMOJI_REACTION_RATE_LIMIT_MS = 1_200
 const VOTE_KICK_DURATION_MS = 25_000
 const VOTE_KICK_COOLDOWN_MS = 60_000
+export const ROOM_MEMORY_TTL_MS = 7 * 24 * 60 * 60 * 1000
+export const ROOM_MEMORY_CLEANUP_INTERVAL_MS = 60 * 60 * 1000
 
 export class RoomManager {
   private readonly rooms = new Map<string, ManagedRoom>()
   private readonly resolveGif?: RoomManagerOptions["resolveGif"]
   private readonly onRoomUpdated?: RoomManagerOptions["onRoomUpdated"]
+  private readonly onRoomExpired?: RoomManagerOptions["onRoomExpired"]
 
   constructor(options: RoomManagerOptions = {}) {
     this.resolveGif = options.resolveGif
     this.onRoomUpdated = options.onRoomUpdated
+    this.onRoomExpired = options.onRoomExpired
   }
 
   createRoom(input: CreateRoomRequest): CommandResult<CreateRoomResponse> {
+    this.pruneExpiredRooms()
+
     const playerName = cleanPlayerName(input.playerName)
     if (!playerName) {
       return fail(
@@ -158,7 +165,7 @@ export class RoomManager {
   }
 
   getRoom(code: string): CommandResult<RoomSnapshot> {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room) {
       return fail("room-not-found", "That room code does not exist.")
     }
@@ -167,7 +174,7 @@ export class RoomManager {
   }
 
   hasPlayerSession(code: string, sessionId: string): boolean {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     const normalizedSessionId = cleanSessionId(sessionId)
     return Boolean(
       room &&
@@ -177,6 +184,7 @@ export class RoomManager {
   }
 
   getAnalysisRooms(now = new Date()): AnalysisRoomsResponse {
+    this.pruneExpiredRooms(now)
     const nowMs = now.getTime()
     const rooms = Array.from(this.rooms.values()).map((room) =>
       analysisRoomSummary(room, nowMs)
@@ -202,9 +210,22 @@ export class RoomManager {
     }
   }
 
+  pruneExpiredRooms(now = new Date()): string[] {
+    const nowMs = now.getTime()
+    const expiredCodes: string[] = []
+
+    for (const [code, room] of this.rooms) {
+      if (!isExpiredRoom(room, nowMs)) continue
+      this.deleteRoom(code, room)
+      expiredCodes.push(code)
+    }
+
+    return expiredCodes
+  }
+
   joinRoom(input: JoinRoomInput): CommandResult<JoinRoomResult> {
     const code = normalizeRoomCode(input.code)
-    const room = this.rooms.get(code)
+    const room = this.getManagedRoom(code)
     if (!room) {
       return fail("room-not-found", "That room code does not exist.")
     }
@@ -289,7 +310,7 @@ export class RoomManager {
     playerId: string,
     ready: boolean
   ): CommandResult<RoomSnapshot> {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room) {
       return fail("room-not-found", "That room code does not exist.")
     }
@@ -320,7 +341,7 @@ export class RoomManager {
   }
 
   startRoom(code: string, playerId: string): CommandResult<RoomSnapshot> {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room) {
       return fail("room-not-found", "That room code does not exist.")
     }
@@ -377,7 +398,7 @@ export class RoomManager {
   }
 
   restartRoom(code: string, playerId: string): CommandResult<RoomSnapshot> {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room) {
       return fail("room-not-found", "That room code does not exist.")
     }
@@ -419,7 +440,7 @@ export class RoomManager {
     playerId: string,
     input: SendChatMessageInput
   ): CommandResult<RoomSnapshot> {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room) {
       return fail("room-not-found", "That room code does not exist.")
     }
@@ -518,7 +539,7 @@ export class RoomManager {
     initiatorPlayerId: string,
     targetPlayerId: string
   ): CommandResult<RoomSnapshot> {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room) {
       return fail("room-not-found", "That room code does not exist.")
     }
@@ -627,7 +648,7 @@ export class RoomManager {
     voteKickId: string,
     choice: VoteKickChoice
   ): CommandResult<RoomSnapshot> {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room) {
       return fail("room-not-found", "That room code does not exist.")
     }
@@ -786,7 +807,7 @@ export class RoomManager {
   }
 
   getPlayerGame(code: string, playerId: string): PlayerGameSnapshot | null {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room?.gameState) return null
     if (!findPlayer(room, playerId)) return null
     return {
@@ -872,7 +893,7 @@ export class RoomManager {
     code: string,
     supporterPlayerId: string
   ): PlayerGameSnapshot | null {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room?.gameState || !findPlayer(room, supporterPlayerId)) return null
     return projectSupportView(
       room.gameState,
@@ -886,7 +907,7 @@ export class RoomManager {
     spectatorPlayerId: string,
     targetPlayerId: string
   ): PlayerGameSnapshot | null {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room?.gameState) return null
     if (!findPlayer(room, spectatorPlayerId)) return null
     if (!findPlayer(room, targetPlayerId)) return null
@@ -899,7 +920,7 @@ export class RoomManager {
   }
 
   getPlayerSocial(code: string, playerId: string): PlayerSocialSnapshot | null {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room || !findPlayer(room, playerId)) return null
     const squadPlayerId = room.gameState
       ? supportSquadPlayerIdFor(room.gameState, playerId)
@@ -928,7 +949,7 @@ export class RoomManager {
     playerId: string,
     socketId: string
   ): RoomSnapshot | null {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room || !findPlayer(room, playerId)) return null
 
     const connectionIds =
@@ -951,7 +972,7 @@ export class RoomManager {
     playerId: string,
     socketId: string
   ): RoomSnapshot | null {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room) return null
 
     const connectionIds = room.connectionIdsByPlayerId.get(playerId)
@@ -976,7 +997,7 @@ export class RoomManager {
     code: string,
     voteKickId: string
   ): CommandResult<RoomSnapshot> {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room) return fail("room-not-found", "That room code does not exist.")
 
     const message = voteKickMessage(room, voteKickId)
@@ -1037,12 +1058,26 @@ export class RoomManager {
     code: string,
     command: (room: ManagedRoom) => CommandResult<RoomSnapshot>
   ): CommandResult<RoomSnapshot> {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room) return fail("room-not-found", "That room code does not exist.")
     if (room.status !== "playing") {
       return fail("game-not-playing", "This room is not currently playing.")
     }
     return command(room)
+  }
+
+  private getManagedRoom(code: string): ManagedRoom | undefined {
+    this.pruneExpiredRooms()
+    return this.rooms.get(normalizeRoomCode(code))
+  }
+
+  private deleteRoom(code: string, room: ManagedRoom): void {
+    for (const timer of room.voteKickTimersById.values()) {
+      clearTimeout(timer)
+    }
+    room.voteKickTimersById.clear()
+    this.rooms.delete(code)
+    this.onRoomExpired?.(code)
   }
 }
 
@@ -1261,6 +1296,13 @@ function scheduleVoteKickResolution(
   const existing = room.voteKickTimersById.get(voteKickId)
   if (existing) clearTimeout(existing)
   room.voteKickTimersById.set(voteKickId, setTimeout(resolve, delay))
+}
+
+function isExpiredRoom(room: ManagedRoom, nowMs: number): boolean {
+  const updatedAtMs = Date.parse(room.updatedAt)
+  return (
+    Number.isFinite(updatedAtMs) && nowMs - updatedAtMs >= ROOM_MEMORY_TTL_MS
+  )
 }
 
 function touch(room: ManagedRoom, now = new Date().toISOString()) {
