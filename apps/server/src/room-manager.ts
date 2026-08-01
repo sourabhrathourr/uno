@@ -19,6 +19,7 @@ import {
   stageCards,
   takeDrawPenalty,
   type CatchUnoInput,
+  type AnalysisRoomsResponse,
   type ChatMessage,
   type CommandResult,
   type CreateRoomRequest,
@@ -36,6 +37,8 @@ import {
 
 type ManagedRoom = RoomSnapshot & {
   gameState: GameState | null
+  matchStartedAt: string | null
+  matchFinishedAt: string | null
   sessionToPlayerId: Map<string, string>
   connectionIdsByPlayerId: Map<string, Set<string>>
   lastChatAtByPlayerId: Map<string, number>
@@ -84,6 +87,8 @@ export class RoomManager {
       houseRules,
       game: null,
       gameState: null,
+      matchStartedAt: null,
+      matchFinishedAt: null,
       version: 1,
       createdAt: now,
       updatedAt: now,
@@ -107,6 +112,32 @@ export class RoomManager {
     }
 
     return ok(snapshot(room))
+  }
+
+  getAnalysisRooms(now = new Date()): AnalysisRoomsResponse {
+    const nowMs = now.getTime()
+    const rooms = Array.from(this.rooms.values()).map((room) =>
+      analysisRoomSummary(room, nowMs),
+    )
+
+    return {
+      generatedAt: now.toISOString(),
+      totals: {
+        rooms: rooms.length,
+        playing: rooms.filter((room) => room.status === "playing").length,
+        lobby: rooms.filter((room) => room.status === "lobby").length,
+        finished: rooms.filter((room) => room.status === "finished").length,
+        totalPlayers: rooms.reduce(
+          (total, room) => total + room.playerCount,
+          0,
+        ),
+        onlinePlayers: rooms.reduce(
+          (total, room) => total + room.connectedPlayerCount,
+          0,
+        ),
+      },
+      rooms,
+    }
   }
 
   joinRoom(input: JoinRoomInput): CommandResult<JoinRoomResult> {
@@ -224,9 +255,12 @@ export class RoomManager {
       return fail("players-not-ready", "Every non-host player must be ready.")
     }
 
+    const now = new Date().toISOString()
     room.status = "playing"
     room.gameState = createGame({ players: room.players, houseRules: room.houseRules })
-    touch(room)
+    room.matchStartedAt = now
+    room.matchFinishedAt = null
+    touch(room, now)
 
     return ok(snapshot(room))
   }
@@ -249,9 +283,12 @@ export class RoomManager {
       return fail("not-enough-players", "At least two players are needed to restart.")
     }
 
+    const now = new Date().toISOString()
     room.status = "playing"
     room.gameState = createGame({ players: room.players, houseRules: room.houseRules })
-    touch(room)
+    room.matchStartedAt = now
+    room.matchFinishedAt = null
+    touch(room, now)
 
     return ok(snapshot(room))
   }
@@ -608,10 +645,60 @@ function gameContext(room: ManagedRoom) {
   }
 }
 
-function syncRoomStatus(room: ManagedRoom) {
+function analysisRoomSummary(
+  room: ManagedRoom,
+  nowMs: number
+): AnalysisRoomsResponse["rooms"][number] {
+  const createdAtMs = Date.parse(room.createdAt)
+  const updatedAtMs = Date.parse(room.updatedAt)
+  const durationEndMs = room.status === "finished" ? updatedAtMs : nowMs
+  const players = room.players.map((player) => ({
+    name: player.name,
+    seat: player.seat,
+    isHost: player.id === room.hostPlayerId,
+    ready: player.ready,
+    connected: player.connected,
+    joinedAt: player.joinedAt,
+    lastSeenAt: player.lastSeenAt,
+  }))
+  const connectedPlayerCount = players.filter(
+    (player) => player.connected
+  ).length
+
+  return {
+    code: room.code,
+    status: room.status,
+    version: room.version,
+    createdAt: room.createdAt,
+    updatedAt: room.updatedAt,
+    durationMs: Math.max(0, durationEndMs - createdAtMs),
+    idleDurationMs: Math.max(0, nowMs - updatedAtMs),
+    playerCount: players.length,
+    connectedPlayerCount,
+    awayPlayerCount: players.length - connectedPlayerCount,
+    players,
+    game: room.gameState
+      ? {
+          currentTurnPlayer: playerName(room, room.gameState.turnPlayerId),
+          winner: playerName(room, room.gameState.winnerPlayerId),
+          eventCount: room.gameState.events.length,
+          matchStartedAt: room.matchStartedAt,
+          matchFinishedAt: room.matchFinishedAt,
+        }
+      : null,
+  }
+}
+
+function syncRoomStatus(room: ManagedRoom, now = new Date().toISOString()) {
   if (room.gameState?.turnPlayerId === null) {
     room.status = "finished"
+    room.matchFinishedAt ??= now
   }
+}
+
+function playerName(room: ManagedRoom, playerId: string | null): string | null {
+  if (!playerId) return null
+  return findPlayer(room, playerId)?.name ?? null
 }
 
 function cleanPlayerName(value: string): string {

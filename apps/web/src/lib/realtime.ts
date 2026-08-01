@@ -1,6 +1,8 @@
-import { io, type Socket } from "socket.io-client"
+import { io } from "socket.io-client"
+import type { Socket } from "socket.io-client"
 
 import type {
+  AnalysisRoomsResponse,
   ClientToServerEvents,
   CommandResult,
   CreateRoomRequest,
@@ -52,4 +54,11 @@ export async function getRoomPreview(
 ): Promise<CommandResult<RoomSnapshot>> {
   const response = await fetch(`${getRealtimeUrl()}/rooms/${code}`)
   return (await response.json()) as CommandResult<RoomSnapshot>
+}
+
+export async function getAnalysisRooms(): Promise<
+  CommandResult<AnalysisRoomsResponse>
+> {
+  const response = await fetch(`${getRealtimeUrl()}/analysis/rooms`)
+  return (await response.json()) as CommandResult<AnalysisRoomsResponse>
 }

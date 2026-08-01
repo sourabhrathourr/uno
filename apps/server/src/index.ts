@@ -64,6 +64,11 @@ const httpServer = createServer(async (req, res) => {
     return
   }
 
+  if (req.method === "GET" && url.pathname === "/analysis/rooms") {
+    sendJson(req, res, 200, { ok: true, data: rooms.getAnalysisRooms() })
+    return
+  }
+
   const roomMatch = url.pathname.match(/^\/rooms\/([A-Za-z0-9]{6})$/)
   if (req.method === "GET" && roomMatch) {
     const result = rooms.getRoom(roomMatch[1] ?? "")

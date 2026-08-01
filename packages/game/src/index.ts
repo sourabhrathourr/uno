@@ -1,4 +1,9 @@
 export type { Card, CardColor, CardFace, NumberValue } from "./cards"
+export type {
+  AnalysisPlayerSummary,
+  AnalysisRoomSummary,
+  AnalysisRoomsResponse,
+} from "./analysis"
 export {
   CHAT_EMOJIS,
   CHAT_GIFS,
