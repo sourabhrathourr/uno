@@ -1,6 +1,5 @@
-import type { ReactNode } from "react"
-
 import { tiltDegrees } from "../tokens"
+import type { ReactNode } from "react"
 
 export type OvalMode =
   | "color-ring" // black ring + white inside (colored cards)

@@ -1,7 +1,7 @@
-import type * as React from "react"
 import { Drawer as DrawerPrimitive } from "vaul"
 
 import { cn } from "@workspace/ui/lib/utils"
+import type * as React from "react"
 
 function Drawer({
   shouldScaleBackground = false,
@@ -43,7 +43,7 @@ function DrawerOverlay({
       data-slot="drawer-overlay"
       className={cn(
         "fixed inset-0 z-50 bg-black/55 backdrop-blur-[2px]",
-        className,
+        className
       )}
       {...props}
     />
@@ -62,7 +62,7 @@ function DrawerContent({
         data-slot="drawer-content"
         className={cn(
           "fixed inset-x-0 bottom-0 z-50 mt-24 flex max-h-[92dvh] flex-col rounded-t-2xl border border-white/10 bg-background shadow-[0_-28px_80px_rgba(0,0,0,0.55)] outline-none",
-          className,
+          className
         )}
         {...props}
       >
@@ -73,10 +73,7 @@ function DrawerContent({
   )
 }
 
-function DrawerHeader({
-  className,
-  ...props
-}: React.ComponentProps<"div">) {
+function DrawerHeader({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="drawer-header"
@@ -86,10 +83,7 @@ function DrawerHeader({
   )
 }
 
-function DrawerFooter({
-  className,
-  ...props
-}: React.ComponentProps<"div">) {
+function DrawerFooter({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="drawer-footer"

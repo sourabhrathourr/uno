@@ -11,30 +11,36 @@ import type {
 
 export const Route = createFileRoute("/cards")({ component: CardsLab })
 
-const colors: Array<Exclude<CardColor, "wild">> = ["red", "yellow", "green", "blue"]
+const colors: Array<Exclude<CardColor, "wild">> = [
+  "red",
+  "yellow",
+  "green",
+  "blue",
+]
+const numberValues = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] as const
 
-function id(parts: string[]) {
+function id(parts: Array<string>) {
   return parts.join(":")
 }
 
-function makeNumberRow(): Card[] {
-  const out: Card[] = []
+function makeNumberRow(): Array<Card> {
+  const out: Array<Card> = []
   for (const c of colors) {
-    for (let v = 0 as const; v <= 9; v++) {
+    for (const v of numberValues) {
       out.push({
         id: id([c, "n", String(v)]),
         color: c,
-        face: { kind: "number", value: v as 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 },
+        face: { kind: "number", value: v },
       })
     }
   }
   return out
 }
 
-function makeActionRow(): Card[] {
-  const out: Card[] = []
+function makeActionRow(): Array<Card> {
+  const out: Array<Card> = []
   for (const c of colors) {
-    const faces: CardFace[] = [
+    const faces: Array<CardFace> = [
       { kind: "skip" },
       { kind: "reverse" },
       { kind: "draw", count: 2 },
@@ -47,7 +53,7 @@ function makeActionRow(): Card[] {
   return out
 }
 
-function makeSpecialsRow(): Card[] {
+function makeSpecialsRow(): Array<Card> {
   return [
     { id: "green:discard", color: "green", face: { kind: "discard-color" } },
     { id: "red:discard", color: "red", face: { kind: "discard-color" } },
@@ -56,13 +62,17 @@ function makeSpecialsRow(): Card[] {
   ]
 }
 
-function makeWildRow(): Card[] {
+function makeWildRow(): Array<Card> {
   return [
     { id: "wild", color: "wild", face: { kind: "wild" } },
     { id: "wild:d4", color: "wild", face: { kind: "wild-draw", count: 4 } },
     { id: "wild:d6", color: "wild", face: { kind: "wild-draw", count: 6 } },
     { id: "wild:d10", color: "wild", face: { kind: "wild-draw", count: 10 } },
-    { id: "wild:rd4", color: "wild", face: { kind: "wild-reverse-draw", count: 4 } },
+    {
+      id: "wild:rd4",
+      color: "wild",
+      face: { kind: "wild-reverse-draw", count: 4 },
+    },
   ]
 }
 
@@ -99,8 +109,8 @@ function CardsLab() {
               className="mt-2 max-w-md text-sm text-white/60"
               style={{ textWrap: "pretty" }}
             >
-              The foundational card. Hover to lift, click to press, focus for the
-              ring. Every face is composed from the same metallic surface +
+              The foundational card. Hover to lift, click to press, focus for
+              the ring. Every face is composed from the same metallic surface +
               swappable glyph.
             </p>
           </div>
@@ -212,7 +222,9 @@ function SegGroup<T extends string>({
 }) {
   return (
     <div className="flex items-center gap-1.5">
-      <span className="px-2 text-xs tracking-wider text-white/40 uppercase">{label}</span>
+      <span className="px-2 text-xs tracking-wider text-white/40 uppercase">
+        {label}
+      </span>
       <div className="flex items-center gap-1">{children}</div>
     </div>
   )
@@ -264,7 +276,9 @@ function Section({
   return (
     <section className="flex flex-col gap-5">
       <div className="flex items-baseline justify-between gap-6">
-        <h2 className="text-base font-medium tracking-tight text-white">{label}</h2>
+        <h2 className="text-base font-medium tracking-tight text-white">
+          {label}
+        </h2>
         <p
           className="max-w-lg text-right text-xs text-white/45"
           style={{ textWrap: "pretty" }}
@@ -285,7 +299,7 @@ function Grid({ children }: { children: React.ReactNode }) {
 
 function Hand() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const cards: Card[] = [
+  const cards: Array<Card> = [
     { id: "h1", color: "red", face: { kind: "number", value: 7 } },
     { id: "h2", color: "blue", face: { kind: "draw", count: 2 } },
     { id: "h3", color: "green", face: { kind: "skip" } },

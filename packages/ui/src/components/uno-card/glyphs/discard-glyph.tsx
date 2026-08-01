@@ -49,15 +49,7 @@ function MiniStack() {
   )
 }
 
-function ArrowMark({
-  x,
-  y,
-  rotate,
-}: {
-  x: number
-  y: number
-  rotate: number
-}) {
+function ArrowMark({ x, y, rotate }: { x: number; y: number; rotate: number }) {
   return (
     <g transform={`translate(${x} ${y}) rotate(${rotate})`}>
       <path

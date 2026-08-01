@@ -36,7 +36,10 @@ function MiniCard({
  * spread evenly across an arc — visually communicates "you are taking N cards".
  */
 export function DrawCenter({ count }: { count: 2 | 4 }) {
-  const layouts: Record<2 | 4, Array<{ x: number; y: number; rotate: number }>> = {
+  const layouts: Record<
+    2 | 4,
+    Array<{ x: number; y: number; rotate: number }>
+  > = {
     2: [
       { x: 38, y: 70, rotate: -10 },
       { x: 62, y: 70, rotate: 10 },
@@ -71,4 +74,3 @@ export function DrawCorner({ count }: { count: number }) {
     </span>
   )
 }
-

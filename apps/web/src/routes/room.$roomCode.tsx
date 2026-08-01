@@ -493,12 +493,11 @@ function RoomPage() {
           }
           break
         case "game-won": {
-          const isFirstPlace =
-            room.game?.winnerPlacements.some(
-              (placement) =>
-                placement.playerId === nextEvent.playerId &&
-                placement.position === 1
-            ) ?? false
+          const isFirstPlace = room.game.winnerPlacements.some(
+            (placement) =>
+              placement.playerId === nextEvent.playerId &&
+              placement.position === 1
+          )
           playWinnerSound(isFirstPlace)
           if (isSelfEvent) {
             haptic.trigger(isFirstPlace ? "heavy" : "success")
@@ -563,7 +562,7 @@ function RoomPage() {
     }
   }, [roomCode])
 
-  async function joinRoom(nextName = playerName) {
+  function joinRoom(nextName = playerName) {
     if (joinInFlightRef.current) return
 
     const cleanName = nextName.trim()
@@ -1032,19 +1031,18 @@ function GameTable({
     [playerGame?.hand, pendingPlayedCardIds]
   )
   const playableCardIds = playerGame?.playableCardIds ?? []
-  const activeOpponents =
-    room.players.filter((candidate) => {
-      const state = game?.players.find(
-        (gamePlayer) => gamePlayer.playerId === candidate.id
-      )
-      return (
-        candidate.id !== player.id &&
-        !state?.eliminated &&
-        !state?.voteKicked &&
-        !state?.waiting &&
-        !state?.winnerPlacement
-      )
-    }) ?? []
+  const activeOpponents = room.players.filter((candidate) => {
+    const state = game?.players.find(
+      (gamePlayer) => gamePlayer.playerId === candidate.id
+    )
+    return (
+      candidate.id !== player.id &&
+      !state?.eliminated &&
+      !state?.voteKicked &&
+      !state?.waiting &&
+      !state?.winnerPlacement
+    )
+  })
   const supportCandidates = availableSupportCandidates(
     game?.players ?? [],
     playerSocial?.blockedSupportedPlayerIds ?? [],
@@ -1074,7 +1072,7 @@ function GameTable({
   const rouletteChoice =
     game?.pendingChoice?.type === "roulette-draw" ? game.pendingChoice : null
   const rouletteTargetName = rouletteChoice
-    ? playerName(room, rouletteChoice.playerId)
+    ? getPlayerName(room, rouletteChoice.playerId)
     : null
   const canDrawRoulette = Boolean(rouletteChoice?.playerId === player.id)
   const needsColor = selectedCards.some((card) => card.color === "wild")
@@ -1145,7 +1143,7 @@ function GameTable({
       ? null
       : (game?.stagedPlay?.playerId ?? null)
   const tableStagedPlayerName = tableStagedPlayerId
-    ? playerName(room, tableStagedPlayerId)
+    ? getPlayerName(room, tableStagedPlayerId)
     : null
   const tableStagedMode =
     !stagedPlayConsumed &&
@@ -1505,7 +1503,7 @@ function GameTable({
       ? `${firstWinner.name} won this match`
       : isMyTurn
         ? "Your turn"
-        : `${playerName(room, game?.turnPlayerId)} is playing`
+        : `${getPlayerName(room, game?.turnPlayerId)} is playing`
   const tableStatusDetail = gameFinished
     ? "Start a new match with the same room and players."
     : game?.drawStack
@@ -1753,7 +1751,7 @@ function GameTable({
                       onClick={() => handleCatchUno(targetPlayerId)}
                       className="shrink-0 bg-yellow-100 text-yellow-950 hover:bg-yellow-50"
                     >
-                      Catch {playerName(room, targetPlayerId)}
+                      Catch {getPlayerName(room, targetPlayerId)}
                     </Button>
                   ))}
                 </div>
@@ -1769,7 +1767,7 @@ function GameTable({
                   <p className="text-sm font-medium text-white/84">
                     {isSelfEliminated
                       ? spectatingPlayerId
-                        ? `${playerName(room, spectatingPlayerId)}'s hand`
+                        ? `${getPlayerName(room, spectatingPlayerId)}'s hand`
                         : "Your hand"
                       : "Your hand"}
                   </p>
@@ -2098,7 +2096,7 @@ function GameTable({
                         onClick={() => handleCatchUno(targetPlayerId)}
                         className="bg-yellow-100 text-yellow-950 hover:bg-yellow-50"
                       >
-                        Catch {playerName(room, targetPlayerId)}
+                        Catch {getPlayerName(room, targetPlayerId)}
                       </Button>
                     ))}
                   </div>
@@ -2114,7 +2112,7 @@ function GameTable({
                     <p className="text-sm font-medium text-white/82">
                       {isSelfEliminated
                         ? spectatingPlayerId
-                          ? `${playerName(room, spectatingPlayerId)}'s hand`
+                          ? `${getPlayerName(room, spectatingPlayerId)}'s hand`
                           : "Your hand"
                         : "Your hand"}
                     </p>
@@ -2325,7 +2323,7 @@ function SupportDecisionPills({
   const choices = [
     stagedPlay.chosenColor ? `Color: ${stagedPlay.chosenColor}` : null,
     stagedPlay.swapWithPlayerId
-      ? `Swap: ${playerName(room, stagedPlay.swapWithPlayerId)}`
+      ? `Swap: ${getPlayerName(room, stagedPlay.swapWithPlayerId)}`
       : null,
     stagedPlay.rotateHands ? "Cycle hands" : null,
     stagedPlay.declaredUno ? "Calling UNO" : null,
@@ -2857,8 +2855,7 @@ function MobileSeatingRing({
               return {
                 id: supporter.id,
                 name: supporter.name,
-                avatarUrl:
-                  avatarUrls.get(supporter.id) ?? PLAYER_AVATARS[0]!,
+                avatarUrl: avatarUrls.get(supporter.id) ?? PLAYER_AVATARS[0],
               }
             })
             .filter(
@@ -2948,7 +2945,7 @@ function MobileSeatingRing({
                     <Trophy className="size-4" strokeWidth={2.1} />
                   ) : (
                     <img
-                      src={avatarUrls.get(candidate.id) ?? PLAYER_AVATARS[0]!}
+                      src={avatarUrls.get(candidate.id) ?? PLAYER_AVATARS[0]}
                       alt={`${candidate.name} avatar`}
                       draggable={false}
                       className="size-full rounded-[inherit] object-cover"
@@ -3480,7 +3477,7 @@ function ChatComposer({
                   event.preventDefault()
                   const selected =
                     mentionMatches[safeHighlight] ?? mentionMatches[0]
-                  if (selected) selectMention(selected)
+                  selectMention(selected)
                   return
                 }
                 if (event.key === "Escape") {
@@ -3573,7 +3570,7 @@ function MentionSuggestionList({
             }
           >
             <img
-              src={avatarUrls.get(player.id) ?? PLAYER_AVATARS[0]!}
+              src={avatarUrls.get(player.id) ?? PLAYER_AVATARS[0]}
               alt=""
               className="size-7 shrink-0 rounded-full border border-white/12 object-cover"
               draggable={false}
@@ -3596,7 +3593,7 @@ function getActiveMention(
   const before = value.slice(0, safeCaret)
   const match = /(^|[\s([{])@([^\s@]*)$/.exec(before)
   if (!match) return null
-  const query = match[2] ?? ""
+  const query = match[2]
   const start = before.length - query.length - 1
   return { start, end: safeCaret, query }
 }
@@ -3611,7 +3608,9 @@ function filterMentionCandidates(players: Array<Player>, query: string) {
       (entry): entry is { player: Player; score: number } =>
         entry.score !== null
     )
-    .sort((a, b) => b.score - a.score || a.player.name.localeCompare(b.player.name))
+    .sort(
+      (a, b) => b.score - a.score || a.player.name.localeCompare(b.player.name)
+    )
 
   return ranked.map((entry) => entry.player)
 }
@@ -3620,7 +3619,8 @@ function fuzzyMentionScore(query: string, name: string): number | null {
   const needle = query.trim().toLowerCase()
   const haystack = name.toLowerCase()
   if (!needle) return 1
-  if (haystack.startsWith(needle)) return 100 - (haystack.length - needle.length) * 0.01
+  if (haystack.startsWith(needle))
+    return 100 - (haystack.length - needle.length) * 0.01
   const includesAt = haystack.indexOf(needle)
   if (includesAt >= 0) return 60 - includesAt * 0.5
 
@@ -3742,7 +3742,7 @@ function VoteKickTargetTray({
                 className="flex min-h-10 items-center gap-2.5 rounded-lg border border-white/10 bg-white/[0.055] px-2 py-1.5 text-left transition-[background-color,border-color,color,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] hover:border-white/18 hover:bg-white/[0.085] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-55"
               >
                 <img
-                  src={avatarUrls.get(target.player.id) ?? PLAYER_AVATARS[0]!}
+                  src={avatarUrls.get(target.player.id) ?? PLAYER_AVATARS[0]}
                   alt=""
                   className="size-7 shrink-0 rounded-full border border-white/12 object-cover"
                   draggable={false}
@@ -3998,7 +3998,7 @@ function ChatMessageBody({
           return (
             <img
               key={part.key}
-              src={avatarUrls.get(part.player.id) ?? PLAYER_AVATARS[0]!}
+              src={avatarUrls.get(part.player.id) ?? PLAYER_AVATARS[0]}
               alt=""
               className="size-3.5 shrink-0 rounded-full object-cover"
               draggable={false}
@@ -4011,7 +4011,7 @@ function ChatMessageBody({
             key={part.key}
             title={`@${part.player.name}`}
             className={
-              "text-[13px] font-semibold leading-5 " +
+              "text-[13px] leading-5 font-semibold " +
               (isSelf ? "text-sky-600" : "text-sky-300")
             }
           >
@@ -4206,7 +4206,7 @@ function VoteKickOptionRow({
       type="button"
       disabled={disabled}
       onClick={() => onVote?.(poll.id, choice)}
-      className="group w-full rounded-lg px-0.5 py-1 text-left outline-none transition-[background-color] duration-200 ease-[cubic-bezier(0.2,0,0,1)] group-enabled:hover:bg-white/[0.04] disabled:cursor-default"
+      className="group w-full rounded-lg px-0.5 py-1 text-left transition-[background-color] duration-200 ease-[cubic-bezier(0.2,0,0,1)] outline-none group-enabled:hover:bg-white/[0.04] disabled:cursor-default"
     >
       <div className="flex items-start gap-2">
         <span
@@ -4247,7 +4247,7 @@ function VoteKickOptionRow({
                   return (
                     <img
                       key={vote.playerId}
-                      src={avatarUrls.get(vote.playerId) ?? PLAYER_AVATARS[0]!}
+                      src={avatarUrls.get(vote.playerId) ?? PLAYER_AVATARS[0]}
                       alt={voter ? `${voter.name} avatar` : "Voter avatar"}
                       className="size-4 rounded-full border border-white/20 object-cover"
                       draggable={false}
@@ -4489,7 +4489,7 @@ function TableSeatRing({
           <TableAvatarSeat
             key={candidate.id}
             player={candidate}
-            avatarUrl={avatarUrls.get(candidate.id) ?? PLAYER_AVATARS[0]!}
+            avatarUrl={avatarUrls.get(candidate.id) ?? PLAYER_AVATARS[0]}
             handCount={state?.handCount ?? 0}
             supporterCount={
               game?.supportLinks.filter(
@@ -4508,7 +4508,7 @@ function TableSeatRing({
                     id: supporter.id,
                     name: supporter.name,
                     avatarUrl:
-                      avatarUrls.get(supporter.id) ?? PLAYER_AVATARS[0]!,
+                      avatarUrls.get(supporter.id) ?? PLAYER_AVATARS[0],
                   }
                 })
                 .filter(
@@ -5084,7 +5084,7 @@ function isDiscardFirstStage(
   cards: Array<Card>,
   playableCardIds: Array<string>
 ) {
-  const discardCard = cards[0]
+  const discardCard = cards.at(0)
   if (!discardCard || discardCard.face.kind !== "discard-color") return false
   if (!playableCardIds.includes(discardCard.id)) return false
 
@@ -5097,7 +5097,7 @@ function isDiscardFirstStage(
 }
 
 function canStackDrawCards(
-  drawStack: NonNullable<RoomSnapshot["game"]>["drawStack"],
+  drawStack: NonNullable<RoomSnapshot["game"]>["drawStack"] | null,
   cards: Array<Card>,
   playableCardIds: Array<string>
 ) {
@@ -5137,7 +5137,7 @@ function isForbiddenFinalCard(card: Card) {
 }
 
 function sameNumberGroup(cards: Array<Card>) {
-  const first = cards[0]
+  const first = cards.at(0)
   if (!first || first.face.kind !== "number") return false
   const value = first.face.value
   return cards.every(
@@ -5146,7 +5146,7 @@ function sameNumberGroup(cards: Array<Card>) {
 }
 
 function sameDrawGroup(cards: Array<Card>) {
-  const first = cards[0]
+  const first = cards.at(0)
   const key = first ? drawGroupKey(first) : null
   if (!key) return false
   return cards.every((card) => drawGroupKey(card) === key)
@@ -6046,8 +6046,15 @@ function InviteJoinScreen({
 
 async function copyTextToClipboard(value: string) {
   try {
-    if (window.isSecureContext && window.navigator.clipboard?.writeText) {
-      await window.navigator.clipboard.writeText(value)
+    const clipboard = (
+      window.navigator as unknown as {
+        clipboard?: {
+          writeText?: Clipboard["writeText"]
+        }
+      }
+    ).clipboard
+    if (window.isSecureContext && typeof clipboard?.writeText === "function") {
+      await clipboard.writeText(value)
       return
     }
   } catch {
@@ -6260,7 +6267,7 @@ function GameOptionCheckbox({
   )
 }
 
-function playerName(
+function getPlayerName(
   room: RoomSnapshot,
   playerId: string | null | undefined
 ): string {
@@ -6309,13 +6316,13 @@ function avatarsByPlayerId(
   for (let index = shuffled.length - 1; index > 0; index--) {
     const swapIndex = Math.floor(random() * (index + 1))
     ;[shuffled[index], shuffled[swapIndex]] = [
-      shuffled[swapIndex]!,
-      shuffled[index]!,
+      shuffled[swapIndex],
+      shuffled[index],
     ]
   }
   const assignments = new Map<string, string>()
   players.forEach((player, index) => {
-    assignments.set(player.id, shuffled[index % shuffled.length]!)
+    assignments.set(player.id, shuffled[index % shuffled.length])
   })
   return assignments
 }
@@ -6477,34 +6484,32 @@ function describeVoiceStream(stream: MediaStream) {
 
 function playRegisteredVoiceAudio(reason: string) {
   for (const audio of remoteVoiceAudioElements) {
-    const playPromise = audio.play()
-    if (playPromise) {
-      playPromise
-        .then(() => {
-          logRoomVoiceDebug("remote audio play resolved", {
-            reason,
-            playerId: audio.dataset.playerId,
-            readyState: audio.readyState,
-            paused: audio.paused,
-          })
+    void audio
+      .play()
+      .then(() => {
+        logRoomVoiceDebug("remote audio play resolved", {
+          reason,
+          playerId: audio.dataset.playerId,
+          readyState: audio.readyState,
+          paused: audio.paused,
         })
-        .catch((cause: unknown) => {
-          logRoomVoiceDebug("remote audio play blocked", {
-            reason,
-            playerId: audio.dataset.playerId,
-            readyState: audio.readyState,
-            paused: audio.paused,
-            cause,
-          })
+      })
+      .catch((cause: unknown) => {
+        logRoomVoiceDebug("remote audio play blocked", {
+          reason,
+          playerId: audio.dataset.playerId,
+          readyState: audio.readyState,
+          paused: audio.paused,
+          cause,
         })
-    }
+      })
   }
 }
 
 function VoiceAudioOutputs({
   streamsByPlayerId,
 }: {
-  streamsByPlayerId: Record<string, MediaStream>
+  streamsByPlayerId: Partial<Record<string, MediaStream>>
 }) {
   useEffect(() => {
     const unlockAudio = () => playRegisteredVoiceAudio("user-gesture")
@@ -6521,9 +6526,17 @@ function VoiceAudioOutputs({
 
   return (
     <>
-      {Object.entries(streamsByPlayerId).map(([playerId, stream]) => (
-        <RemoteVoiceAudio key={playerId} playerId={playerId} stream={stream} />
-      ))}
+      {Object.entries(streamsByPlayerId).flatMap(([playerId, stream]) =>
+        stream ? (
+          <RemoteVoiceAudio
+            key={playerId}
+            playerId={playerId}
+            stream={stream}
+          />
+        ) : (
+          []
+        )
+      )}
     </>
   )
 }
@@ -6574,27 +6587,25 @@ function RemoteVoiceAudio({
     }
 
     const playAudio = () => {
-      const playPromise = audio.play()
-      if (playPromise) {
-        playPromise
-          .then(() => {
-            removeUnlockListeners()
-            logRoomVoiceDebug("remote audio play resolved", {
-              playerId,
-              readyState: audio.readyState,
-              paused: audio.paused,
-            })
+      void audio
+        .play()
+        .then(() => {
+          removeUnlockListeners()
+          logRoomVoiceDebug("remote audio play resolved", {
+            playerId,
+            readyState: audio.readyState,
+            paused: audio.paused,
           })
-          .catch((cause: unknown) => {
-            logRoomVoiceDebug("remote audio play blocked", {
-              playerId,
-              readyState: audio.readyState,
-              paused: audio.paused,
-              cause,
-            })
-            addUnlockListeners()
+        })
+        .catch((cause: unknown) => {
+          logRoomVoiceDebug("remote audio play blocked", {
+            playerId,
+            readyState: audio.readyState,
+            paused: audio.paused,
+            cause,
           })
-      }
+          addUnlockListeners()
+        })
     }
 
     const handleTrackChanged = () => {
@@ -7032,7 +7043,7 @@ function DimmedSeatRing({
             >
               <div className="grid size-9 shrink-0 place-items-center overflow-hidden rounded-full border border-white/12 bg-white/[0.06] text-white/72 sm:size-12">
                 <img
-                  src={avatarUrls.get(candidate.id) ?? PLAYER_AVATARS[0]!}
+                  src={avatarUrls.get(candidate.id) ?? PLAYER_AVATARS[0]}
                   alt={`${candidate.name} avatar`}
                   draggable={false}
                   className="size-full rounded-full object-cover"
@@ -7231,7 +7242,7 @@ function GameStartIntro({
     () => orderPlayersAroundSelf(room.players, selfPlayerId),
     [room.players, selfPlayerId]
   )
-  const handSize = room.houseRules.startingHandSize ?? 7
+  const handSize = room.houseRules.startingHandSize
 
   useEffect(() => {
     if (typeof window === "undefined") return

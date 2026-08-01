@@ -1,6 +1,5 @@
-import type { CSSProperties, ReactNode } from "react"
-
 import { cn } from "@workspace/ui/lib/utils"
+import type { CSSProperties, ReactNode } from "react"
 
 type Position = "top-left" | "bottom-right"
 
@@ -17,7 +16,13 @@ type Props = {
  * pip flips 180° so the card stays readable when held by the player across
  * the table. The center oval keeps its tilt independently.
  */
-export function CardCorner({ position, inset, fontPx, className, children }: Props) {
+export function CardCorner({
+  position,
+  inset,
+  fontPx,
+  className,
+  children,
+}: Props) {
   const isBottom = position === "bottom-right"
 
   const style: CSSProperties = {
@@ -37,7 +42,7 @@ export function CardCorner({ position, inset, fontPx, className, children }: Pro
       aria-hidden
       className={cn(
         "pointer-events-none absolute z-10 font-bold text-white select-none",
-        className,
+        className
       )}
       style={{ ...positionStyle, ...style }}
     >

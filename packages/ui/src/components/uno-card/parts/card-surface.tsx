@@ -1,9 +1,8 @@
+import { cn } from "@workspace/ui/lib/utils"
+import { palette } from "../tokens"
 import type { CSSProperties, ReactNode } from "react"
 
-import { cn } from "@workspace/ui/lib/utils"
-
 import type { CardColor } from "../types"
-import { palette } from "../tokens"
 
 type Props = {
   color: CardColor
@@ -20,7 +19,15 @@ type Props = {
  * Builds the anodized look from five stacked layers and a soft inner bevel.
  * The outer frame + drop shadow are owned by the parent UnoCard wrapper.
  */
-export function CardSurface({ color, width, height, radius, className, style, children }: Props) {
+export function CardSurface({
+  color,
+  width,
+  height,
+  radius,
+  className,
+  style,
+  children,
+}: Props) {
   const ramp = palette[color]
 
   const surfaceStyle: CSSProperties = {
@@ -47,7 +54,10 @@ export function CardSurface({ color, width, height, radius, className, style, ch
   }
 
   return (
-    <div className={cn("relative overflow-hidden", className)} style={surfaceStyle}>
+    <div
+      className={cn("relative overflow-hidden", className)}
+      style={surfaceStyle}
+    >
       {/* Glossy top-edge highlight — a thin streak that hugs the upper bevel. */}
       <div
         aria-hidden

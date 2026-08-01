@@ -7,7 +7,8 @@ import type {
   VoiceStateEvent,
 } from "@workspace/game"
 
-import { getRealtimeUrl, type GameSocket } from "@/lib/realtime"
+import type { GameSocket } from "@/lib/realtime"
+import { getRealtimeUrl } from "@/lib/realtime"
 
 type VoicePeerState = {
   enabled: boolean
@@ -27,36 +28,36 @@ export type RoomVoiceController = {
   muted: boolean
   speaking: boolean
   error: string | null
-  voiceStates: Record<string, VoicePeerState>
-  remoteStreamsByPlayerId: Record<string, MediaStream>
+  voiceStates: Partial<Record<string, VoicePeerState>>
+  remoteStreamsByPlayerId: Partial<Record<string, MediaStream>>
   toggle: () => void
 }
 
-const defaultIceServers: RTCIceServer[] = [
+const defaultIceServers: Array<RTCIceServer> = [
   { urls: "stun:stun.l.google.com:19302" },
 ]
 
 let voicePeerConfig: RTCConfiguration = {
   iceServers: getBuildTimeVoiceIceServers(),
 }
-let voicePeerConfigPromise: Promise<RTCIceServer[]> | null = null
+let voicePeerConfigPromise: Promise<Array<RTCIceServer>> | null = null
 
-function getBuildTimeVoiceIceServers(): RTCIceServer[] {
+function getBuildTimeVoiceIceServers(): Array<RTCIceServer> {
   const configuredServers = import.meta.env.VITE_RTC_ICE_SERVERS?.trim()
   if (!configuredServers) return defaultIceServers
 
   try {
-    const parsedServers = normalizeVoiceIceServers(JSON.parse(configuredServers))
-    return parsedServers.length > 0
-      ? parsedServers
-      : defaultIceServers
+    const parsedServers = normalizeVoiceIceServers(
+      JSON.parse(configuredServers)
+    )
+    return parsedServers.length > 0 ? parsedServers : defaultIceServers
   } catch (cause) {
     console.error("Invalid VITE_RTC_ICE_SERVERS value", cause)
     return defaultIceServers
   }
 }
 
-async function loadVoicePeerConfig(): Promise<RTCIceServer[]> {
+async function loadVoicePeerConfig(): Promise<Array<RTCIceServer>> {
   if (voicePeerConfigPromise) return voicePeerConfigPromise
 
   voicePeerConfigPromise = (async () => {
@@ -98,7 +99,7 @@ async function loadVoicePeerConfig(): Promise<RTCIceServer[]> {
   return voicePeerConfigPromise
 }
 
-function normalizeVoiceIceServers(value: unknown): RTCIceServer[] {
+function normalizeVoiceIceServers(value: unknown): Array<RTCIceServer> {
   if (!Array.isArray(value)) return []
 
   return value.flatMap((server) => {
@@ -123,12 +124,22 @@ function normalizeVoiceIceServers(value: unknown): RTCIceServer[] {
         : undefined
     const credentialType =
       "credentialType" in server &&
-      (server.credentialType === "password" || server.credentialType === "oauth")
+      (server.credentialType === "password" ||
+        server.credentialType === "oauth")
         ? server.credentialType
         : undefined
 
     return [{ urls: normalizedUrls, username, credential, credentialType }]
   })
+}
+
+function getBrowserAudioContext(): typeof AudioContext | undefined {
+  if (typeof window === "undefined") return undefined
+  const audioWindow = window as unknown as {
+    AudioContext?: typeof AudioContext
+    webkitAudioContext?: typeof AudioContext
+  }
+  return audioWindow.AudioContext ?? audioWindow.webkitAudioContext
 }
 
 export function isRoomVoiceDebugEnabled() {
@@ -208,7 +219,7 @@ export function useRoomVoice({
   socket: GameSocket | null
   roomCode: string
   selfPlayerId: string | null
-  players: Player[]
+  players: Array<Player>
 }): RoomVoiceController {
   const [enabled, setEnabled] = useState(false)
   const [connecting, setConnecting] = useState(false)
@@ -216,15 +227,15 @@ export function useRoomVoice({
   const [speaking, setSpeaking] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [voiceStates, setVoiceStates] = useState<
-    Record<string, VoicePeerState>
+    Partial<Record<string, VoicePeerState>>
   >({})
   const [remoteStreamsByPlayerId, setRemoteStreamsByPlayerId] = useState<
-    Record<string, MediaStream>
+    Partial<Record<string, MediaStream>>
   >({})
 
   const socketRef = useRef<GameSocket | null>(socket)
   const selfPlayerIdRef = useRef<string | null>(selfPlayerId)
-  const playersRef = useRef<Player[]>(players)
+  const playersRef = useRef<Array<Player>>(players)
   const enabledRef = useRef(enabled)
   const mutedRef = useRef(muted)
   const speakingRef = useRef(speaking)
@@ -233,9 +244,9 @@ export function useRoomVoice({
   const silentAudioSourceRef = useRef<SilentAudioSource | null>(null)
   const peersRef = useRef<Map<string, RTCPeerConnection>>(new Map())
   const negotiatingPeersRef = useRef<Set<string>>(new Set())
-  const pendingIceCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(
-    new Map()
-  )
+  const pendingIceCandidatesRef = useRef<
+    Map<string, Array<RTCIceCandidateInit>>
+  >(new Map())
   const meterCleanupRef = useRef<(() => void) | null>(null)
 
   useEffect(() => {
@@ -295,20 +306,20 @@ export function useRoomVoice({
   )
 
   const emitVoiceState = useCallback((state: VoicePeerState) => {
-    const socket = socketRef.current
-    if (!socket) return
-    socket.emit("voice:setState", state)
+    const activeSocket = socketRef.current
+    if (!activeSocket) return
+    activeSocket.emit("voice:setState", state)
   }, [])
 
   const emitSignal = useCallback(
     (targetPlayerId: string, signal: VoiceSignal) => {
-      const socket = socketRef.current
-      if (!socket) return
+      const activeSocket = socketRef.current
+      if (!activeSocket) return
       logRoomVoiceDebug("signal sent", {
         targetPlayerId,
         signal: describeSignal(signal),
       })
-      socket.emit("voice:signal", { targetPlayerId, signal })
+      activeSocket.emit("voice:signal", { targetPlayerId, signal })
     },
     []
   )
@@ -374,10 +385,7 @@ export function useRoomVoice({
 
     if (typeof window === "undefined") return null
 
-    const AudioContextClass =
-      window.AudioContext ??
-      (window as unknown as { webkitAudioContext?: typeof AudioContext })
-        .webkitAudioContext
+    const AudioContextClass = getBrowserAudioContext()
     if (!AudioContextClass) return null
 
     try {
@@ -391,7 +399,7 @@ export function useRoomVoice({
       gain.connect(destination)
       oscillator.start()
 
-      const track = destination.stream.getAudioTracks()[0]
+      const track = destination.stream.getAudioTracks().at(0)
       if (!track) {
         void audioContext.close()
         return null
@@ -447,9 +455,9 @@ export function useRoomVoice({
   }, [getSilentAudioSource])
 
   const shouldCreateOffer = useCallback((remotePlayerId: string) => {
-    const selfPlayerId = selfPlayerIdRef.current
-    if (!selfPlayerId) return false
-    return selfPlayerId < remotePlayerId
+    const activeSelfPlayerId = selfPlayerIdRef.current
+    if (!activeSelfPlayerId) return false
+    return activeSelfPlayerId < remotePlayerId
   }, [])
 
   const shouldCreateInitialOffer = useCallback(
@@ -481,7 +489,7 @@ export function useRoomVoice({
   const syncRemoteAudioFromPeer = useCallback(
     (remotePlayerId: string, peer: RTCPeerConnection) => {
       for (const receiver of peer.getReceivers()) {
-        if (receiver.track?.kind === "audio") {
+        if (receiver.track.kind === "audio") {
           setRemoteAudioTrack(remotePlayerId, receiver.track)
         }
       }
@@ -497,7 +505,7 @@ export function useRoomVoice({
         .find(
           (transceiver) =>
             transceiver.sender.track?.kind === "audio" ||
-            transceiver.receiver.track?.kind === "audio"
+            transceiver.receiver.track.kind === "audio"
         )
 
       // Keep one stable audio m-line for the lifetime of the peer connection.
@@ -546,8 +554,8 @@ export function useRoomVoice({
 
   const ensurePeer = useCallback(
     (remotePlayerId: string) => {
-      const selfPlayerId = selfPlayerIdRef.current
-      if (!selfPlayerId || remotePlayerId === selfPlayerId) {
+      const activeSelfPlayerId = selfPlayerIdRef.current
+      if (!activeSelfPlayerId || remotePlayerId === activeSelfPlayerId) {
         return null
       }
 
@@ -688,11 +696,11 @@ export function useRoomVoice({
   )
 
   const connectToEnabledPeers = useCallback(() => {
-    const selfPlayerId = selfPlayerIdRef.current
-    if (!selfPlayerId || !enabledRef.current) return
+    const activeSelfPlayerId = selfPlayerIdRef.current
+    if (!activeSelfPlayerId || !enabledRef.current) return
 
     for (const player of playersRef.current) {
-      if (player.id === selfPlayerId) continue
+      if (player.id === activeSelfPlayerId) continue
       if (!voiceStatesRef.current[player.id]?.enabled) continue
       const peer = ensurePeer(player.id)
       if (peer && shouldCreateInitialOffer(player.id, peer)) {
@@ -702,7 +710,7 @@ export function useRoomVoice({
   }, [createOffer, ensurePeer, shouldCreateInitialOffer])
 
   const syncAllPeers = useCallback(async () => {
-    const tasks: Promise<void>[] = []
+    const tasks: Array<Promise<void>> = []
     for (const [playerId, peer] of peersRef.current) {
       tasks.push(syncLocalAudioToPeer(peer, playerId))
     }
@@ -711,17 +719,17 @@ export function useRoomVoice({
 
   const publishLocalVoiceState = useCallback(
     (state: VoicePeerState) => {
-      const selfPlayerId = selfPlayerIdRef.current
-      if (!selfPlayerId) return
-      setVoiceStateForPlayer(selfPlayerId, state)
+      const activeSelfPlayerId = selfPlayerIdRef.current
+      if (!activeSelfPlayerId) return
+      setVoiceStateForPlayer(activeSelfPlayerId, state)
       emitVoiceState(state)
     },
     [emitVoiceState, setVoiceStateForPlayer]
   )
 
   const startListening = useCallback(async () => {
-    const selfPlayerId = selfPlayerIdRef.current
-    if (!selfPlayerId || enabledRef.current) return
+    const activeSelfPlayerId = selfPlayerIdRef.current
+    if (!activeSelfPlayerId || enabledRef.current) return
 
     setConnecting(true)
     setError(null)
@@ -731,7 +739,7 @@ export function useRoomVoice({
       setConnecting(false)
     }
 
-    if (!selfPlayerIdRef.current || enabledRef.current) return
+    if (!selfPlayerIdRef.current) return
 
     enabledRef.current = true
     mutedRef.current = true
@@ -740,15 +748,17 @@ export function useRoomVoice({
     setMuted(true)
     setSpeaking(false)
     publishLocalVoiceState({ enabled: true, muted: true, speaking: false })
-    logRoomVoiceDebug("joined voice as listener", { selfPlayerId })
+    logRoomVoiceDebug("joined voice as listener", {
+      selfPlayerId: activeSelfPlayerId,
+    })
     socketRef.current?.emit("voice:requestStates")
     connectToEnabledPeers()
   }, [connectToEnabledPeers, publishLocalVoiceState])
 
   const setLocalMuted = useCallback(
     async (nextMuted: boolean) => {
-      const selfPlayerId = selfPlayerIdRef.current
-      if (!selfPlayerId || !enabledRef.current || !localStreamRef.current)
+      const activeSelfPlayerId = selfPlayerIdRef.current
+      if (!activeSelfPlayerId || !enabledRef.current || !localStreamRef.current)
         return
 
       for (const track of localStreamRef.current.getAudioTracks()) {
@@ -770,7 +780,7 @@ export function useRoomVoice({
       }
       publishLocalVoiceState(state)
       logRoomVoiceDebug("local mute changed", {
-        selfPlayerId,
+        selfPlayerId: activeSelfPlayerId,
         muted: nextMuted,
         localTrack: describeTrack(localStreamRef.current.getAudioTracks()[0]),
       })
@@ -780,7 +790,7 @@ export function useRoomVoice({
   )
 
   const stop = useCallback(() => {
-    const selfPlayerId = selfPlayerIdRef.current
+    const activeSelfPlayerId = selfPlayerIdRef.current
     setConnecting(false)
     setEnabled(false)
     setMuted(true)
@@ -791,8 +801,8 @@ export function useRoomVoice({
     stopSilentAudioSource()
     closeAllPeers()
     emitVoiceState({ enabled: false, muted: true, speaking: false })
-    if (selfPlayerId) {
-      setVoiceStateForPlayer(selfPlayerId, {
+    if (activeSelfPlayerId) {
+      setVoiceStateForPlayer(activeSelfPlayerId, {
         enabled: false,
         muted: true,
         speaking: false,
@@ -811,10 +821,7 @@ export function useRoomVoice({
     (stream: MediaStream) => {
       stopSpeakingMeter()
 
-      const AudioContextClass =
-        window.AudioContext ??
-        (window as unknown as { webkitAudioContext?: typeof AudioContext })
-          .webkitAudioContext
+      const AudioContextClass = getBrowserAudioContext()
       if (!AudioContextClass) return
 
       const audioContext = new AudioContextClass()
@@ -828,8 +835,8 @@ export function useRoomVoice({
       const samples = new Uint8Array(analyser.fftSize)
       let lastSpeaking = false
       const intervalId = window.setInterval(() => {
-        const selfPlayerId = selfPlayerIdRef.current
-        if (!selfPlayerId || !enabledRef.current) return
+        const activeSelfPlayerId = selfPlayerIdRef.current
+        if (!activeSelfPlayerId || !enabledRef.current) return
 
         if (mutedRef.current) {
           if (!lastSpeaking) return
@@ -837,7 +844,7 @@ export function useRoomVoice({
           speakingRef.current = false
           setSpeaking(false)
           const state = { enabled: true, muted: true, speaking: false }
-          setVoiceStateForPlayer(selfPlayerId, state)
+          setVoiceStateForPlayer(activeSelfPlayerId, state)
           emitVoiceState(state)
           return
         }
@@ -857,7 +864,7 @@ export function useRoomVoice({
         speakingRef.current = nextSpeaking
         setSpeaking(nextSpeaking)
         const state = { enabled: true, muted: false, speaking: nextSpeaking }
-        setVoiceStateForPlayer(selfPlayerId, state)
+        setVoiceStateForPlayer(activeSelfPlayerId, state)
         emitVoiceState(state)
       }, 150)
 
@@ -872,13 +879,20 @@ export function useRoomVoice({
   )
 
   const start = useCallback(async () => {
-    const selfPlayerId = selfPlayerIdRef.current
-    if (!selfPlayerId || connecting) return
+    const activeSelfPlayerId = selfPlayerIdRef.current
+    if (!activeSelfPlayerId || connecting) return
     if (localStreamRef.current) {
       await setLocalMuted(false)
       return
     }
-    if (!navigator.mediaDevices?.getUserMedia) {
+    const mediaDevices = (
+      navigator as unknown as {
+        mediaDevices?: {
+          getUserMedia?: MediaDevices["getUserMedia"]
+        }
+      }
+    ).mediaDevices
+    if (typeof mediaDevices?.getUserMedia !== "function") {
       setError("Voice chat is not available in this browser.")
       return
     }
@@ -888,7 +902,7 @@ export function useRoomVoice({
 
     try {
       await loadVoicePeerConfig()
-      const stream = await navigator.mediaDevices.getUserMedia({
+      const stream = await mediaDevices.getUserMedia({
         audio: {
           autoGainControl: true,
           echoCancellation: true,
@@ -909,7 +923,7 @@ export function useRoomVoice({
       const state = { enabled: true, muted: false, speaking: false }
       publishLocalVoiceState(state)
       logRoomVoiceDebug("local mic started", {
-        selfPlayerId,
+        selfPlayerId: activeSelfPlayerId,
         localTrack: describeTrack(stream.getAudioTracks()[0]),
       })
       socketRef.current?.emit("voice:requestStates")
@@ -938,11 +952,11 @@ export function useRoomVoice({
 
   const handleIncomingSignal = useCallback(
     async (event: VoiceSignalEvent) => {
-      const selfPlayerId = selfPlayerIdRef.current
+      const activeSelfPlayerId = selfPlayerIdRef.current
       if (
-        !selfPlayerId ||
-        event.targetPlayerId !== selfPlayerId ||
-        event.fromPlayerId === selfPlayerId ||
+        !activeSelfPlayerId ||
+        event.targetPlayerId !== activeSelfPlayerId ||
+        event.fromPlayerId === activeSelfPlayerId ||
         !enabledRef.current
       ) {
         return
@@ -1059,8 +1073,8 @@ export function useRoomVoice({
     const activeSocket = socket
 
     function handleVoiceState(event: VoiceStateEvent) {
-      const selfPlayerId = selfPlayerIdRef.current
-      if (event.playerId === selfPlayerId) return
+      const activeSelfPlayerId = selfPlayerIdRef.current
+      if (event.playerId === activeSelfPlayerId) return
 
       setVoiceStateForPlayer(event.playerId, {
         enabled: event.enabled,
@@ -1068,7 +1082,7 @@ export function useRoomVoice({
         speaking: event.speaking,
       })
 
-      if (!selfPlayerId) return
+      if (!activeSelfPlayerId) return
 
       if (!event.enabled) {
         closePeer(event.playerId)
@@ -1141,9 +1155,13 @@ export function useRoomVoice({
 
     setVoiceStates((current) => {
       let changed = false
-      const next: Record<string, VoicePeerState> = {}
+      const next: Partial<Record<string, VoicePeerState>> = {}
       for (const [playerId, state] of Object.entries(current)) {
         if (!validPlayerIds.has(playerId)) {
+          changed = true
+          continue
+        }
+        if (!state) {
           changed = true
           continue
         }
@@ -1175,10 +1193,12 @@ export function useRoomVoice({
         ),
         voiceStates: voiceStatesRef.current,
         remoteStreams: Object.fromEntries(
-          Object.entries(remoteStreamsByPlayerId).map(([playerId, stream]) => [
-            playerId,
-            stream.getAudioTracks().map(describeTrack),
-          ])
+          Object.entries(remoteStreamsByPlayerId).flatMap(
+            ([playerId, stream]) =>
+              stream
+                ? [[playerId, stream.getAudioTracks().map(describeTrack)]]
+                : []
+          )
         ),
         peers: Object.fromEntries(
           Array.from(peersRef.current.entries()).map(([playerId, peer]) => [
