@@ -16,6 +16,7 @@ import type {
   VoiceSignal,
 } from "@workspace/game"
 
+import { GiphyService } from "./giphy"
 import { RoomManager } from "./room-manager"
 
 type IceServerConfig = {
@@ -34,7 +35,25 @@ const voiceDebugEnabled =
   process.env.VOICE_DEBUG === "1" || process.env.VOICE_DEBUG === "true"
 const voiceIceServers = getConfiguredIceServers()
 
-const rooms = new RoomManager()
+const gifs = new GiphyService({
+  apiKey: process.env.GIPHY_API_KEY,
+  countryCode: process.env.GIPHY_COUNTRY_CODE ?? "US",
+  maxRequestsPerHour: Number.parseInt(
+    process.env.GIPHY_REQUESTS_PER_HOUR ?? "90",
+    10
+  ),
+  maxRequestsPerRequesterPerHour: Number.parseInt(
+    process.env.GIPHY_REQUESTS_PER_PLAYER_PER_HOUR ?? "30",
+    10
+  ),
+})
+const rooms = new RoomManager({
+  resolveGif: (provider, id) =>
+    provider === "giphy" ? gifs.resolveApprovedGif(id) : null,
+  onRoomUpdated: (code, room) => {
+    void emitRoomState(code, room)
+  },
+})
 const voiceStatesByRoomCode = new Map<
   string,
   Map<string, { enabled: boolean; muted: boolean; speaking: boolean }>
@@ -66,6 +85,39 @@ const httpServer = createServer(async (req, res) => {
 
   if (req.method === "GET" && url.pathname === "/analysis/rooms") {
     sendJson(req, res, 200, { ok: true, data: rooms.getAnalysisRooms() })
+    return
+  }
+
+  if (req.method === "GET" && url.pathname === "/gifs/search") {
+    const roomCode = firstHeader(req.headers["x-room-code"])
+    const sessionId = firstHeader(req.headers["x-player-session-id"])
+    if (!rooms.hasPlayerSession(roomCode, sessionId)) {
+      sendJson(req, res, 401, {
+        error: {
+          code: "gif-search-unauthorized",
+          message: "Join the room before searching for GIFs.",
+        },
+      })
+      return
+    }
+    const query = url.searchParams.get("q") ?? ""
+    const offset = Number.parseInt(url.searchParams.get("offset") ?? "0", 10)
+    try {
+      const result = await gifs.search({
+        query,
+        offset,
+        requesterId: sessionId,
+      })
+      sendJson(req, res, 200, result)
+    } catch (cause) {
+      console.error("GIF search failed", cause)
+      sendJson(req, res, 502, {
+        error: {
+          code: "gif-search-unavailable",
+          message: "GIF search is temporarily unavailable.",
+        },
+      })
+    }
     return
   }
 
@@ -153,6 +205,7 @@ io.on("connection", (socket) => {
 
     const room = snapshot ?? result.data.room
     const playerGame = rooms.getPlayerGame(room.code, result.data.player.id)
+    const playerSocial = rooms.getPlayerSocial(room.code, result.data.player.id)
     emitVoiceStates(socket, room.code)
     ack({
       ok: true,
@@ -161,6 +214,7 @@ io.on("connection", (socket) => {
         player: result.data.player,
         isNewPlayer: result.data.isNewPlayer,
         playerGame,
+        playerSocial,
       },
     })
     void emitRoomState(room.code, room)
@@ -244,6 +298,22 @@ io.on("connection", (socket) => {
   socket.on("room:sendChatMessage", (input, ack) => {
     const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
       rooms.sendChatMessage(roomCode, playerId, input)
+    )
+    ack(result)
+    if (result.ok) void emitRoomState(result.data.code, result.data)
+  })
+
+  socket.on("room:startVoteKick", (input, ack) => {
+    const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
+      rooms.startVoteKick(roomCode, playerId, input.targetPlayerId)
+    )
+    ack(result)
+    if (result.ok) void emitRoomState(result.data.code, result.data)
+  })
+
+  socket.on("room:castVoteKick", (input, ack) => {
+    const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
+      rooms.castVoteKick(roomCode, playerId, input.voteKickId, input.choice)
     )
     ack(result)
     if (result.ok) void emitRoomState(result.data.code, result.data)
@@ -354,6 +424,43 @@ io.on("connection", (socket) => {
     if (result.ok) void emitRoomState(result.data.code, result.data)
   })
 
+  socket.on("game:supportPlayer", (input, ack) => {
+    const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
+      rooms.supportPlayer(roomCode, playerId, input.supportedPlayerId)
+    )
+    ack(result)
+    if (result.ok) void emitRoomState(result.data.code, result.data)
+  })
+
+  socket.on("game:kickSupporter", (input, ack) => {
+    const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
+      rooms.kickSupporter(roomCode, playerId, input.supporterPlayerId)
+    )
+    ack(result)
+    if (result.ok) void emitRoomState(result.data.code, result.data)
+  })
+
+  socket.on("game:sendAvatarEmojiReaction", (input, ack) => {
+    const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
+      rooms.sendAvatarEmojiReaction(roomCode, playerId, input)
+    )
+    ack(result)
+    if (result.ok) void emitRoomState(result.data.code, result.data)
+  })
+
+  socket.on("game:getSupportView", (ack) => {
+    const roomCode = socket.data.roomCode
+    const playerId = socket.data.playerId
+    if (!roomCode || !playerId) {
+      ack({
+        ok: false,
+        error: { code: "not-joined", message: "Join a room first." },
+      })
+      return
+    }
+    ack({ ok: true, data: rooms.getSupportView(roomCode, playerId) })
+  })
+
   socket.on("game:spectatePlayer", (input, ack) => {
     const roomCode = socket.data.roomCode
     const playerId = socket.data.playerId
@@ -364,12 +471,11 @@ io.on("connection", (socket) => {
       })
       return
     }
-    const spectatorView = rooms.getSpectatorView(
-      roomCode,
-      playerId,
-      input.targetPlayerId
-    )
-    ack({ ok: true, data: spectatorView })
+
+    ack({
+      ok: true,
+      data: rooms.getSpectatorView(roomCode, playerId, input.targetPlayerId),
+    })
   })
 
   socket.on("disconnect", () => {
@@ -415,7 +521,14 @@ function setCorsHeaders(req: IncomingMessage, res: ServerResponse) {
   )
   res.setHeader("Vary", "Origin")
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type")
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, X-Room-Code, X-Player-Session-Id"
+  )
+}
+
+function firstHeader(value: string | Array<string> | undefined): string {
+  return Array.isArray(value) ? (value[0] ?? "") : (value ?? "")
 }
 
 function sendJson(
@@ -468,6 +581,8 @@ async function emitRoomState(roomCode: string, room?: RoomSnapshot) {
 
     const playerGame = rooms.getPlayerGame(roomCode, playerId)
     if (playerGame) client.emit("game:playerState", playerGame)
+    const playerSocial = rooms.getPlayerSocial(roomCode, playerId)
+    if (playerSocial) client.emit("room:playerSocial", playerSocial)
   }
 }
 
@@ -615,7 +730,8 @@ function normalizeIceServers(value: unknown): IceServerConfig[] {
         : undefined
     const credentialType =
       "credentialType" in server &&
-      (server.credentialType === "password" || server.credentialType === "oauth")
+      (server.credentialType === "password" ||
+        server.credentialType === "oauth")
         ? server.credentialType
         : undefined
 

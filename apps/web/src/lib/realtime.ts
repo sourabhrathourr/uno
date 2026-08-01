@@ -1,4 +1,6 @@
 import { io } from "socket.io-client"
+
+import { getActiveRoomCode, getPlayerSessionId } from "./session"
 import type { Socket } from "socket.io-client"
 
 import type {
@@ -7,6 +9,7 @@ import type {
   CommandResult,
   CreateRoomRequest,
   CreateRoomResponse,
+  GifSearchResponse,
   RoomSnapshot,
   ServerToClientEvents,
 } from "@workspace/game"
@@ -36,7 +39,7 @@ export function getGameSocket(): GameSocket {
 }
 
 export async function createRoom(
-  input: CreateRoomRequest,
+  input: CreateRoomRequest
 ): Promise<CommandResult<CreateRoomResponse>> {
   const response = await fetch(`${getRealtimeUrl()}/rooms`, {
     method: "POST",
@@ -50,7 +53,7 @@ export async function createRoom(
 }
 
 export async function getRoomPreview(
-  code: string,
+  code: string
 ): Promise<CommandResult<RoomSnapshot>> {
   const response = await fetch(`${getRealtimeUrl()}/rooms/${code}`)
   return (await response.json()) as CommandResult<RoomSnapshot>
@@ -61,4 +64,27 @@ export async function getAnalysisRooms(): Promise<
 > {
   const response = await fetch(`${getRealtimeUrl()}/analysis/rooms`)
   return (await response.json()) as CommandResult<AnalysisRoomsResponse>
+}
+
+export async function searchGifs({
+  query,
+  offset,
+  signal,
+}: {
+  query: string
+  offset: number
+  signal?: AbortSignal
+}): Promise<GifSearchResponse> {
+  const url = new URL(`${getRealtimeUrl()}/gifs/search`)
+  if (query.trim()) url.searchParams.set("q", query.trim())
+  if (offset > 0) url.searchParams.set("offset", String(offset))
+  const response = await fetch(url, {
+    signal,
+    headers: {
+      "X-Room-Code": getActiveRoomCode(),
+      "X-Player-Session-Id": getPlayerSessionId(),
+    },
+  })
+  if (!response.ok) throw new Error("GIF search is temporarily unavailable.")
+  return (await response.json()) as GifSearchResponse
 }

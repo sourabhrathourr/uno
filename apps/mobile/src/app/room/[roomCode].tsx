@@ -1397,9 +1397,12 @@ function SeatRing({
           marginTop: roomySeats ? -28 : -24,
           width: seatWidth,
         };
-        const cardCountLabel = gamePlayer?.eliminated
-          ? 'Out'
-          : String(gamePlayer?.handCount ?? 0);
+        const waiting = Boolean(gamePlayer?.waiting);
+        const cardCountLabel = waiting
+          ? 'Next'
+          : gamePlayer?.eliminated || gamePlayer?.voteKicked
+            ? 'Out'
+            : String(gamePlayer?.handCount ?? 0);
 
         return (
           <View
@@ -1429,6 +1432,7 @@ function SeatRing({
                 style={[
                   styles.seatCountPill,
                   denseSeats && styles.seatCountPillDense,
+                  waiting && styles.seatCountPillWaiting,
                   isTurn && styles.seatCountPillTurn,
                 ]}
               >
@@ -1436,6 +1440,7 @@ function SeatRing({
                   style={[
                     styles.seatCountText,
                     denseSeats && styles.seatCountTextDense,
+                    waiting && styles.seatCountTextWaiting,
                     isTurn && styles.seatCountTextTurn,
                   ]}
                   numberOfLines={1}
@@ -1793,6 +1798,8 @@ function canStackDrawCards(
   cards: Card[],
   playableCardIds: string[],
 ) {
+  if (cards.length === 0 || !sameDrawGroup(cards)) return false;
+
   const playableGroups = new Set(
     cards
       .filter((card) => playableCardIds.includes(card.id))
@@ -2155,6 +2162,10 @@ const styles = StyleSheet.create({
     backgroundColor: '#151006',
     borderColor: 'rgba(255,243,163,0.44)',
   },
+  seatCountPillWaiting: {
+    backgroundColor: 'rgba(14,42,64,0.94)',
+    borderColor: 'rgba(125,211,252,0.44)',
+  },
   seatCountText: {
     color: '#fffdf4',
     fontSize: 9,
@@ -2166,6 +2177,9 @@ const styles = StyleSheet.create({
   },
   seatCountTextTurn: {
     color: '#fff3a3',
+  },
+  seatCountTextWaiting: {
+    color: '#d8f3ff',
   },
   stagingTray: {
     padding: 6,
