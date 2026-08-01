@@ -2,6 +2,61 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { RoomManager } from "./room-manager"
 
+describe("RoomManager room expiry", () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date("2026-07-10T00:00:00.000Z"))
+  })
+
+  it("removes rooms after seven days without activity", () => {
+    const expiredCodes: string[] = []
+    const manager = new RoomManager({
+      onRoomExpired: (code) => expiredCodes.push(code),
+    })
+    const created = manager.createRoom({
+      playerName: "A",
+      sessionId: "session-a",
+    })
+    expect(created.ok).toBe(true)
+    if (!created.ok) return
+    const code = created.data.room.code
+
+    vi.setSystemTime(new Date("2026-07-16T23:59:59.999Z"))
+    expect(manager.getRoom(code).ok).toBe(true)
+
+    vi.setSystemTime(new Date("2026-07-17T00:00:00.000Z"))
+    expect(manager.pruneExpiredRooms()).toEqual([code])
+    expect(expiredCodes).toEqual([code])
+    expect(manager.getRoom(code)).toMatchObject({
+      ok: false,
+      error: { code: "room-not-found" },
+    })
+    expect(manager.hasPlayerSession(code, "session-a")).toBe(false)
+    expect(manager.getAnalysisRooms().rooms).toEqual([])
+  })
+
+  it("extends room expiry when the room has activity", () => {
+    const manager = new RoomManager()
+    const created = manager.createRoom({
+      playerName: "A",
+      sessionId: "session-a",
+    })
+    expect(created.ok).toBe(true)
+    if (!created.ok) return
+    const code = created.data.room.code
+    const hostId = created.data.player.id
+
+    vi.setSystemTime(new Date("2026-07-16T00:00:00.000Z"))
+    expect(manager.registerConnection(code, hostId, "socket-a")).not.toBeNull()
+
+    vi.setSystemTime(new Date("2026-07-17T00:00:00.000Z"))
+    expect(manager.getRoom(code).ok).toBe(true)
+
+    vi.setSystemTime(new Date("2026-07-23T00:00:00.000Z"))
+    expect(manager.getRoom(code).ok).toBe(false)
+  })
+})
+
 describe("RoomManager support squads", () => {
   beforeEach(() => {
     vi.useFakeTimers()

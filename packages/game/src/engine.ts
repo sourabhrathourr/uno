@@ -259,6 +259,29 @@ export function projectPlayerGame(
   }
 }
 
+export function projectSpectatorView(
+  game: GameState,
+  context: GameContext,
+  spectatorPlayerId: string,
+  targetPlayerId: string
+): PlayerGameSnapshot | null {
+  void context
+  if (isPlayerActive(game, spectatorPlayerId)) return null
+  if (!game.playerOrder.includes(targetPlayerId)) return null
+  if (!isPlayerActive(game, targetPlayerId)) return null
+
+  const hand = game.handsByPlayerId[targetPlayerId] ?? []
+  return {
+    playerId: targetPlayerId,
+    hand: hand.map((card) => ({ ...card })),
+    playableCardIds: [],
+    catchablePlayerIds: [],
+    canDraw: false,
+    canEndTurn: false,
+    canTakeDrawPenalty: false,
+  }
+}
+
 export function projectSupportView(
   game: GameState,
   context: GameContext,

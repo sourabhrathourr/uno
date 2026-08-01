@@ -5,8 +5,20 @@ import { GlyphCanvas } from "./glyph-shared"
  * Four colored splotches arranged like a clover — UNO's wild signature.
  * Each splotch is a mini ellipse echoing the central white oval.
  */
-function WildClover({ cx, cy, scale }: { cx: number; cy: number; scale: number }) {
-  const splotches: Array<{ dx: number; dy: number; color: keyof typeof palette }> = [
+function WildClover({
+  cx,
+  cy,
+  scale,
+}: {
+  cx: number
+  cy: number
+  scale: number
+}) {
+  const splotches: Array<{
+    dx: number
+    dy: number
+    color: keyof typeof palette
+  }> = [
     { dx: 0, dy: -16, color: "red" },
     { dx: 16, dy: 0, color: "blue" },
     { dx: 0, dy: 16, color: "green" },

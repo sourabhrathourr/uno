@@ -1,5 +1,3 @@
-import type { OvalMode } from "../parts/card-center"
-import type { CardColor, CardFace } from "../types"
 import { NumberCenter, NumberCorner } from "./number-glyph"
 import { SkipCenter, SkipCorner, SkipEveryoneCenter } from "./skip-glyph"
 import { ReverseCenter, ReverseCorner } from "./reverse-glyph"
@@ -16,6 +14,8 @@ import {
   WildReverseDrawCenter,
 } from "./wild-cards-glyph"
 import { DiscardCenter, DiscardCorner } from "./discard-glyph"
+import type { CardColor, CardFace } from "../types"
+import type { OvalMode } from "../parts/card-center"
 
 /** Center symbol for any card face. */
 export function GlyphCenter({ face }: { face: CardFace }) {

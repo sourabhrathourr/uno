@@ -16,6 +16,7 @@ import {
   playCards,
   projectPlayerGame,
   projectPublicGame,
+  projectSpectatorView,
   projectSupportView,
   kickSupporter as kickSupportLink,
   releaseInactiveSupportLinks,
@@ -26,6 +27,7 @@ import {
   supportSquadPlayerIdFor,
   takeDrawPenalty,
   voteKickPlayer as applyVoteKickPlayer,
+  type AnalysisRoomsResponse,
   type CatchUnoInput,
   type ChatMessage,
   type CommandResult,
@@ -49,6 +51,8 @@ import {
 
 type ManagedRoom = RoomSnapshot & {
   gameState: GameState | null
+  matchStartedAt: string | null
+  matchFinishedAt: string | null
   sessionToPlayerId: Map<string, string>
   connectionIdsByPlayerId: Map<string, Set<string>>
   lastChatAtByPlayerId: Map<string, number>
@@ -73,6 +77,7 @@ type ResolvedGif = {
 type RoomManagerOptions = {
   resolveGif?: (provider: GifProvider, id: string) => ResolvedGif | null
   onRoomUpdated?: (code: string, room: RoomSnapshot) => void
+  onRoomExpired?: (code: string) => void
 }
 
 const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -81,18 +86,24 @@ const CHAT_RATE_LIMIT_MS = 650
 const AVATAR_EMOJI_REACTION_RATE_LIMIT_MS = 1_200
 const VOTE_KICK_DURATION_MS = 25_000
 const VOTE_KICK_COOLDOWN_MS = 60_000
+export const ROOM_MEMORY_TTL_MS = 7 * 24 * 60 * 60 * 1000
+export const ROOM_MEMORY_CLEANUP_INTERVAL_MS = 60 * 60 * 1000
 
 export class RoomManager {
   private readonly rooms = new Map<string, ManagedRoom>()
   private readonly resolveGif?: RoomManagerOptions["resolveGif"]
   private readonly onRoomUpdated?: RoomManagerOptions["onRoomUpdated"]
+  private readonly onRoomExpired?: RoomManagerOptions["onRoomExpired"]
 
   constructor(options: RoomManagerOptions = {}) {
     this.resolveGif = options.resolveGif
     this.onRoomUpdated = options.onRoomUpdated
+    this.onRoomExpired = options.onRoomExpired
   }
 
   createRoom(input: CreateRoomRequest): CommandResult<CreateRoomResponse> {
+    this.pruneExpiredRooms()
+
     const playerName = cleanPlayerName(input.playerName)
     if (!playerName) {
       return fail(
@@ -130,6 +141,8 @@ export class RoomManager {
       houseRules,
       game: null,
       gameState: null,
+      matchStartedAt: null,
+      matchFinishedAt: null,
       version: 1,
       createdAt: now,
       updatedAt: now,
@@ -152,7 +165,7 @@ export class RoomManager {
   }
 
   getRoom(code: string): CommandResult<RoomSnapshot> {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room) {
       return fail("room-not-found", "That room code does not exist.")
     }
@@ -161,7 +174,7 @@ export class RoomManager {
   }
 
   hasPlayerSession(code: string, sessionId: string): boolean {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     const normalizedSessionId = cleanSessionId(sessionId)
     return Boolean(
       room &&
@@ -170,9 +183,49 @@ export class RoomManager {
     )
   }
 
+  getAnalysisRooms(now = new Date()): AnalysisRoomsResponse {
+    this.pruneExpiredRooms(now)
+    const nowMs = now.getTime()
+    const rooms = Array.from(this.rooms.values()).map((room) =>
+      analysisRoomSummary(room, nowMs)
+    )
+
+    return {
+      generatedAt: now.toISOString(),
+      totals: {
+        rooms: rooms.length,
+        playing: rooms.filter((room) => room.status === "playing").length,
+        lobby: rooms.filter((room) => room.status === "lobby").length,
+        finished: rooms.filter((room) => room.status === "finished").length,
+        totalPlayers: rooms.reduce(
+          (total, room) => total + room.playerCount,
+          0
+        ),
+        onlinePlayers: rooms.reduce(
+          (total, room) => total + room.connectedPlayerCount,
+          0
+        ),
+      },
+      rooms,
+    }
+  }
+
+  pruneExpiredRooms(now = new Date()): string[] {
+    const nowMs = now.getTime()
+    const expiredCodes: string[] = []
+
+    for (const [code, room] of this.rooms) {
+      if (!isExpiredRoom(room, nowMs)) continue
+      this.deleteRoom(code, room)
+      expiredCodes.push(code)
+    }
+
+    return expiredCodes
+  }
+
   joinRoom(input: JoinRoomInput): CommandResult<JoinRoomResult> {
     const code = normalizeRoomCode(input.code)
-    const room = this.rooms.get(code)
+    const room = this.getManagedRoom(code)
     if (!room) {
       return fail("room-not-found", "That room code does not exist.")
     }
@@ -257,7 +310,7 @@ export class RoomManager {
     playerId: string,
     ready: boolean
   ): CommandResult<RoomSnapshot> {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room) {
       return fail("room-not-found", "That room code does not exist.")
     }
@@ -288,7 +341,7 @@ export class RoomManager {
   }
 
   startRoom(code: string, playerId: string): CommandResult<RoomSnapshot> {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room) {
       return fail("room-not-found", "That room code does not exist.")
     }
@@ -324,6 +377,7 @@ export class RoomManager {
       return fail("players-not-ready", "Every non-host player must be ready.")
     }
 
+    const now = new Date().toISOString()
     room.status = "playing"
     room.gameState = createGame(
       {
@@ -336,13 +390,15 @@ export class RoomManager {
     )
     room.lobbyVoteKickedPlayerIds.clear()
     room.lastAvatarEmojiReactionAtByPlayerId.clear()
-    touch(room)
+    room.matchStartedAt = now
+    room.matchFinishedAt = null
+    touch(room, now)
 
     return ok(snapshot(room))
   }
 
   restartRoom(code: string, playerId: string): CommandResult<RoomSnapshot> {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room) {
       return fail("room-not-found", "That room code does not exist.")
     }
@@ -365,13 +421,16 @@ export class RoomManager {
       )
     }
 
+    const now = new Date().toISOString()
     room.status = "playing"
     room.gameState = createGame({
       players: room.players,
       houseRules: room.houseRules,
     })
     room.lastAvatarEmojiReactionAtByPlayerId.clear()
-    touch(room)
+    room.matchStartedAt = now
+    room.matchFinishedAt = null
+    touch(room, now)
 
     return ok(snapshot(room))
   }
@@ -381,7 +440,7 @@ export class RoomManager {
     playerId: string,
     input: SendChatMessageInput
   ): CommandResult<RoomSnapshot> {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room) {
       return fail("room-not-found", "That room code does not exist.")
     }
@@ -480,7 +539,7 @@ export class RoomManager {
     initiatorPlayerId: string,
     targetPlayerId: string
   ): CommandResult<RoomSnapshot> {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room) {
       return fail("room-not-found", "That room code does not exist.")
     }
@@ -589,7 +648,7 @@ export class RoomManager {
     voteKickId: string,
     choice: VoteKickChoice
   ): CommandResult<RoomSnapshot> {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room) {
       return fail("room-not-found", "That room code does not exist.")
     }
@@ -748,7 +807,7 @@ export class RoomManager {
   }
 
   getPlayerGame(code: string, playerId: string): PlayerGameSnapshot | null {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room?.gameState) return null
     if (!findPlayer(room, playerId)) return null
     return {
@@ -834,7 +893,7 @@ export class RoomManager {
     code: string,
     supporterPlayerId: string
   ): PlayerGameSnapshot | null {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room?.gameState || !findPlayer(room, supporterPlayerId)) return null
     return projectSupportView(
       room.gameState,
@@ -843,8 +902,25 @@ export class RoomManager {
     )
   }
 
+  getSpectatorView(
+    code: string,
+    spectatorPlayerId: string,
+    targetPlayerId: string
+  ): PlayerGameSnapshot | null {
+    const room = this.getManagedRoom(code)
+    if (!room?.gameState) return null
+    if (!findPlayer(room, spectatorPlayerId)) return null
+    if (!findPlayer(room, targetPlayerId)) return null
+    return projectSpectatorView(
+      room.gameState,
+      gameContext(room),
+      spectatorPlayerId,
+      targetPlayerId
+    )
+  }
+
   getPlayerSocial(code: string, playerId: string): PlayerSocialSnapshot | null {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room || !findPlayer(room, playerId)) return null
     const squadPlayerId = room.gameState
       ? supportSquadPlayerIdFor(room.gameState, playerId)
@@ -873,7 +949,7 @@ export class RoomManager {
     playerId: string,
     socketId: string
   ): RoomSnapshot | null {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room || !findPlayer(room, playerId)) return null
 
     const connectionIds =
@@ -896,7 +972,7 @@ export class RoomManager {
     playerId: string,
     socketId: string
   ): RoomSnapshot | null {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room) return null
 
     const connectionIds = room.connectionIdsByPlayerId.get(playerId)
@@ -921,7 +997,7 @@ export class RoomManager {
     code: string,
     voteKickId: string
   ): CommandResult<RoomSnapshot> {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room) return fail("room-not-found", "That room code does not exist.")
 
     const message = voteKickMessage(room, voteKickId)
@@ -982,12 +1058,26 @@ export class RoomManager {
     code: string,
     command: (room: ManagedRoom) => CommandResult<RoomSnapshot>
   ): CommandResult<RoomSnapshot> {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room) return fail("room-not-found", "That room code does not exist.")
     if (room.status !== "playing") {
       return fail("game-not-playing", "This room is not currently playing.")
     }
     return command(room)
+  }
+
+  private getManagedRoom(code: string): ManagedRoom | undefined {
+    this.pruneExpiredRooms()
+    return this.rooms.get(normalizeRoomCode(code))
+  }
+
+  private deleteRoom(code: string, room: ManagedRoom): void {
+    for (const timer of room.voteKickTimersById.values()) {
+      clearTimeout(timer)
+    }
+    room.voteKickTimersById.clear()
+    this.rooms.delete(code)
+    this.onRoomExpired?.(code)
   }
 }
 
@@ -1208,6 +1298,13 @@ function scheduleVoteKickResolution(
   room.voteKickTimersById.set(voteKickId, setTimeout(resolve, delay))
 }
 
+function isExpiredRoom(room: ManagedRoom, nowMs: number): boolean {
+  const updatedAtMs = Date.parse(room.updatedAt)
+  return (
+    Number.isFinite(updatedAtMs) && nowMs - updatedAtMs >= ROOM_MEMORY_TTL_MS
+  )
+}
+
 function touch(room: ManagedRoom, now = new Date().toISOString()) {
   room.version += 1
   room.updatedAt = now
@@ -1249,13 +1346,63 @@ function gameContext(room: ManagedRoom) {
   }
 }
 
+function analysisRoomSummary(
+  room: ManagedRoom,
+  nowMs: number
+): AnalysisRoomsResponse["rooms"][number] {
+  const createdAtMs = Date.parse(room.createdAt)
+  const updatedAtMs = Date.parse(room.updatedAt)
+  const durationEndMs = room.status === "finished" ? updatedAtMs : nowMs
+  const players = room.players.map((player) => ({
+    name: player.name,
+    seat: player.seat,
+    isHost: player.id === room.hostPlayerId,
+    ready: player.ready,
+    connected: player.connected,
+    joinedAt: player.joinedAt,
+    lastSeenAt: player.lastSeenAt,
+  }))
+  const connectedPlayerCount = players.filter(
+    (player) => player.connected
+  ).length
+
+  return {
+    code: room.code,
+    status: room.status,
+    version: room.version,
+    createdAt: room.createdAt,
+    updatedAt: room.updatedAt,
+    durationMs: Math.max(0, durationEndMs - createdAtMs),
+    idleDurationMs: Math.max(0, nowMs - updatedAtMs),
+    playerCount: players.length,
+    connectedPlayerCount,
+    awayPlayerCount: players.length - connectedPlayerCount,
+    players,
+    game: room.gameState
+      ? {
+          currentTurnPlayer: playerName(room, room.gameState.turnPlayerId),
+          winner: playerName(room, room.gameState.winnerPlayerId),
+          eventCount: room.gameState.events.length,
+          matchStartedAt: room.matchStartedAt,
+          matchFinishedAt: room.matchFinishedAt,
+        }
+      : null,
+  }
+}
+
 function syncRoomStatus(room: ManagedRoom) {
   if (room.gameState) {
     releaseInactiveSupportLinks(room.gameState, gameContext(room))
   }
   if (room.gameState?.turnPlayerId === null) {
     room.status = "finished"
+    room.matchFinishedAt ??= new Date().toISOString()
   }
+}
+
+function playerName(room: ManagedRoom, playerId: string | null): string | null {
+  if (!playerId) return null
+  return findPlayer(room, playerId)?.name ?? null
 }
 
 function cloneChatMessage(message: ChatMessage): ChatMessage {

@@ -1,4 +1,9 @@
 export type { Card, CardColor, CardFace, NumberValue } from "./cards"
+export type {
+  AnalysisPlayerSummary,
+  AnalysisRoomSummary,
+  AnalysisRoomsResponse,
+} from "./analysis"
 export { CHAT_EMOJIS, CHAT_GIFS, CHAT_PRESETS } from "./chat"
 export type {
   ChatGifPreset,
@@ -25,6 +30,7 @@ export {
   playCards,
   projectPlayerGame,
   projectPublicGame,
+  projectSpectatorView,
   projectSupportView,
   kickSupporter,
   releaseInactiveSupportLinks,
@@ -95,6 +101,7 @@ export type {
   RoomEvent,
   ServerToClientEvents,
   SocketData,
+  SpectatePlayerInput,
   StartVoteKickInput,
   SupportPlayerInput,
   VoiceSignal,

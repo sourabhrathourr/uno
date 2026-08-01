@@ -7,6 +7,9 @@ import type {
 } from "./game"
 import type { VoteKickChoice } from "./chat"
 
+export type SpectatePlayerInput = {
+  targetPlayerId: string
+}
 export type SupportPlayerInput = {
   supportedPlayerId: string
 }
@@ -181,6 +184,10 @@ export type ClientToServerEvents = {
     ack: (result: CommandResult<RoomSnapshot>) => void
   ) => void
   "game:getSupportView": (
+    ack: (result: CommandResult<PlayerGameSnapshot | null>) => void
+  ) => void
+  "game:spectatePlayer": (
+    input: SpectatePlayerInput,
     ack: (result: CommandResult<PlayerGameSnapshot | null>) => void
   ) => void
 }

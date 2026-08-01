@@ -4,7 +4,15 @@ import { GlyphCanvas } from "./glyph-shared"
  * Two arrows looping back on each other — UNO's reverse mark. Shapes are
  * stacked black-then-white the same way Skip is, for the chunky outline.
  */
-function ReverseMark({ scale, cx, cy }: { scale: number; cx: number; cy: number }) {
+function ReverseMark({
+  scale,
+  cx,
+  cy,
+}: {
+  scale: number
+  cx: number
+  cy: number
+}) {
   // Two thick arrows facing opposite directions, slightly offset.
   // Drawn as polygons so the heads keep a bold silhouette.
   const top = (

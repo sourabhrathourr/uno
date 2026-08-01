@@ -20,8 +20,22 @@ function SkipMark({
   const slashOffset = r * 0.74
   return (
     <>
-      <circle cx={cx} cy={cy} r={r} fill="none" stroke="black" strokeWidth={outerWidth} />
-      <circle cx={cx} cy={cy} r={r} fill="none" stroke="white" strokeWidth={innerWidth} />
+      <circle
+        cx={cx}
+        cy={cy}
+        r={r}
+        fill="none"
+        stroke="black"
+        strokeWidth={outerWidth}
+      />
+      <circle
+        cx={cx}
+        cy={cy}
+        r={r}
+        fill="none"
+        stroke="white"
+        strokeWidth={innerWidth}
+      />
       <line
         x1={cx - slashOffset}
         y1={cy - slashOffset}

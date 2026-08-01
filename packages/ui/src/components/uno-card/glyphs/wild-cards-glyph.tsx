@@ -1,6 +1,6 @@
-import type { CardColor } from "../types"
 import { palette } from "../tokens"
 import { GlyphCanvas } from "./glyph-shared"
+import type { CardColor } from "../types"
 
 /** A small colored card silhouette — used for the wild draw stack graphic. */
 function ColoredMiniCard({
@@ -58,7 +58,10 @@ function ColoredMiniCard({
  * Cards are pre-arranged for each count; ordering uses the canonical UNO color
  * cycle (red → blue → green → yellow) so the same color never sits next to itself.
  */
-const slotMap: Record<number, Array<{ x: number; y: number; rotate: number }>> = {
+const slotMap: Record<
+  number,
+  Array<{ x: number; y: number; rotate: number }>
+> = {
   4: [
     { x: 38, y: 60, rotate: -18 },
     { x: 52, y: 56, rotate: -4 },
@@ -87,14 +90,23 @@ const slotMap: Record<number, Array<{ x: number; y: number; rotate: number }>> =
   ],
 }
 
-const colorCycle: Array<Exclude<CardColor, "wild">> = ["red", "blue", "green", "yellow"]
+const colorCycle: Array<Exclude<CardColor, "wild">> = [
+  "red",
+  "blue",
+  "green",
+  "yellow",
+]
 
 export function WildCardsCenter({ count }: { count: 4 | 6 | 10 }) {
   const slots = slotMap[count]
   return (
     <GlyphCanvas>
       {slots.map((slot, i) => (
-        <ColoredMiniCard key={i} {...slot} color={colorCycle[i % colorCycle.length]} />
+        <ColoredMiniCard
+          key={i}
+          {...slot}
+          color={colorCycle[i % colorCycle.length]}
+        />
       ))}
     </GlyphCanvas>
   )
@@ -147,4 +159,3 @@ export function WildReverseDrawCenter({ count }: { count: 4 }) {
     </GlyphCanvas>
   )
 }
-
