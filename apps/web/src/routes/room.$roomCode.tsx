@@ -2843,7 +2843,6 @@ function MobileSeatingRing({
         const isWinner = winnerPlacement?.position === 1
         const fadedOpacity =
           eliminated || voteKicked || waiting || !candidate.connected
-        const showName = !dense || isYou
         const spectators =
           game?.supportLinks
             .filter((link) => link.supportedPlayerId === candidate.id)
@@ -3006,18 +3005,16 @@ function MobileSeatingRing({
                 )}
               </span>
             </div>
-            {showName && (
-              <p
-                className={
-                  "mt-0.5 w-full truncate text-center font-medium " +
-                  (dense ? "text-[9px]" : "text-[10px]") +
-                  " " +
-                  (active ? "text-amber-50" : "text-white/78")
-                }
-              >
-                {isYou ? "You" : candidate.name}
-              </p>
-            )}
+            <p
+              className={
+                "mt-0.5 w-full truncate text-center font-medium " +
+                (dense ? "text-[9px]" : "text-[10px]") +
+                " " +
+                (active ? "text-amber-50" : "text-white/78")
+              }
+            >
+              {isYou ? "You" : candidate.name}
+            </p>
             {spectators.length > 0 && (
               <div
                 className="mt-0.5 flex max-w-[84px] flex-wrap justify-center gap-0.5"
@@ -4822,7 +4819,7 @@ function TableAvatarSeat({
             }
           />
         </div>
-        <div className="hidden min-w-0 flex-1 sm:block">
+        <div className="min-w-0 flex-1">
           <p className="truncate text-xs font-semibold text-white/86">
             {player.name}
             {isYou ? " · You" : ""}
@@ -7049,7 +7046,7 @@ function DimmedSeatRing({
                   className="size-full rounded-full object-cover"
                 />
               </div>
-              <div className="hidden min-w-0 flex-1 sm:block">
+              <div className="min-w-0 flex-1">
                 <p className="truncate text-xs font-semibold text-white/86">
                   {candidate.name}
                   {isYou ? " · You" : ""}
