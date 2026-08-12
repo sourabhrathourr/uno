@@ -53,7 +53,7 @@ import type {
   SetSeatOrderInput,
   StageCardsInput,
 } from "@workspace/game"
-import type { PointerEvent, ReactNode } from "react"
+import type { PointerEvent, ReactNode, RefObject } from "react"
 import type { Options as ConfettiOptions } from "canvas-confetti"
 
 import type { GameSocket } from "@/lib/realtime"
@@ -917,6 +917,10 @@ function GameTable({
     string | null
   >(null)
   const [nextMatchPanelOpen, setNextMatchPanelOpen] = useState(false)
+  const tableSplitRef = useRef<HTMLDivElement | null>(null)
+  const [handPaneHeight, setHandPaneHeight] = useState<number | null>(
+    readStoredHandPaneHeight
+  )
 
   function requestSupportPlayer(targetPlayerId: string) {
     if (spectatingPlayerId) return
@@ -1150,6 +1154,29 @@ function GameTable({
   useEffect(() => {
     if (!gameFinished || !isNextMatchOrganiser) setNextMatchPanelOpen(false)
   }, [gameFinished, isNextMatchOrganiser])
+
+  // A split saved on a tall window would squeeze the table off a short one.
+  useEffect(() => {
+    if (handPaneHeight === null) return
+
+    function clampToViewport() {
+      const container = tableSplitRef.current
+      if (!container) return
+      const available =
+        container.getBoundingClientRect().height -
+        TABLE_SPLIT_HANDLE_PX -
+        MIN_TABLE_PANE_PX
+      setHandPaneHeight((current) => {
+        if (current === null) return current
+        const limit = Math.max(MIN_HAND_PANE_PX, Math.round(available))
+        return current > limit ? limit : current
+      })
+    }
+
+    clampToViewport()
+    window.addEventListener("resize", clampToViewport)
+    return () => window.removeEventListener("resize", clampToViewport)
+  }, [handPaneHeight])
 
   useEffect(() => {
     const celebrationCount = game?.hypeMeter.celebrationCount ?? 0
@@ -1991,7 +2018,25 @@ function GameTable({
           </header>
 
           <section className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] gap-2 overflow-hidden lg:grid-rows-[minmax(0,1fr)_220px] xl:grid-cols-[minmax(0,1fr)_310px] xl:grid-rows-none">
-            <div className="relative grid min-h-0 grid-rows-[minmax(0,1fr)_clamp(188px,30dvh,300px)] gap-2 overflow-hidden sm:grid-rows-[minmax(0,1fr)_clamp(220px,30dvh,330px)] lg:gap-3">
+            <div
+              ref={tableSplitRef}
+              // The split between table and hand is draggable, so the rows are
+              // only driven by the stylesheet until the player sets a size.
+              style={
+                handPaneHeight === null
+                  ? undefined
+                  : {
+                      gridTemplateRows: `minmax(0,1fr) ${TABLE_SPLIT_HANDLE_PX}px ${handPaneHeight}px`,
+                    }
+              }
+              className={
+                // The handle row doubles as the gap between the two panes.
+                "relative grid min-h-0 overflow-hidden " +
+                (handPaneHeight === null
+                  ? "grid-rows-[minmax(0,1fr)_14px_clamp(188px,30dvh,300px)] sm:grid-rows-[minmax(0,1fr)_14px_clamp(220px,30dvh,330px)]"
+                  : "")
+              }
+            >
               <div
                 ref={tableDropRef}
                 style={{
@@ -2148,6 +2193,12 @@ function GameTable({
                   </div>
                 ) : null}
               </div>
+
+              <TableSplitHandle
+                containerRef={tableSplitRef}
+                onResize={setHandPaneHeight}
+                onReset={() => setHandPaneHeight(null)}
+              />
 
               <div
                 data-self-hand="true"
@@ -2491,6 +2542,148 @@ function NextMatchPanel({
       </section>
     </div>,
     document.body
+  )
+}
+
+const TABLE_SPLIT_HANDLE_PX = 14
+const MIN_HAND_PANE_PX = 150
+const MIN_TABLE_PANE_PX = 220
+const HAND_PANE_STORAGE_KEY = "uno:hand-pane-height"
+
+function readStoredHandPaneHeight(): number | null {
+  if (typeof window === "undefined") return null
+  try {
+    const stored = window.localStorage.getItem(HAND_PANE_STORAGE_KEY)
+    if (!stored) return null
+    const parsed = Number.parseInt(stored, 10)
+    return Number.isFinite(parsed) && parsed >= MIN_HAND_PANE_PX ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+function writeStoredHandPaneHeight(height: number | null) {
+  if (typeof window === "undefined") return
+  try {
+    if (height === null) {
+      window.localStorage.removeItem(HAND_PANE_STORAGE_KEY)
+      return
+    }
+    window.localStorage.setItem(HAND_PANE_STORAGE_KEY, String(height))
+  } catch {
+    // A blocked storage quota should never stop the drag itself.
+  }
+}
+
+/**
+ * Drag bar between the table and your hand. The table gets cramped on short
+ * screens — especially the drop zone — so the split is the player's to set,
+ * and it sticks between sessions. Double-click puts it back to the default.
+ */
+function TableSplitHandle({
+  containerRef,
+  onResize,
+  onReset,
+}: {
+  containerRef: RefObject<HTMLDivElement | null>
+  onResize: (height: number) => void
+  onReset: () => void
+}) {
+  const [dragging, setDragging] = useState(false)
+
+  function clampToContainer(nextHeight: number) {
+    const container = containerRef.current
+    if (!container) return nextHeight
+    const available =
+      container.getBoundingClientRect().height -
+      TABLE_SPLIT_HANDLE_PX -
+      MIN_TABLE_PANE_PX
+    return Math.round(
+      Math.max(
+        MIN_HAND_PANE_PX,
+        Math.min(nextHeight, Math.max(available, MIN_HAND_PANE_PX))
+      )
+    )
+  }
+
+  function heightFromPointer(clientY: number) {
+    const container = containerRef.current
+    if (!container) return null
+    const bounds = container.getBoundingClientRect()
+    return clampToContainer(bounds.bottom - clientY - TABLE_SPLIT_HANDLE_PX / 2)
+  }
+
+  function commit(clientY: number) {
+    const nextHeight = heightFromPointer(clientY)
+    if (nextHeight === null) return
+    onResize(nextHeight)
+    return nextHeight
+  }
+
+  function nudge(delta: number) {
+    const container = containerRef.current
+    const hand = container?.querySelector<HTMLElement>(
+      '[data-self-hand="true"]'
+    )
+    if (!hand) return
+    const next = clampToContainer(hand.getBoundingClientRect().height + delta)
+    onResize(next)
+    writeStoredHandPaneHeight(next)
+  }
+
+  return (
+    <div
+      role="separator"
+      aria-orientation="horizontal"
+      aria-label="Resize the table and your hand"
+      tabIndex={0}
+      onPointerDown={(event) => {
+        if (event.button !== 0) return
+        event.currentTarget.setPointerCapture(event.pointerId)
+        setDragging(true)
+        commit(event.clientY)
+      }}
+      onPointerMove={(event) => {
+        if (!dragging) return
+        event.preventDefault()
+        commit(event.clientY)
+      }}
+      onPointerUp={(event) => {
+        if (!dragging) return
+        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+          event.currentTarget.releasePointerCapture(event.pointerId)
+        }
+        setDragging(false)
+        const settled = commit(event.clientY)
+        if (settled !== undefined) writeStoredHandPaneHeight(settled)
+      }}
+      onPointerCancel={() => setDragging(false)}
+      onDoubleClick={() => {
+        onReset()
+        writeStoredHandPaneHeight(null)
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "ArrowUp") {
+          event.preventDefault()
+          nudge(24)
+        } else if (event.key === "ArrowDown") {
+          event.preventDefault()
+          nudge(-24)
+        }
+      }}
+      title="Drag to resize · double-click to reset"
+      className={
+        "group flex cursor-row-resize touch-none items-center justify-center outline-none " +
+        (dragging ? "cursor-grabbing" : "")
+      }
+    >
+      <span
+        className={
+          "h-1 w-16 rounded-full transition-[background-color,width] duration-200 group-hover:w-24 group-hover:bg-white/40 group-focus-visible:bg-white/50 " +
+          (dragging ? "w-24 bg-white/55" : "bg-white/14")
+        }
+      />
+    </div>
   )
 }
 
@@ -3151,7 +3344,7 @@ function MobileSeatingRing({
                 reaction={latestReaction ?? null}
                 emojiClassName={dense ? "text-xl" : "text-2xl"}
                 fallback={
-                  winnerPlacement ? (
+                  winnerPlacement && !isWinner ? (
                     <Trophy className="size-4" strokeWidth={2.1} />
                   ) : (
                     <PlayerAvatar
@@ -3182,13 +3375,11 @@ function MobileSeatingRing({
                   🙌 {supporterCount}
                 </span>
               )}
-              {candidate.id === crownPlayerId && (
-                <span
-                  className="absolute -top-2.5 left-1/2 grid size-4 -translate-x-1/2 place-items-center rounded-full border border-amber-100/60 bg-amber-300 text-amber-950 shadow-[0_4px_10px_rgba(0,0,0,0.32)]"
-                  aria-label="Won the last match"
-                >
-                  <Crown className="size-2.5" strokeWidth={2.4} />
-                </span>
+              {(isWinner || candidate.id === crownPlayerId) && (
+                <CrownBadge
+                  className="absolute -top-3 left-1/2 size-6 -translate-x-1/2"
+                  title={isWinner ? "Won this match" : "Won the last match"}
+                />
               )}
               <span
                 className={
@@ -3797,8 +3988,8 @@ function FirstPlaceCelebration({ playerName }: { playerName: string }) {
               "uno-trophy-pop 3.4s cubic-bezier(0.16, 1, 0.3, 1) forwards",
           }}
         >
-          <div className="relative grid size-16 shrink-0 place-items-center rounded-full border border-amber-100/50 bg-amber-300 text-amber-950 shadow-[0_0_34px_rgba(251,191,36,0.36)]">
-            <Trophy className="size-8" strokeWidth={2.2} />
+          <div className="relative grid size-16 shrink-0 place-items-center">
+            <CrownBadge className="size-16" />
             <span className="absolute -bottom-1 rounded-full border border-amber-100/50 bg-neutral-950 px-2 py-0.5 text-[11px] font-bold text-amber-100">
               #1
             </span>
@@ -4197,24 +4388,22 @@ function TableAvatarSeat({
                     : "border-white/12 bg-black/38")
         }
       >
-        {wearsCrown && (
-          <div
-            className="absolute -top-3 left-1/2 grid size-6 -translate-x-1/2 place-items-center rounded-full border border-amber-100/60 bg-amber-300 text-amber-950 shadow-[0_8px_18px_rgba(0,0,0,0.32)]"
+        {/* One crown per seat: first place this match outranks last match's. */}
+        {isFirstPlace ? (
+          <CrownBadge
+            className="absolute -top-5 -right-3 size-10 rotate-12"
+            title="Won this match"
+          />
+        ) : wearsCrown ? (
+          <CrownBadge
+            className="absolute -top-4 left-1/2 size-8 -translate-x-1/2"
             title="Won the last match"
-            aria-label="Won the last match"
-          >
-            <Crown className="size-3.5" strokeWidth={2.3} />
-          </div>
-        )}
-        {winnerPlacement && (
+          />
+        ) : null}
+        {winnerPlacement && !isFirstPlace && (
           <div
-            className={
-              "absolute -top-2 -right-2 grid size-8 place-items-center rounded-full border shadow-[0_8px_18px_rgba(0,0,0,0.28)] " +
-              (isFirstPlace
-                ? "border-amber-100/70 bg-amber-300 text-amber-950"
-                : "border-white/16 bg-neutral-900 text-white/70")
-            }
-            aria-label={`${placementText} trophy`}
+            className="absolute -top-2 -right-2 grid size-8 place-items-center rounded-full border border-white/16 bg-neutral-900 text-white/70 shadow-[0_8px_18px_rgba(0,0,0,0.28)]"
+            aria-label={`${placementText} finish`}
           >
             <Trophy className="size-4" strokeWidth={2.2} />
           </div>
@@ -4745,7 +4934,9 @@ function TableStagedPlay({
           ? 0.58
           : 0.66
   const cardScale = isTray && dense ? trayCardScale : dense ? 0.78 : 1
-  const maxWidth = isTray && dense ? 300 : dense ? 320 : 370
+  // The desktop drop zone reads as cramped at 370px, so it gets more room to
+  // fan into now that the table pane can be sized by the player.
+  const maxWidth = isTray && dense ? 300 : dense ? 320 : 470
   const cardVisualWidth = 72 * cardScale
   const baseGap =
     isTray && dense
@@ -4779,7 +4970,7 @@ function TableStagedPlay({
       : "rounded-2xl p-3"
     : dense
       ? "max-w-[340px] rounded-xl p-2"
-      : "max-w-[390px] rounded-2xl p-3"
+      : "max-w-[500px] rounded-2xl p-3"
   const shadowClass = isTray
     ? "shadow-[0_14px_36px_rgba(0,0,0,0.26),inset_0_1px_0_rgba(255,255,255,0.08)]"
     : "shadow-[inset_0_1px_0_rgba(255,255,255,0.1)]"
@@ -5647,6 +5838,32 @@ const PLAYER_AVATARS = [
   "/avatars/tiger.png",
   "/avatars/wolf-blue.png",
 ]
+
+/**
+ * A rendered crown rather than a line icon — the flat glyph read as a sticker
+ * on top of the seat instead of something the winner had earned.
+ */
+function CrownBadge({
+  className,
+  title,
+}: {
+  className?: string
+  title?: string
+}) {
+  return (
+    <img
+      src="/crown.png"
+      alt=""
+      aria-hidden="true"
+      draggable={false}
+      title={title}
+      className={
+        "pointer-events-none drop-shadow-[0_4px_10px_rgba(0,0,0,0.45)] select-none " +
+        (className ?? "size-7")
+      }
+    />
+  )
+}
 
 function PlayerAvatar({
   name,
