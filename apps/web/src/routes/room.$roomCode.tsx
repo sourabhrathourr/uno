@@ -2495,8 +2495,9 @@ function NextMatchPanel({
 }
 
 /**
- * A quiet running commentary of the table in the empty space beside the room
- * title: who played what, who cycled hands, who got stacked.
+ * The last move at the table, in the empty space beside the room title. Only
+ * ever one line: a growing list would push the header around as the match
+ * runs, and the table already has its own history in chat.
  */
 function MatchEventFeed({
   room,
@@ -2505,36 +2506,33 @@ function MatchEventFeed({
   room: RoomSnapshot
   selfPlayerId: string
 }) {
-  const events = (room.game?.events ?? []).slice(-4)
-  if (events.length === 0) return null
+  const events = room.game?.events ?? []
+  const latest = events[events.length - 1] ?? null
+  const isSelf = Boolean(
+    latest &&
+    (latest.playerId === selfPlayerId || latest.targetPlayerId === selfPlayerId)
+  )
 
   return (
+    // The row keeps its height whether or not there is a move to show, so the
+    // header never shifts.
     <div
-      className="pointer-events-none hidden min-w-0 flex-1 flex-col items-center justify-center gap-1 px-4 lg:flex"
+      className="pointer-events-none hidden h-7 min-w-0 flex-1 items-center justify-center px-4 lg:flex"
       aria-live="polite"
-      aria-label="Match feed"
+      aria-label="Last move"
     >
-      {events.map((event, index) => {
-        const isLatest = index === events.length - 1
-        const isSelf =
-          event.playerId === selfPlayerId ||
-          event.targetPlayerId === selfPlayerId
-        return (
-          <p
-            key={event.id}
-            className={
-              "max-w-full truncate rounded-full px-3 py-0.5 text-center transition-[opacity,color] " +
-              (isLatest
-                ? "bg-white/[0.06] text-[13px] font-medium text-white/88"
-                : "text-[11px] text-white/34") +
-              (isSelf && isLatest ? " text-amber-50" : "")
-            }
-            title={event.message}
-          >
-            {event.message}
-          </p>
-        )
-      })}
+      {latest && (
+        <p
+          key={latest.id}
+          className={
+            "max-w-full truncate rounded-full bg-white/[0.06] px-3 py-0.5 text-center text-[13px] font-medium " +
+            (isSelf ? "text-amber-50" : "text-white/88")
+          }
+          title={latest.message}
+        >
+          {latest.message}
+        </p>
+      )}
     </div>
   )
 }
