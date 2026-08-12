@@ -5,6 +5,7 @@ import {
   Check,
   Circle,
   Clipboard,
+  Crown,
   ImageIcon,
   MessageCircle,
   Mic,
@@ -29,6 +30,7 @@ import {
   CHAT_GIFS,
   CHAT_PRESETS,
   TABLE_REACTION_EMOJIS,
+  playerInitials,
 } from "@workspace/game"
 import { Button } from "@workspace/ui/components/button"
 import { Checkbox } from "@workspace/ui/components/checkbox"
@@ -48,6 +50,7 @@ import type {
   RoomSnapshot,
   SendChatMessageInput,
   SendTableReactionInput,
+  SetSeatOrderInput,
   StageCardsInput,
 } from "@workspace/game"
 import type { PointerEvent, ReactNode } from "react"
@@ -58,6 +61,7 @@ import type { RoomVoiceController } from "@/lib/use-room-voice"
 import type { ChatTray } from "@/components/use-channel-chat"
 import {
   SupportConfirmDialog,
+  SupportRequestInbox,
   availableSupportCandidates,
 } from "@/components/support-experience"
 import { useChannelChat } from "@/components/use-channel-chat"
@@ -572,6 +576,44 @@ function RoomPage() {
     })
   }
 
+  function setSeatOrder(input: SetSeatOrderInput) {
+    if (!socket) return
+    setError(null)
+    socket.emit("room:setSeatOrder", input, (result) => {
+      if (!result.ok) {
+        applyCommandError(result.error)
+        return
+      }
+
+      playFx("toggleOn", { volume: 0.45 })
+      applyRoomSnapshot(result.data)
+    })
+  }
+
+  function requestSupport(supportedPlayerId: string) {
+    if (!socket) return
+    setError(null)
+    socket.emit("game:requestSupport", { supportedPlayerId }, (result) => {
+      if (!result.ok) return applyCommandError(result.error)
+      playFx("notify", { volume: 0.3 })
+      applyRoomSnapshot(result.data)
+    })
+  }
+
+  function respondSupportRequest(supporterPlayerId: string, approve: boolean) {
+    if (!socket) return
+    setError(null)
+    socket.emit(
+      "game:respondSupportRequest",
+      { supporterPlayerId, approve },
+      (result) => {
+        if (!result.ok) return applyCommandError(result.error)
+        playFx(approve ? "successBling" : "blocked", { volume: 0.42 })
+        applyRoomSnapshot(result.data)
+      }
+    )
+  }
+
   function sendChatMessage(input: SendChatMessageInput) {
     if (!socket) return
     setError(null)
@@ -765,9 +807,12 @@ function RoomPage() {
           onCatchUno={catchUno}
           onSupportPlayer={supportPlayer}
           onKickSupporter={kickSupporter}
+          onRequestSupport={requestSupport}
+          onRespondSupportRequest={respondSupportRequest}
           onSendReaction={sendTableReaction}
           onSendChatMessage={sendChatMessage}
           onRestartGame={restartGame}
+          onSetSeatOrder={setSeatOrder}
           voice={voice}
           socket={socket}
         />
@@ -819,9 +864,12 @@ function GameTable({
   onCatchUno,
   onSupportPlayer,
   onKickSupporter,
+  onRequestSupport,
+  onRespondSupportRequest,
   onSendReaction,
   onSendChatMessage,
   onRestartGame,
+  onSetSeatOrder,
   voice,
   socket,
 }: {
@@ -841,9 +889,12 @@ function GameTable({
   onCatchUno: (targetPlayerId: string) => void
   onSupportPlayer: (supportedPlayerId: string) => void
   onKickSupporter: (supporterPlayerId: string) => void
+  onRequestSupport: (supportedPlayerId: string) => void
+  onRespondSupportRequest: (supporterPlayerId: string, approve: boolean) => void
   onSendReaction: (input: SendTableReactionInput) => void
   onSendChatMessage: (input: SendChatMessageInput) => void
   onRestartGame: () => void
+  onSetSeatOrder: (input: SetSeatOrderInput) => void
   voice: RoomVoiceController
   socket: GameSocket | null
 }) {
@@ -865,9 +916,11 @@ function GameTable({
   const [pendingSupportPlayerId, setPendingSupportPlayerId] = useState<
     string | null
   >(null)
+  const [nextMatchPanelOpen, setNextMatchPanelOpen] = useState(false)
 
   function requestSupportPlayer(targetPlayerId: string) {
     if (spectatingPlayerId) return
+    if (playerSocial?.outgoingSupportRequest) return
     setPendingSupportPlayerId(targetPlayerId)
   }
 
@@ -934,17 +987,41 @@ function GameTable({
         !state?.winnerPlacement
       )
     }) ?? []
+  const blockedSupportedPlayerIds =
+    playerSocial?.blockedSupportedPlayerIds ?? []
   const supportCandidates = availableSupportCandidates(
     game?.players ?? [],
-    playerSocial?.blockedSupportedPlayerIds ?? [],
+    blockedSupportedPlayerIds,
     player.id
   )
     .map((candidate) =>
       room.players.find((roomPlayer) => roomPlayer.id === candidate.playerId)
     )
     .filter((candidate): candidate is Player => Boolean(candidate))
+  // Players who kicked this player earlier: still reachable, but only by asking.
+  const supportRequestCandidateIds = (game?.players ?? [])
+    .filter(
+      (candidate) =>
+        candidate.playerId !== player.id &&
+        !candidate.eliminated &&
+        !candidate.winnerPlacement &&
+        blockedSupportedPlayerIds.includes(candidate.playerId)
+    )
+    .map((candidate) => candidate.playerId)
+  const outgoingSupportRequest = playerSocial?.outgoingSupportRequest ?? null
+  const incomingSupportRequests = playerSocial?.incomingSupportRequests ?? []
   const pendingSupportPlayer = room.players.find(
     (candidate) => candidate.id === pendingSupportPlayerId
+  )
+  const pendingSupportNeedsApproval = Boolean(
+    pendingSupportPlayerId &&
+    blockedSupportedPlayerIds.includes(pendingSupportPlayerId)
+  )
+  const incomingSupportRequestCards = incomingSupportRequests.map(
+    (request) => ({
+      supporterPlayerId: request.supporterPlayerId,
+      supporterName: playerName(room, request.supporterPlayerId),
+    })
   )
   const isMyTurn = game?.turnPlayerId === player.id
   const firstWinnerPlacement =
@@ -956,7 +1033,26 @@ function GameTable({
     (candidate) => candidate.id === celebratingWinnerId
   )
   const gameFinished = Boolean(game && game.turnPlayerId === null)
-  const canRestartGame = gameFinished
+  // The crown passes to whoever took first place last match; they seat the
+  // table and start the next one. Falls back to the host before any match has
+  // been won, or if the crown holder has left.
+  const crownPlayerId =
+    room.crownPlayerId &&
+    room.players.some((candidate) => candidate.id === room.crownPlayerId)
+      ? room.crownPlayerId
+      : null
+  const nextMatchOrganiserId = crownPlayerId ?? room.hostPlayerId
+  const isNextMatchOrganiser = nextMatchOrganiserId === player.id
+  const canRestartGame = gameFinished && isNextMatchOrganiser
+  // Seats an eliminated player may click: free picks plus the ones that now
+  // need permission. A pending request locks the whole ring until answered.
+  const spectatablePlayerIds =
+    isSelfEliminated && !outgoingSupportRequest
+      ? [
+          ...supportCandidates.map((candidate) => candidate.id),
+          ...supportRequestCandidateIds,
+        ]
+      : []
   const gameStartEventId =
     game?.events.find((event) => event.type === "game-started")?.id ?? null
   const drawStack = game?.drawStack ?? null
@@ -1050,6 +1146,10 @@ function GameTable({
   const visibleError = error ?? voice.error
   const visibleSupportView =
     supportView?.playerId === spectatingPlayerId ? supportView : null
+
+  useEffect(() => {
+    if (!gameFinished || !isNextMatchOrganiser) setNextMatchPanelOpen(false)
+  }, [gameFinished, isNextMatchOrganiser])
 
   useEffect(() => {
     const celebrationCount = game?.hypeMeter.celebrationCount ?? 0
@@ -1521,13 +1621,12 @@ function GameTable({
                   room={room}
                   game={game}
                   selfPlayerId={player.id}
+                  crownPlayerId={crownPlayerId}
                   voiceStates={voice.voiceStates}
                   canTakeDrawPenalty={Boolean(playerGame?.canTakeDrawPenalty)}
                   onTakeDrawPenalty={handleTakePenalty}
                   spectatingPlayerId={spectatingPlayerId}
-                  supportCandidatePlayerIds={supportCandidates.map(
-                    (candidate) => candidate.id
-                  )}
+                  supportCandidatePlayerIds={spectatablePlayerIds}
                   onSpectatePlayer={requestSupportPlayer}
                 />
 
@@ -1539,17 +1638,26 @@ function GameTable({
                     <div className="flex shrink-0 items-center gap-1">
                       <DirectionPill direction={game?.direction ?? 1} compact />
                       <ColorPill color={game?.currentColor ?? "red"} />
-                      {canRestartGame && (
-                        <Button
-                          type="button"
-                          size="xs"
-                          onClick={onRestartGame}
-                          className="h-7 rounded-full bg-white px-2 text-[11px] font-semibold text-neutral-950 hover:bg-white/85"
-                        >
-                          <Play className="mr-1 size-3" strokeWidth={2.2} />
-                          New
-                        </Button>
-                      )}
+                      {gameFinished &&
+                        (canRestartGame ? (
+                          <Button
+                            type="button"
+                            size="xs"
+                            onClick={onRestartGame}
+                            className="h-7 rounded-full bg-white px-2 text-[11px] font-semibold text-neutral-950 hover:bg-white/85"
+                          >
+                            <Play className="mr-1 size-3" strokeWidth={2.2} />
+                            New
+                          </Button>
+                        ) : (
+                          <span
+                            className="inline-flex h-7 items-center gap-1 rounded-full border border-amber-200/25 bg-amber-300/10 px-2 text-[10px] text-amber-50/80"
+                            title={`${playerName(room, nextMatchOrganiserId)} starts the next match`}
+                          >
+                            <Crown className="size-3" strokeWidth={2.2} />
+                            {playerName(room, nextMatchOrganiserId)}
+                          </span>
+                        ))}
                     </div>
                   </div>
 
@@ -1634,8 +1742,21 @@ function GameTable({
             </div>
 
             {(visibleError ||
+              incomingSupportRequestCards.length > 0 ||
+              outgoingSupportRequest ||
               Boolean(playerGame?.catchablePlayerIds.length)) && (
               <div className="shrink-0 space-y-1">
+                <SupportRequestInbox
+                  requests={incomingSupportRequestCards}
+                  onRespond={onRespondSupportRequest}
+                />
+                {outgoingSupportRequest && (
+                  <p className="rounded-xl border border-amber-200/20 bg-amber-300/10 px-3 py-2 text-xs text-amber-50/85 backdrop-blur-md">
+                    Waiting on{" "}
+                    {playerName(room, outgoingSupportRequest.supportedPlayerId)}{" "}
+                    to approve your request.
+                  </p>
+                )}
                 {visibleError && (
                   <p className="rounded-xl border border-red-400/20 bg-red-500/12 px-3 py-2 text-xs text-red-100 shadow-[0_14px_34px_rgba(0,0,0,0.26)] backdrop-blur-md">
                     {visibleError}
@@ -1801,9 +1922,14 @@ function GameTable({
         {pendingSupportPlayer && (
           <SupportConfirmDialog
             playerName={pendingSupportPlayer.name}
+            needsApproval={pendingSupportNeedsApproval}
             onCancel={() => setPendingSupportPlayerId(null)}
             onConfirm={() => {
-              onSupportPlayer(pendingSupportPlayer.id)
+              if (pendingSupportNeedsApproval) {
+                onRequestSupport(pendingSupportPlayer.id)
+              } else {
+                onSupportPlayer(pendingSupportPlayer.id)
+              }
               setPendingSupportPlayerId(null)
             }}
           />
@@ -1847,7 +1973,7 @@ function GameTable({
         ))}
         <div className="mx-auto flex h-full min-h-0 w-full max-w-[1500px] flex-col gap-2 px-2 py-2 sm:gap-3 sm:px-4 sm:py-3 lg:px-8">
           <header className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 pb-2 sm:pb-3">
-            <div>
+            <div className="shrink-0">
               <p className="text-[10px] font-medium tracking-[0.18em] text-white/45 uppercase sm:text-xs">
                 UNO No Mercy
               </p>
@@ -1855,7 +1981,8 @@ function GameTable({
                 Room {room.code}
               </h1>
             </div>
-            <div className="flex items-center gap-2">
+            <MatchEventFeed room={room} selfPlayerId={player.id} />
+            <div className="flex shrink-0 items-center gap-2">
               <VoiceToggleButton voice={voice} />
               <SoundToggle />
               <StatusDot connected={connected} />
@@ -1885,15 +2012,14 @@ function GameTable({
                   room={room}
                   game={game}
                   selfPlayerId={player.id}
+                  crownPlayerId={crownPlayerId}
                   canTakeDrawPenalty={Boolean(playerGame?.canTakeDrawPenalty)}
                   onTakeDrawPenalty={handleTakePenalty}
                   compact={compactSurface}
                   voiceStates={voice.voiceStates}
                   isSelfEliminated={isSelfEliminated}
                   spectatingPlayerId={spectatingPlayerId}
-                  supportCandidatePlayerIds={supportCandidates.map(
-                    (candidate) => candidate.id
-                  )}
+                  supportCandidatePlayerIds={spectatablePlayerIds}
                   onSpectatePlayer={requestSupportPlayer}
                 />
                 <div className="relative z-10 flex h-full min-h-0 flex-col">
@@ -1913,17 +2039,26 @@ function GameTable({
                       </span>
                       <DirectionPill direction={game?.direction ?? 1} compact />
                       <ColorPill color={game?.currentColor ?? "red"} />
-                      {canRestartGame && (
-                        <Button
-                          type="button"
-                          size="sm"
-                          onClick={onRestartGame}
-                          className="rounded-full bg-white px-3 text-neutral-950 hover:bg-white/85"
-                        >
-                          <Play className="mr-1.5 size-3.5" strokeWidth={2.2} />
-                          New match
-                        </Button>
-                      )}
+                      {gameFinished &&
+                        (isNextMatchOrganiser ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={() => setNextMatchPanelOpen(true)}
+                            className="rounded-full bg-white px-3 text-neutral-950 hover:bg-white/85"
+                          >
+                            <Crown
+                              className="mr-1.5 size-3.5"
+                              strokeWidth={2.2}
+                            />
+                            Set up next match
+                          </Button>
+                        ) : (
+                          <span className="rounded-full border border-amber-200/25 bg-amber-300/10 px-3 py-1.5 text-xs text-amber-50/80">
+                            {playerName(room, nextMatchOrganiserId)} is setting
+                            up the next match
+                          </span>
+                        ))}
                       {rouletteChoice && !canDrawRoulette && (
                         <div className="flex items-center gap-2 rounded-full border border-amber-200/20 bg-amber-300/12 px-3 py-1 text-xs text-amber-50 shadow-[0_10px_26px_rgba(0,0,0,0.22)] backdrop-blur-md">
                           <span className="flex items-center gap-1.5">
@@ -1978,6 +2113,19 @@ function GameTable({
               </div>
 
               <div className="pointer-events-none absolute inset-x-2 top-[3.4rem] z-30 flex max-h-[34%] flex-col gap-2 overflow-y-auto sm:inset-x-3 sm:top-[4.25rem]">
+                <SupportRequestInbox
+                  requests={incomingSupportRequestCards}
+                  onRespond={onRespondSupportRequest}
+                />
+
+                {outgoingSupportRequest && (
+                  <p className="pointer-events-auto rounded-md border border-amber-200/20 bg-amber-300/10 px-3 py-2 text-sm text-amber-50/85 backdrop-blur-md">
+                    Waiting on{" "}
+                    {playerName(room, outgoingSupportRequest.supportedPlayerId)}{" "}
+                    to approve your support request.
+                  </p>
+                )}
+
                 {visibleError && (
                   <p className="pointer-events-auto rounded-md border border-red-400/20 bg-red-500/12 px-3 py-2 text-sm text-red-100 shadow-[0_18px_44px_rgba(0,0,0,0.26)] backdrop-blur-md xl:hidden">
                     {visibleError}
@@ -2160,14 +2308,234 @@ function GameTable({
       {pendingSupportPlayer && (
         <SupportConfirmDialog
           playerName={pendingSupportPlayer.name}
+          needsApproval={pendingSupportNeedsApproval}
           onCancel={() => setPendingSupportPlayerId(null)}
           onConfirm={() => {
-            onSupportPlayer(pendingSupportPlayer.id)
+            if (pendingSupportNeedsApproval) {
+              onRequestSupport(pendingSupportPlayer.id)
+            } else {
+              onSupportPlayer(pendingSupportPlayer.id)
+            }
             setPendingSupportPlayerId(null)
           }}
         />
       )}
+      {nextMatchPanelOpen && gameFinished && isNextMatchOrganiser && (
+        <NextMatchPanel
+          room={room}
+          selfPlayerId={player.id}
+          crownPlayerId={crownPlayerId}
+          onSetSeatOrder={onSetSeatOrder}
+          onStart={() => {
+            setNextMatchPanelOpen(false)
+            onRestartGame()
+          }}
+          onClose={() => setNextMatchPanelOpen(false)}
+        />
+      )}
     </>
+  )
+}
+
+/**
+ * The winner's table. They redraw the seating, pick which way play runs, and
+ * are the one who starts the next match — the host no longer owns that button
+ * once someone has taken first place.
+ */
+function NextMatchPanel({
+  room,
+  selfPlayerId,
+  crownPlayerId,
+  onSetSeatOrder,
+  onStart,
+  onClose,
+}: {
+  room: RoomSnapshot
+  selfPlayerId: string
+  crownPlayerId: string | null
+  onSetSeatOrder: (input: SetSeatOrderInput) => void
+  onStart: () => void
+  onClose: () => void
+}) {
+  const seatedOrder = [...room.players].sort((a, b) => a.seat - b.seat)
+  const direction = room.nextMatchDirection === -1 ? -1 : 1
+
+  function applyOrder(nextOrder: Array<Player>, nextDirection: 1 | -1) {
+    onSetSeatOrder({
+      playerOrder: nextOrder.map((candidate) => candidate.id),
+      direction: nextDirection,
+    })
+  }
+
+  function moveSeat(index: number, delta: number) {
+    const target = index + delta
+    if (target < 0 || target >= seatedOrder.length) return
+    const nextOrder = [...seatedOrder]
+    const moved = nextOrder[index]
+    nextOrder[index] = nextOrder[target]
+    nextOrder[target] = moved
+    applyOrder(nextOrder, direction)
+  }
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose()
+    }
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [onClose])
+
+  return createPortal(
+    <div className="fixed inset-0 z-[95] grid place-items-center bg-black/72 px-4 backdrop-blur-sm">
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="next-match-title"
+        className="w-full max-w-md rounded-3xl border border-white/12 bg-[#11100d] p-5 text-white shadow-[0_28px_90px_rgba(0,0,0,0.66)]"
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold tracking-[0.18em] text-amber-100/70 uppercase">
+              Winner&apos;s call
+            </p>
+            <h2
+              id="next-match-title"
+              className="mt-1 text-xl font-semibold tracking-tight"
+            >
+              Set up the next match
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close next match setup"
+            className="grid size-9 shrink-0 place-items-center rounded-full border border-white/10 bg-white/[0.055] text-white/66 hover:bg-white/[0.09]"
+          >
+            <X className="size-4" strokeWidth={1.9} />
+          </button>
+        </div>
+
+        <p className="mt-2 text-sm leading-6 text-white/52">
+          Move players to decide who sits next to whom, then choose which way
+          the turn passes.
+        </p>
+
+        <ol className="mt-4 flex flex-col gap-1.5">
+          {seatedOrder.map((candidate, index) => (
+            <li
+              key={candidate.id}
+              className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/28 px-2.5 py-2"
+            >
+              <span className="grid size-6 shrink-0 place-items-center rounded-full bg-white/[0.08] text-[11px] font-semibold text-white/60 tabular-nums">
+                {index + 1}
+              </span>
+              <span className="min-w-0 flex-1 truncate text-sm font-medium text-white/86">
+                {candidate.name}
+                {candidate.id === selfPlayerId ? " · You" : ""}
+                {candidate.id === crownPlayerId ? " 👑" : ""}
+              </span>
+              <button
+                type="button"
+                aria-label={`Move ${candidate.name} earlier`}
+                disabled={index === 0}
+                onClick={() => moveSeat(index, -1)}
+                className="grid size-7 place-items-center rounded-lg border border-white/10 bg-white/[0.05] text-white/70 hover:bg-white/[0.09] disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                ↑
+              </button>
+              <button
+                type="button"
+                aria-label={`Move ${candidate.name} later`}
+                disabled={index === seatedOrder.length - 1}
+                onClick={() => moveSeat(index, 1)}
+                className="grid size-7 place-items-center rounded-lg border border-white/10 bg-white/[0.05] text-white/70 hover:bg-white/[0.09] disabled:cursor-not-allowed disabled:opacity-30"
+              >
+                ↓
+              </button>
+            </li>
+          ))}
+        </ol>
+
+        <div className="mt-4">
+          <p className="text-[11px] font-semibold tracking-wide text-white/45 uppercase">
+            Turn direction
+          </p>
+          <div className="mt-1.5 grid grid-cols-2 gap-1 rounded-xl border border-white/8 bg-black/22 p-1">
+            {([1, -1] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                onClick={() => applyOrder(seatedOrder, option)}
+                aria-pressed={direction === option}
+                className={
+                  "h-9 rounded-lg text-xs font-semibold transition-colors " +
+                  (direction === option
+                    ? "bg-white text-neutral-950"
+                    : "text-white/55 hover:bg-white/[0.06] hover:text-white/80")
+                }
+              >
+                {option === 1 ? "Clockwise" : "Counter-clockwise"}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <Button
+          type="button"
+          onClick={onStart}
+          className="mt-5 h-11 w-full rounded-xl bg-white text-sm font-semibold text-neutral-950 hover:bg-white/86"
+        >
+          <Play className="mr-1.5 size-4" strokeWidth={2.2} />
+          Start next match
+        </Button>
+      </section>
+    </div>,
+    document.body
+  )
+}
+
+/**
+ * A quiet running commentary of the table in the empty space beside the room
+ * title: who played what, who cycled hands, who got stacked.
+ */
+function MatchEventFeed({
+  room,
+  selfPlayerId,
+}: {
+  room: RoomSnapshot
+  selfPlayerId: string
+}) {
+  const events = (room.game?.events ?? []).slice(-4)
+  if (events.length === 0) return null
+
+  return (
+    <div
+      className="pointer-events-none hidden min-w-0 flex-1 flex-col items-center justify-center gap-1 px-4 lg:flex"
+      aria-live="polite"
+      aria-label="Match feed"
+    >
+      {events.map((event, index) => {
+        const isLatest = index === events.length - 1
+        const isSelf =
+          event.playerId === selfPlayerId ||
+          event.targetPlayerId === selfPlayerId
+        return (
+          <p
+            key={event.id}
+            className={
+              "max-w-full truncate rounded-full px-3 py-0.5 text-center transition-[opacity,color] " +
+              (isLatest
+                ? "bg-white/[0.06] text-[13px] font-medium text-white/88"
+                : "text-[11px] text-white/34") +
+              (isSelf && isLatest ? " text-amber-50" : "")
+            }
+            title={event.message}
+          >
+            {event.message}
+          </p>
+        )
+      })}
+    </div>
   )
 }
 
@@ -2651,6 +3019,7 @@ function MobileSeatingRing({
   room,
   game,
   selfPlayerId,
+  crownPlayerId,
   voiceStates,
   canTakeDrawPenalty,
   onTakeDrawPenalty,
@@ -2661,6 +3030,7 @@ function MobileSeatingRing({
   room: RoomSnapshot
   game: RoomSnapshot["game"]
   selfPlayerId: string
+  crownPlayerId: string | null
   voiceStates: RoomVoiceController["voiceStates"]
   canTakeDrawPenalty: boolean
   onTakeDrawPenalty: () => void
@@ -2698,7 +3068,13 @@ function MobileSeatingRing({
         const handCount = state?.handCount ?? 0
         const isWinner = winnerPlacement?.position === 1
         const fadedOpacity = eliminated || !candidate.connected
-        const showName = !dense || isYou
+        // A packed ring has no room for full names, but an empty nameplate
+        // makes seven identical seats unreadable — initials keep it legible.
+        const seatLabel = isYou
+          ? "You"
+          : dense
+            ? playerInitials(candidate.name)
+            : candidate.name
         const supporterCount =
           game?.supportLinks.filter(
             (link) => link.supportedPlayerId === candidate.id
@@ -2780,11 +3156,11 @@ function MobileSeatingRing({
                   winnerPlacement ? (
                     <Trophy className="size-4" strokeWidth={2.1} />
                   ) : (
-                    <img
+                    <PlayerAvatar
+                      name={candidate.name}
                       src={avatarUrls.get(candidate.id) ?? PLAYER_AVATARS[0]!}
-                      alt={`${candidate.name} avatar`}
-                      draggable={false}
                       className="size-full rounded-[inherit] object-cover"
+                      initialsClassName={dense ? "text-[10px]" : "text-[11px]"}
                     />
                   )
                 }
@@ -2806,6 +3182,14 @@ function MobileSeatingRing({
               {supporterCount > 0 && (
                 <span className="absolute -bottom-1.5 -left-1.5 rounded-full border border-pink-200/25 bg-pink-300/18 px-1 text-[8px] font-semibold text-pink-50 shadow-[0_4px_10px_rgba(0,0,0,0.32)]">
                   🙌 {supporterCount}
+                </span>
+              )}
+              {candidate.id === crownPlayerId && (
+                <span
+                  className="absolute -top-2.5 left-1/2 grid size-4 -translate-x-1/2 place-items-center rounded-full border border-amber-100/60 bg-amber-300 text-amber-950 shadow-[0_4px_10px_rgba(0,0,0,0.32)]"
+                  aria-label="Won the last match"
+                >
+                  <Crown className="size-2.5" strokeWidth={2.4} />
                 </span>
               )}
               <span
@@ -2832,18 +3216,17 @@ function MobileSeatingRing({
                 )}
               </span>
             </div>
-            {showName && (
-              <p
-                className={
-                  "mt-0.5 w-full truncate text-center font-medium " +
-                  (dense ? "text-[9px]" : "text-[10px]") +
-                  " " +
-                  (active ? "text-amber-50" : "text-white/78")
-                }
-              >
-                {isYou ? "You" : candidate.name}
-              </p>
-            )}
+            <p
+              className={
+                "mt-0.5 w-full truncate text-center font-medium " +
+                (dense ? "text-[9px] tracking-wide" : "text-[10px]") +
+                " " +
+                (active ? "text-amber-50" : "text-white/78")
+              }
+              title={candidate.name}
+            >
+              {seatLabel}
+            </p>
             {supporterNames.length > 0 && (
               <p
                 className="mt-0.5 max-w-[72px] truncate text-center text-[8px] text-pink-100/72"
@@ -3532,6 +3915,7 @@ function TableSeatRing({
   room,
   game,
   selfPlayerId,
+  crownPlayerId,
   canTakeDrawPenalty,
   onTakeDrawPenalty,
   compact,
@@ -3544,6 +3928,7 @@ function TableSeatRing({
   room: RoomSnapshot
   game: RoomSnapshot["game"]
   selfPlayerId: string
+  crownPlayerId: string | null
   canTakeDrawPenalty: boolean
   onTakeDrawPenalty: () => void
   compact: boolean
@@ -3602,6 +3987,7 @@ function TableSeatRing({
             winnerPlacement={state?.winnerPlacement ?? null}
             connected={candidate.connected}
             isYou={candidate.id === selfPlayerId}
+            wearsCrown={candidate.id === crownPlayerId}
             isStaging={game?.stagedPlay?.playerId === candidate.id}
             voiceState={voiceStates[candidate.id]}
             drawStack={
@@ -3632,9 +4018,7 @@ function ReactionAvatarContent({
   emojiClassName,
   fallback,
 }: {
-  reaction:
-    | NonNullable<RoomSnapshot["game"]>["tableReactions"][number]
-    | null
+  reaction: NonNullable<RoomSnapshot["game"]>["tableReactions"][number] | null
   emojiClassName: string
   fallback: ReactNode
 }) {
@@ -3690,7 +4074,7 @@ function ReactionAvatarContent({
     <span
       key={display.id}
       className={
-        "pointer-events-none leading-none transition-opacity duration-500 animate-[seat-reaction-pop_0.35s_cubic-bezier(0.2,0,0,1)] " +
+        "pointer-events-none animate-[seat-reaction-pop_0.35s_cubic-bezier(0.2,0,0,1)] leading-none transition-opacity duration-500 " +
         (fading ? "opacity-0" : "opacity-100") +
         " " +
         emojiClassName
@@ -3715,6 +4099,7 @@ function TableAvatarSeat({
   winnerPlacement,
   connected,
   isYou,
+  wearsCrown,
   isStaging,
   voiceState,
   drawStack,
@@ -3743,6 +4128,8 @@ function TableAvatarSeat({
   > | null
   connected: boolean
   isYou: boolean
+  /** Won the previous match: seats the table and starts the next one. */
+  wearsCrown?: boolean
   isStaging: boolean
   voiceState?: RoomVoiceController["voiceStates"][string]
   drawStack: NonNullable<RoomSnapshot["game"]>["drawStack"] | null
@@ -3812,6 +4199,15 @@ function TableAvatarSeat({
                     : "border-white/12 bg-black/38")
         }
       >
+        {wearsCrown && (
+          <div
+            className="absolute -top-3 left-1/2 grid size-6 -translate-x-1/2 place-items-center rounded-full border border-amber-100/60 bg-amber-300 text-amber-950 shadow-[0_8px_18px_rgba(0,0,0,0.32)]"
+            title="Won the last match"
+            aria-label="Won the last match"
+          >
+            <Crown className="size-3.5" strokeWidth={2.3} />
+          </div>
+        )}
         {winnerPlacement && (
           <div
             className={
@@ -3848,11 +4244,11 @@ function TableAvatarSeat({
             reaction={latestReaction}
             emojiClassName="text-3xl sm:text-4xl"
             fallback={
-              <img
+              <PlayerAvatar
+                name={player.name}
                 src={avatarUrl}
-                alt={`${player.name} avatar`}
-                draggable={false}
                 className="size-full rounded-full object-cover"
+                initialsClassName="text-xs sm:text-sm"
               />
             }
           />
@@ -4572,6 +4968,8 @@ function FannedGameHand({
   }
 
   const activeDragRef = useRef<ActiveCardDrag | null>(null)
+  const [fanElement, setFanElement] = useState<HTMLDivElement | null>(null)
+  const fanWidth = useElementWidth(fanElement)
   const ignoreNextClickRef = useRef(false)
   const [activeDrag, setActiveDragState] = useState<ActiveCardDrag | null>(null)
   const [magnifyId, setMagnifyId] = useState<string | null>(null)
@@ -4610,21 +5008,6 @@ function FannedGameHand({
   }
 
   const half = (visibleCards.length - 1) / 2
-  const spread = compact
-    ? visibleCards.length <= 8
-      ? 34
-      : visibleCards.length <= 14
-        ? 26
-        : visibleCards.length <= 20
-          ? 20
-          : 15
-    : visibleCards.length <= 8
-      ? 58
-      : visibleCards.length <= 14
-        ? 42
-        : visibleCards.length <= 20
-          ? 30
-          : 22
   const rotation =
     visibleCards.length <= 8
       ? compact
@@ -4639,6 +5022,22 @@ function FannedGameHand({
       : !compact && visibleCards.length > 18
         ? 0.95
         : 1
+
+  // A big hand used to collapse into a stack where only a sliver of each card
+  // showed. Spread the fan across whatever width the tray actually has, and
+  // only fall back to tight overlap when the cards genuinely do not fit.
+  const visualCardWidth = (compact ? 72 : 120) * cardScale
+  const maxSpread = compact ? 34 : 58
+  const minSpread = compact ? 15 : 26
+  const usableWidth = Math.max(fanWidth - 16, visualCardWidth)
+  const fittedSpread =
+    visibleCards.length > 1
+      ? (usableWidth - visualCardWidth) / (visibleCards.length - 1)
+      : maxSpread
+  const spread =
+    fanWidth > 0
+      ? Math.max(minSpread, Math.min(maxSpread, fittedSpread))
+      : maxSpread
 
   function canSelectCard(card: Card) {
     return canStageCardWithSelection(
@@ -4742,6 +5141,7 @@ function FannedGameHand({
 
   return (
     <div
+      ref={setFanElement}
       className={
         "mt-2 min-h-0 flex-1 overflow-visible pb-0 transition-opacity " +
         (isMyTurn ? "opacity-100" : "opacity-45")
@@ -5250,6 +5650,48 @@ const PLAYER_AVATARS = [
   "/avatars/wolf-blue.png",
 ]
 
+function PlayerAvatar({
+  name,
+  src,
+  className,
+  initialsClassName,
+}: {
+  name: string
+  src: string
+  className?: string
+  initialsClassName?: string
+}) {
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    setFailed(false)
+  }, [src])
+
+  if (failed) {
+    return (
+      <span
+        aria-label={`${name} avatar`}
+        className={
+          "grid size-full place-items-center rounded-[inherit] bg-white/[0.09] font-semibold tracking-wide text-white/80 " +
+          (initialsClassName ?? "text-[11px]")
+        }
+      >
+        {playerInitials(name)}
+      </span>
+    )
+  }
+
+  return (
+    <img
+      src={src}
+      alt={`${name} avatar`}
+      draggable={false}
+      onError={() => setFailed(true)}
+      className={className}
+    />
+  )
+}
+
 function hashString(value: string): number {
   let hash = 0
   for (let index = 0; index < value.length; index++) {
@@ -5326,6 +5768,24 @@ function colorValue(color: PlayColor): string {
     case "blue":
       return "oklch(0.58 0.17 252)"
   }
+}
+
+function useElementWidth(element: HTMLElement | null) {
+  const [width, setWidth] = useState(0)
+
+  useEffect(() => {
+    if (!element || typeof ResizeObserver === "undefined") return
+
+    setWidth(element.getBoundingClientRect().width)
+    const observer = new ResizeObserver((entries) => {
+      const next = entries[0]?.contentRect.width ?? 0
+      setWidth((current) => (Math.abs(current - next) < 1 ? current : next))
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [element])
+
+  return width
 }
 
 function useMediaQuery(query: string) {
@@ -5962,11 +6422,11 @@ function DimmedSeatRing({
               }}
             >
               <div className="grid size-9 shrink-0 place-items-center overflow-hidden rounded-full border border-white/12 bg-white/[0.06] text-white/72 sm:size-12">
-                <img
+                <PlayerAvatar
+                  name={candidate.name}
                   src={avatarUrls.get(candidate.id) ?? PLAYER_AVATARS[0]!}
-                  alt={`${candidate.name} avatar`}
-                  draggable={false}
                   className="size-full rounded-full object-cover"
+                  initialsClassName="text-xs sm:text-sm"
                 />
               </div>
               <div className="hidden min-w-0 flex-1 sm:block">

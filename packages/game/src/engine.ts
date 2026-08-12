@@ -3,6 +3,7 @@ import { TABLE_REACTION_EMOJIS, TABLE_REACTION_PRESETS } from "./chat"
 import { createNoMercyDeck, shuffleCards } from "./deck"
 import type {
   CatchUnoInput,
+  Direction,
   GameContext,
   GameEvent,
   GameState,
@@ -14,10 +15,19 @@ import type {
   SupportEndReason,
   SendTableReactionInput,
   SupportRecap,
+  SupportRequest,
 } from "./game"
 import type { CommandResult } from "./realtime"
 
-export function createGame(context: GameContext): GameState {
+export type CreateGameOptions = {
+  /** Turn direction the match opens with. Defaults to clockwise. */
+  direction?: Direction
+}
+
+export function createGame(
+  context: GameContext,
+  options: CreateGameOptions = {}
+): GameState {
   const playerOrder = context.players
     .slice()
     .sort((a, b) => a.seat - b.seat)
@@ -49,7 +59,7 @@ export function createGame(context: GameContext): GameState {
   const game: GameState = {
     matchId: `${Date.now()}:${Math.random().toString(36).slice(2, 10)}`,
     playerOrder,
-    direction: 1,
+    direction: options.direction ?? 1,
     currentColor: colorFor(firstDiscard),
     turnPlayerId: playerOrder[0] ?? null,
     drawPile: deck,
@@ -68,6 +78,7 @@ export function createGame(context: GameContext): GameState {
     supportLinks: [],
     supportHistory: [],
     supportBlocks: [],
+    supportRequests: [],
     tableReactions: [],
     hypeMeter: { value: 0, threshold: 100, celebrationCount: 0 },
     reactionCountsByPlayerId: {},
@@ -270,6 +281,7 @@ export function supportPlayer(
 
   const createdAt = new Date().toISOString()
   const link = { supporterPlayerId, supportedPlayerId, createdAt }
+  dropSupportRequestsFrom(game, supporterPlayerId)
   game.supportLinks.push(link)
   game.supportHistory.push({ ...link, endedAt: null, endReason: null })
   pushEvent(game, {
@@ -322,6 +334,166 @@ export function kickSupporter(
   return ok(game)
 }
 
+/**
+ * Second-chance ask after a kick. The supported player decides whether the
+ * person they removed gets back into the squad.
+ */
+export function requestSupport(
+  game: GameState,
+  context: GameContext,
+  supporterPlayerId: string,
+  supportedPlayerId: string
+): CommandResult<GameState> {
+  if (isGameFinished(game))
+    return fail("game-finished", "This match is finished.")
+  if (!game.playerOrder.includes(supporterPlayerId)) {
+    return fail("player-not-found", "You are not part of this match.")
+  }
+  if (!game.playerOrder.includes(supportedPlayerId)) {
+    return fail("player-not-found", "That player is not part of this match.")
+  }
+  if (supporterPlayerId === supportedPlayerId) {
+    return fail("cannot-support-self", "You cannot support yourself.")
+  }
+  if (isPlayerActive(game, supporterPlayerId)) {
+    return fail("player-active", "Only inactive players can become supporters.")
+  }
+  if (!isPlayerActive(game, supportedPlayerId)) {
+    return fail(
+      "supported-player-inactive",
+      "Choose an active player to support."
+    )
+  }
+  if (
+    game.supportLinks.some(
+      (link) => link.supporterPlayerId === supporterPlayerId
+    )
+  ) {
+    return fail(
+      "support-locked",
+      "You are already supporting an active player."
+    )
+  }
+  if (!isSupportBlocked(game, supporterPlayerId, supportedPlayerId)) {
+    return fail(
+      "support-request-not-needed",
+      "You can support that player without asking."
+    )
+  }
+  if (
+    game.supportRequests.some(
+      (request) =>
+        request.supporterPlayerId === supporterPlayerId &&
+        request.supportedPlayerId === supportedPlayerId
+    )
+  ) {
+    return fail("support-request-pending", "That request is already waiting.")
+  }
+
+  // One outstanding ask at a time — switching targets replaces the old one.
+  dropSupportRequestsFrom(game, supporterPlayerId)
+  game.supportRequests.push({
+    supporterPlayerId,
+    supportedPlayerId,
+    createdAt: new Date().toISOString(),
+  })
+  pushEvent(game, {
+    type: "support-requested",
+    playerId: supporterPlayerId,
+    targetPlayerId: supportedPlayerId,
+    message: `${playerName(context, supporterPlayerId)} asked to support ${playerName(
+      context,
+      supportedPlayerId
+    )}.`,
+  })
+  return ok(game)
+}
+
+export function respondToSupportRequest(
+  game: GameState,
+  context: GameContext,
+  supportedPlayerId: string,
+  supporterPlayerId: string,
+  approve: boolean
+): CommandResult<GameState> {
+  const request = game.supportRequests.find(
+    (candidate) =>
+      candidate.supporterPlayerId === supporterPlayerId &&
+      candidate.supportedPlayerId === supportedPlayerId
+  )
+  if (!request) {
+    return fail("support-request-not-found", "That request is no longer open.")
+  }
+  if (!isPlayerActive(game, supportedPlayerId)) {
+    return fail(
+      "player-inactive",
+      "Only an active player can manage their squad."
+    )
+  }
+
+  dropSupportRequestsFrom(game, supporterPlayerId)
+
+  if (!approve) {
+    pushEvent(game, {
+      type: "support-request-declined",
+      playerId: supportedPlayerId,
+      targetPlayerId: supporterPlayerId,
+      message: `${playerName(context, supportedPlayerId)} turned down ${playerName(
+        context,
+        supporterPlayerId
+      )}.`,
+    })
+    return ok(game)
+  }
+
+  game.supportBlocks = game.supportBlocks.filter(
+    (block) =>
+      !(
+        block.supporterPlayerId === supporterPlayerId &&
+        block.supportedPlayerId === supportedPlayerId
+      )
+  )
+
+  return supportPlayer(game, context, supporterPlayerId, supportedPlayerId)
+}
+
+export function incomingSupportRequests(
+  game: GameState,
+  supportedPlayerId: string
+): SupportRequest[] {
+  return game.supportRequests
+    .filter((request) => request.supportedPlayerId === supportedPlayerId)
+    .map((request) => ({ ...request }))
+}
+
+export function outgoingSupportRequest(
+  game: GameState,
+  supporterPlayerId: string
+): SupportRequest | null {
+  const request = game.supportRequests.find(
+    (candidate) => candidate.supporterPlayerId === supporterPlayerId
+  )
+  return request ? { ...request } : null
+}
+
+function isSupportBlocked(
+  game: GameState,
+  supporterPlayerId: string,
+  supportedPlayerId: string
+): boolean {
+  return game.supportBlocks.some(
+    (block) =>
+      block.supporterPlayerId === supporterPlayerId &&
+      block.supportedPlayerId === supportedPlayerId
+  )
+}
+
+function dropSupportRequestsFrom(game: GameState, supporterPlayerId: string) {
+  game.supportRequests = game.supportRequests.filter(
+    (request) => request.supporterPlayerId !== supporterPlayerId
+  )
+}
+
 export function releaseInactiveSupportLinks(
   game: GameState,
   context: GameContext
@@ -342,6 +514,12 @@ export function releaseInactiveSupportLinks(
         : `${playerName(context, link.supporterPlayerId)} can choose a new player to support.`,
     })
   }
+
+  // A pending ask dies with the squad it was aimed at.
+  game.supportRequests = game.supportRequests.filter(
+    (request) =>
+      !isGameFinished(game) && isPlayerActive(game, request.supportedPlayerId)
+  )
   return game
 }
 

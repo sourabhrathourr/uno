@@ -11,13 +11,17 @@ import {
   drawRouletteCard,
   drawOne,
   endTurn,
+  incomingSupportRequests,
   normalizeRoomCode,
+  outgoingSupportRequest,
   playCards,
   projectPlayerGame,
   projectPublicGame,
   projectSupportView,
   kickSupporter as kickSupportLink,
   releaseInactiveSupportLinks,
+  requestSupport as createSupportRequest,
+  respondToSupportRequest as resolveSupportRequest,
   sendTableReaction as applyTableReaction,
   stageCards,
   supportPlayer as createSupportLink,
@@ -39,6 +43,7 @@ import {
   type RoomSnapshot,
   type SendChatMessageInput,
   type SendTableReactionInput,
+  type SetSeatOrderInput,
   type StageCardsInput,
 } from "@workspace/game"
 
@@ -92,6 +97,8 @@ export class RoomManager {
       code,
       status: "lobby",
       hostPlayerId: host.id,
+      crownPlayerId: null,
+      nextMatchDirection: 1,
       players: [host],
       chatMessages: [],
       houseRules,
@@ -250,9 +257,8 @@ export class RoomManager {
     }
 
     room.status = "playing"
-    room.gameState = createGame({
-      players: room.players,
-      houseRules: room.houseRules,
+    room.gameState = createGame(gameContext(room), {
+      direction: room.nextMatchDirection,
     })
     room.lastReactionAtByPlayerId.clear()
     touch(room)
@@ -284,12 +290,77 @@ export class RoomManager {
       )
     }
 
+    const starterPlayerId = nextMatchStarterId(room)
+    if (starterPlayerId && starterPlayerId !== playerId) {
+      return fail(
+        room.crownPlayerId === starterPlayerId ? "crown-only" : "host-only",
+        room.crownPlayerId === starterPlayerId
+          ? "Only the last winner can start the next match."
+          : "Only the host can start the next match."
+      )
+    }
+
     room.status = "playing"
-    room.gameState = createGame({
-      players: room.players,
-      houseRules: room.houseRules,
+    room.gameState = createGame(gameContext(room), {
+      direction: room.nextMatchDirection,
     })
     room.lastReactionAtByPlayerId.clear()
+    touch(room)
+
+    return ok(snapshot(room))
+  }
+
+  /**
+   * The crown holder redraws the table before the next match: who sits where,
+   * and which way play runs.
+   */
+  setSeatOrder(
+    code: string,
+    playerId: string,
+    input: SetSeatOrderInput
+  ): CommandResult<RoomSnapshot> {
+    const room = this.rooms.get(normalizeRoomCode(code))
+    if (!room) {
+      return fail("room-not-found", "That room code does not exist.")
+    }
+    if (!findPlayer(room, playerId)) {
+      return fail("player-not-found", "You are not seated in this room.")
+    }
+    if (room.status === "playing") {
+      return fail(
+        "game-in-progress",
+        "Seating can only change between matches."
+      )
+    }
+
+    const organiserPlayerId = nextMatchStarterId(room)
+    if (organiserPlayerId && organiserPlayerId !== playerId) {
+      return fail(
+        room.crownPlayerId === organiserPlayerId ? "crown-only" : "host-only",
+        room.crownPlayerId === organiserPlayerId
+          ? "Only the last winner can rearrange the table."
+          : "Only the host can rearrange the table."
+      )
+    }
+
+    const requestedOrder = uniquePlayerIds(input?.playerOrder ?? [])
+    const seatedIds = room.players.map((player) => player.id)
+    const isPermutation =
+      requestedOrder.length === seatedIds.length &&
+      requestedOrder.every((candidateId) => seatedIds.includes(candidateId))
+    if (!isPermutation) {
+      return fail(
+        "invalid-seat-order",
+        "List every seated player exactly once."
+      )
+    }
+
+    requestedOrder.forEach((orderedPlayerId, index) => {
+      const player = findPlayer(room, orderedPlayerId)
+      if (player) player.seat = index + 1
+    })
+    room.players.sort((a, b) => a.seat - b.seat)
+    room.nextMatchDirection = input?.direction === -1 ? -1 : 1
     touch(room)
 
     return ok(snapshot(room))
@@ -565,6 +636,48 @@ export class RoomManager {
     })
   }
 
+  requestSupport(
+    code: string,
+    supporterPlayerId: string,
+    supportedPlayerId: string
+  ): CommandResult<RoomSnapshot> {
+    return this.applyGameCommand(code, (room) => {
+      if (!room.gameState)
+        return fail("game-not-started", "Start the match first.")
+      const result = createSupportRequest(
+        room.gameState,
+        gameContext(room),
+        supporterPlayerId,
+        supportedPlayerId
+      )
+      if (!result.ok) return result
+      touch(room)
+      return ok(snapshot(room))
+    })
+  }
+
+  respondToSupportRequest(
+    code: string,
+    supportedPlayerId: string,
+    supporterPlayerId: string,
+    approve: boolean
+  ): CommandResult<RoomSnapshot> {
+    return this.applyGameCommand(code, (room) => {
+      if (!room.gameState)
+        return fail("game-not-started", "Start the match first.")
+      const result = resolveSupportRequest(
+        room.gameState,
+        gameContext(room),
+        supportedPlayerId,
+        supporterPlayerId,
+        approve
+      )
+      if (!result.ok) return result
+      touch(room)
+      return ok(snapshot(room))
+    })
+  }
+
   sendTableReaction(
     code: string,
     playerId: string,
@@ -632,6 +745,12 @@ export class RoomManager {
         room.gameState?.supportBlocks
           .filter((block) => block.supporterPlayerId === playerId)
           .map((block) => block.supportedPlayerId) ?? [],
+      incomingSupportRequests: room.gameState
+        ? incomingSupportRequests(room.gameState, playerId)
+        : [],
+      outgoingSupportRequest: room.gameState
+        ? outgoingSupportRequest(room.gameState, playerId)
+        : null,
     }
   }
 
@@ -823,6 +942,8 @@ function snapshot(room: ManagedRoom): RoomSnapshot {
     code: room.code,
     status: room.status,
     hostPlayerId: room.hostPlayerId,
+    crownPlayerId: room.crownPlayerId,
+    nextMatchDirection: room.nextMatchDirection,
     players: room.players.map((player) => ({ ...player })),
     chatMessages: room.chatMessages
       .filter((message) => message.channel === "public")
@@ -850,7 +971,23 @@ function syncRoomStatus(room: ManagedRoom) {
   }
   if (room.gameState?.turnPlayerId === null) {
     room.status = "finished"
+    // First place takes the crown: they pick the seating and start the next match.
+    const winnerPlayerId = room.gameState.winnerPlayerId
+    if (winnerPlayerId && findPlayer(room, winnerPlayerId)) {
+      room.crownPlayerId = winnerPlayerId
+    }
   }
+}
+
+/**
+ * Who is allowed to arrange and start the next match: the reigning crown
+ * holder while they are still seated, otherwise the host.
+ */
+function nextMatchStarterId(room: ManagedRoom): string | null {
+  if (room.crownPlayerId && findPlayer(room, room.crownPlayerId)) {
+    return room.crownPlayerId
+  }
+  return room.hostPlayerId
 }
 
 function cloneChatMessage(message: ChatMessage): ChatMessage {

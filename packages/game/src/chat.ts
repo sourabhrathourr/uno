@@ -1,3 +1,5 @@
+import type { SupportRequest } from "./game"
+
 export type ChatMessageKind = "text" | "emoji" | "gif" | "preset"
 export type ChatChannel = "public" | "squad"
 
@@ -26,6 +28,10 @@ export type PlayerSocialSnapshot = {
   squadPlayerId: string | null
   squadChatMessages: ChatMessage[]
   blockedSupportedPlayerIds: string[]
+  /** Requests waiting on this player's approval, oldest first. */
+  incomingSupportRequests: SupportRequest[]
+  /** The request this player is currently waiting on, if any. */
+  outgoingSupportRequest: SupportRequest | null
 }
 
 export type ChatGifPreset = {

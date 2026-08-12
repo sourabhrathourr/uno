@@ -24,6 +24,8 @@ export type GameEventType =
   | "support-started"
   | "support-ended"
   | "support-kicked"
+  | "support-requested"
+  | "support-request-declined"
 
 export type GameEvent = {
   id: string
@@ -60,6 +62,17 @@ export type SupportHistoryEntry = SupportLink & {
 }
 
 export type SupportBlock = {
+  supporterPlayerId: string
+  supportedPlayerId: string
+  createdAt: string
+}
+
+/**
+ * A second-chance ask. The first support pick is unilateral, but once a
+ * supported player has kicked someone, that person can only come back if the
+ * supported player approves this request.
+ */
+export type SupportRequest = {
   supporterPlayerId: string
   supportedPlayerId: string
   createdAt: string
@@ -192,6 +205,7 @@ export type GameState = {
   supportLinks: SupportLink[]
   supportHistory: SupportHistoryEntry[]
   supportBlocks: SupportBlock[]
+  supportRequests: SupportRequest[]
   tableReactions: TableReaction[]
   hypeMeter: HypeMeter
   reactionCountsByPlayerId: Record<string, number>

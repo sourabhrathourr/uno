@@ -8,6 +8,13 @@ import type {
 } from "@workspace/game"
 
 import { getRealtimeUrl, type GameSocket } from "@/lib/realtime"
+import {
+  PEER_DISCONNECT_GRACE_MS,
+  PEER_RECONCILE_INTERVAL_MS,
+  hasTurnServers,
+  isPeerStalled,
+  nextRecoveryAction,
+} from "@/lib/voice-recovery"
 
 type VoicePeerState = {
   enabled: boolean
@@ -36,6 +43,22 @@ const defaultIceServers: RTCIceServer[] = [
   { urls: "stun:stun.l.google.com:19302" },
 ]
 
+type PeerMeta = {
+  relayOnly: boolean
+  restartAttempts: number
+  createdAt: number
+  connectedAt: number | null
+  disconnectTimerId: number | null
+  lastRecoveryAt: number
+}
+
+/**
+ * `connectionState` and `iceConnectionState` both go to "failed" at almost the
+ * same moment, so recovery is debounced to keep one break from burning two
+ * retries.
+ */
+const RECOVERY_DEBOUNCE_MS = 2_000
+
 let voicePeerConfig: RTCConfiguration = {
   iceServers: getBuildTimeVoiceIceServers(),
 }
@@ -46,10 +69,10 @@ function getBuildTimeVoiceIceServers(): RTCIceServer[] {
   if (!configuredServers) return defaultIceServers
 
   try {
-    const parsedServers = normalizeVoiceIceServers(JSON.parse(configuredServers))
-    return parsedServers.length > 0
-      ? parsedServers
-      : defaultIceServers
+    const parsedServers = normalizeVoiceIceServers(
+      JSON.parse(configuredServers)
+    )
+    return parsedServers.length > 0 ? parsedServers : defaultIceServers
   } catch (cause) {
     console.error("Invalid VITE_RTC_ICE_SERVERS value", cause)
     return defaultIceServers
@@ -123,7 +146,8 @@ function normalizeVoiceIceServers(value: unknown): RTCIceServer[] {
         : undefined
     const credentialType =
       "credentialType" in server &&
-      (server.credentialType === "password" || server.credentialType === "oauth")
+      (server.credentialType === "password" ||
+        server.credentialType === "oauth")
         ? server.credentialType
         : undefined
 
@@ -232,6 +256,7 @@ export function useRoomVoice({
   const localStreamRef = useRef<MediaStream | null>(null)
   const silentAudioSourceRef = useRef<SilentAudioSource | null>(null)
   const peersRef = useRef<Map<string, RTCPeerConnection>>(new Map())
+  const peerMetaRef = useRef<Map<string, PeerMeta>>(new Map())
   const negotiatingPeersRef = useRef<Set<string>>(new Set())
   const pendingIceCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(
     new Map()
@@ -313,33 +338,46 @@ export function useRoomVoice({
     []
   )
 
-  const closePeer = useCallback((playerId: string) => {
-    const peer = peersRef.current.get(playerId)
-    if (peer) {
-      logRoomVoiceDebug("peer closing", {
-        remotePlayerId: playerId,
-        signalingState: peer.signalingState,
-        iceConnectionState: peer.iceConnectionState,
-        connectionState: peer.connectionState,
-      })
-      peer.onicecandidate = null
-      peer.ontrack = null
-      peer.onconnectionstatechange = null
-      peer.oniceconnectionstatechange = null
-      peer.onsignalingstatechange = null
-      peer.close()
+  const clearDisconnectTimer = useCallback((playerId: string) => {
+    const meta = peerMetaRef.current.get(playerId)
+    if (meta?.disconnectTimerId) {
+      window.clearTimeout(meta.disconnectTimerId)
+      meta.disconnectTimerId = null
     }
-
-    peersRef.current.delete(playerId)
-    negotiatingPeersRef.current.delete(playerId)
-    pendingIceCandidatesRef.current.delete(playerId)
-    setRemoteStreamsByPlayerId((current) => {
-      if (!current[playerId]) return current
-      const next = { ...current }
-      delete next[playerId]
-      return next
-    })
   }, [])
+
+  const closePeer = useCallback(
+    (playerId: string) => {
+      clearDisconnectTimer(playerId)
+      peerMetaRef.current.delete(playerId)
+      const peer = peersRef.current.get(playerId)
+      if (peer) {
+        logRoomVoiceDebug("peer closing", {
+          remotePlayerId: playerId,
+          signalingState: peer.signalingState,
+          iceConnectionState: peer.iceConnectionState,
+          connectionState: peer.connectionState,
+        })
+        peer.onicecandidate = null
+        peer.ontrack = null
+        peer.onconnectionstatechange = null
+        peer.oniceconnectionstatechange = null
+        peer.onsignalingstatechange = null
+        peer.close()
+      }
+
+      peersRef.current.delete(playerId)
+      negotiatingPeersRef.current.delete(playerId)
+      pendingIceCandidatesRef.current.delete(playerId)
+      setRemoteStreamsByPlayerId((current) => {
+        if (!current[playerId]) return current
+        const next = { ...current }
+        delete next[playerId]
+        return next
+      })
+    },
+    [clearDisconnectTimer]
+  )
 
   const closeAllPeers = useCallback(() => {
     for (const playerId of peersRef.current.keys()) closePeer(playerId)
@@ -446,11 +484,24 @@ export function useRoomVoice({
     }
   }, [getSilentAudioSource])
 
+  // Only the lower id opens the conversation, so two peers never collide on
+  // the very first offer. Recovery offers can come from either side, which is
+  // what `isPolite` resolves.
   const shouldCreateOffer = useCallback((remotePlayerId: string) => {
     const selfPlayerId = selfPlayerIdRef.current
     if (!selfPlayerId) return false
     return selfPlayerId < remotePlayerId
   }, [])
+
+  /** Perfect negotiation: the polite side yields when two offers cross. */
+  const isPolite = useCallback(
+    (remotePlayerId: string) => !shouldCreateOffer(remotePlayerId),
+    [shouldCreateOffer]
+  )
+
+  const recoverPeerRef = useRef<(playerId: string, reason: string) => void>(
+    () => {}
+  )
 
   const shouldCreateInitialOffer = useCallback(
     (remotePlayerId: string, peer: RTCPeerConnection) => {
@@ -554,9 +605,23 @@ export function useRoomVoice({
       const existingPeer = peersRef.current.get(remotePlayerId)
       if (existingPeer) return existingPeer
 
-      const peer = new RTCPeerConnection(voicePeerConfig)
+      const previousMeta = peerMetaRef.current.get(remotePlayerId)
+      const relayOnly = Boolean(previousMeta?.relayOnly)
+      const peer = new RTCPeerConnection({
+        ...voicePeerConfig,
+        ...(relayOnly ? { iceTransportPolicy: "relay" as const } : {}),
+      })
+      peerMetaRef.current.set(remotePlayerId, {
+        relayOnly,
+        restartAttempts: previousMeta?.restartAttempts ?? 0,
+        createdAt: Date.now(),
+        connectedAt: null,
+        disconnectTimerId: null,
+        lastRecoveryAt: 0,
+      })
       logRoomVoiceDebug("peer created", {
         remotePlayerId,
+        relayOnly,
         iceServers: voicePeerConfig.iceServers?.map((server) => server.urls),
       })
       void syncLocalAudioToPeer(peer, remotePlayerId)
@@ -588,10 +653,42 @@ export function useRoomVoice({
           connectionState: peer.connectionState,
           iceConnectionState: peer.iceConnectionState,
         })
-        if (
-          peer.connectionState === "failed" ||
-          peer.connectionState === "closed"
-        ) {
+
+        const meta = peerMetaRef.current.get(remotePlayerId)
+        if (peer.connectionState === "connected") {
+          clearDisconnectTimer(remotePlayerId)
+          if (meta) {
+            meta.connectedAt = Date.now()
+            meta.restartAttempts = 0
+          }
+          return
+        }
+
+        // A failed leg used to be closed for good, which is why a player could
+        // hear some of the table but not the rest for the whole match. Now it
+        // is repaired instead.
+        if (peer.connectionState === "failed") {
+          clearDisconnectTimer(remotePlayerId)
+          recoverPeerRef.current(remotePlayerId, "connection-failed")
+          return
+        }
+
+        if (peer.connectionState === "disconnected") {
+          if (meta?.disconnectTimerId) return
+          const timerId = window.setTimeout(() => {
+            const currentPeer = peersRef.current.get(remotePlayerId)
+            const currentMeta = peerMetaRef.current.get(remotePlayerId)
+            if (currentMeta) currentMeta.disconnectTimerId = null
+            if (!currentPeer || currentPeer.connectionState === "connected") {
+              return
+            }
+            recoverPeerRef.current(remotePlayerId, "connection-disconnected")
+          }, PEER_DISCONNECT_GRACE_MS)
+          if (meta) meta.disconnectTimerId = timerId
+          return
+        }
+
+        if (peer.connectionState === "closed") {
           closePeer(remotePlayerId)
         }
       }
@@ -602,6 +699,9 @@ export function useRoomVoice({
           iceConnectionState: peer.iceConnectionState,
           connectionState: peer.connectionState,
         })
+        if (peer.iceConnectionState === "failed") {
+          recoverPeerRef.current(remotePlayerId, "ice-failed")
+        }
       }
 
       peer.onsignalingstatechange = () => {
@@ -614,7 +714,13 @@ export function useRoomVoice({
       peersRef.current.set(remotePlayerId, peer)
       return peer
     },
-    [closePeer, emitSignal, setRemoteAudioTrack, syncLocalAudioToPeer]
+    [
+      clearDisconnectTimer,
+      closePeer,
+      emitSignal,
+      setRemoteAudioTrack,
+      syncLocalAudioToPeer,
+    ]
   )
 
   const flushPendingIceCandidates = useCallback(
@@ -633,6 +739,40 @@ export function useRoomVoice({
       })
     },
     []
+  )
+
+  /**
+   * Re-offers with an ICE restart so a broken leg can find a new candidate
+   * pair. Either side may drive this — `isPolite` settles any collision.
+   */
+  const restartNegotiation = useCallback(
+    async (remotePlayerId: string) => {
+      const peer = peersRef.current.get(remotePlayerId)
+      if (!peer || peer.signalingState === "closed") return
+      if (negotiatingPeersRef.current.has(remotePlayerId)) return
+
+      negotiatingPeersRef.current.add(remotePlayerId)
+      try {
+        await syncLocalAudioToPeer(peer, remotePlayerId)
+        const offer = await peer.createOffer({ iceRestart: true })
+        if (peer.signalingState !== "stable") return
+        await peer.setLocalDescription(offer)
+        if (!peer.localDescription?.sdp) return
+        logRoomVoiceDebug("ice restart offer sent", {
+          remotePlayerId,
+          signalingState: peer.signalingState,
+        })
+        emitSignal(remotePlayerId, {
+          type: "offer",
+          sdp: peer.localDescription.sdp,
+        })
+      } catch (cause) {
+        logRoomVoiceDebug("ice restart failed", { remotePlayerId, cause })
+      } finally {
+        negotiatingPeersRef.current.delete(remotePlayerId)
+      }
+    },
+    [emitSignal, syncLocalAudioToPeer]
   )
 
   const createOffer = useCallback(
@@ -700,6 +840,115 @@ export function useRoomVoice({
       }
     }
   }, [createOffer, ensurePeer, shouldCreateInitialOffer])
+
+  /**
+   * Repairs one leg of the mesh. First an ICE restart; if the link keeps
+   * failing and TURN is configured, the peer is rebuilt as relay-only, which
+   * is what gets two players behind unfriendly Wi-Fi NATs talking.
+   */
+  const recoverPeer = useCallback(
+    (remotePlayerId: string, reason: string) => {
+      if (!enabledRef.current) return
+      if (!voiceStatesRef.current[remotePlayerId]?.enabled) return
+      if (!playersRef.current.some((player) => player.id === remotePlayerId)) {
+        return
+      }
+
+      const meta = peerMetaRef.current.get(remotePlayerId)
+      const now = Date.now()
+      if (meta && now - meta.lastRecoveryAt < RECOVERY_DEBOUNCE_MS) {
+        logRoomVoiceDebug("peer recovery skipped", { remotePlayerId, reason })
+        return
+      }
+      if (meta) meta.lastRecoveryAt = now
+
+      const restartAttempts = meta?.restartAttempts ?? 0
+      const relayOnly = Boolean(meta?.relayOnly)
+      const action = nextRecoveryAction({
+        restartAttempts,
+        relayOnly,
+        turnAvailable: hasTurnServers(voicePeerConfig.iceServers),
+      })
+      logRoomVoiceDebug("peer recovery", {
+        remotePlayerId,
+        reason,
+        restartAttempts,
+        relayOnly,
+        action,
+      })
+
+      if (meta) meta.restartAttempts = restartAttempts + 1
+
+      if (action === "ice-restart") {
+        void restartNegotiation(remotePlayerId)
+        return
+      }
+
+      closePeer(remotePlayerId)
+      if (action === "rebuild-relay") {
+        peerMetaRef.current.set(remotePlayerId, {
+          relayOnly: true,
+          restartAttempts: 0,
+          createdAt: now,
+          connectedAt: null,
+          disconnectTimerId: null,
+          lastRecoveryAt: now,
+        })
+      }
+
+      const peer = ensurePeer(remotePlayerId)
+      // Whoever notices the break rebuilds; the other side answers.
+      if (peer) void restartNegotiation(remotePlayerId)
+    },
+    [closePeer, ensurePeer, restartNegotiation]
+  )
+
+  useEffect(() => {
+    recoverPeerRef.current = recoverPeer
+  }, [recoverPeer])
+
+  /**
+   * Watchdog for the silent failures: a peer that never finished connecting,
+   * or a remote player who is on voice but has no peer at all on this side.
+   */
+  const reconcileMesh = useCallback(() => {
+    const selfPlayerId = selfPlayerIdRef.current
+    if (!selfPlayerId || !enabledRef.current) return
+
+    const now = Date.now()
+    for (const player of playersRef.current) {
+      if (player.id === selfPlayerId) continue
+      if (!voiceStatesRef.current[player.id]?.enabled) continue
+
+      const peer = peersRef.current.get(player.id)
+      if (!peer) {
+        const created = ensurePeer(player.id)
+        if (created && shouldCreateInitialOffer(player.id, created)) {
+          void createOffer(player.id)
+        }
+        continue
+      }
+
+      const meta = peerMetaRef.current.get(player.id)
+      const stalled = isPeerStalled({
+        connectionState: peer.connectionState,
+        createdAt: meta?.createdAt ?? now,
+        now,
+      })
+      if (!stalled) continue
+
+      recoverPeer(player.id, `stalled-${peer.connectionState}`)
+    }
+  }, [createOffer, ensurePeer, recoverPeer, shouldCreateInitialOffer])
+
+  useEffect(() => {
+    if (!enabled) return
+    const intervalId = window.setInterval(
+      reconcileMesh,
+      PEER_RECONCILE_INTERVAL_MS
+    )
+    return () => window.clearInterval(intervalId)
+  }, [enabled, reconcileMesh])
 
   const syncAllPeers = useCallback(async () => {
     const tasks: Promise<void>[] = []
@@ -961,6 +1210,17 @@ export function useRoomVoice({
 
         switch (event.signal.type) {
           case "offer": {
+            const collides =
+              peer.signalingState !== "stable" ||
+              negotiatingPeersRef.current.has(event.fromPlayerId)
+            if (collides && !isPolite(event.fromPlayerId)) {
+              // Impolite side keeps its own offer; the other end will answer it.
+              logRoomVoiceDebug("colliding offer ignored", {
+                remotePlayerId: event.fromPlayerId,
+                signalingState: peer.signalingState,
+              })
+              break
+            }
             if (peer.signalingState !== "stable") {
               try {
                 await peer.setLocalDescription({ type: "rollback" })
@@ -1049,6 +1309,7 @@ export function useRoomVoice({
       emitSignal,
       ensurePeer,
       flushPendingIceCandidates,
+      isPolite,
       syncRemoteAudioFromPeer,
       syncLocalAudioToPeer,
     ]

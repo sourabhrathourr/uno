@@ -29,6 +29,14 @@ export type RoomSnapshot = {
   code: string
   status: RoomStatus
   hostPlayerId: string | null
+  /**
+   * The player who took first place in the most recent finished match. They
+   * wear the crown, choose the seating for the next match, and are the one who
+   * starts it. Null until a match has been won.
+   */
+  crownPlayerId: string | null
+  /** Turn direction the next match will start with. */
+  nextMatchDirection: Direction
   players: Player[]
   chatMessages: ChatMessage[]
   houseRules: HouseRules
@@ -59,5 +67,5 @@ export function normalizeRoomCode(value: string): string {
 export function isRoomCode(value: string): boolean {
   return ROOM_CODE_PATTERN.test(normalizeRoomCode(value))
 }
-import type { PublicGameSnapshot } from "./game"
+import type { Direction, PublicGameSnapshot } from "./game"
 import type { ChatMessage } from "./chat"

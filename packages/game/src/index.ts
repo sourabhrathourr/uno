@@ -21,12 +21,16 @@ export {
   drawRouletteCard,
   drawOne,
   endTurn,
+  incomingSupportRequests,
+  outgoingSupportRequest,
   playCards,
   projectPlayerGame,
   projectPublicGame,
   projectSupportView,
   kickSupporter,
   releaseInactiveSupportLinks,
+  requestSupport,
+  respondToSupportRequest,
   sendTableReaction,
   stageCards,
   supportPlayer,
@@ -34,6 +38,7 @@ export {
   supportSquadPlayerIdFor,
   takeDrawPenalty,
 } from "./engine"
+export type { CreateGameOptions } from "./engine"
 export type {
   CatchUnoInput,
   Direction,
@@ -59,10 +64,12 @@ export type {
   SendTableReactionInput,
   SupportRecap,
   SupportRecapTitle,
+  SupportRequest,
   TableReaction,
   TableReactionKind,
   WinnerPlacement,
 } from "./game"
+export { playerInitials } from "./players"
 export type { HouseRules, Player, RoomSnapshot, RoomStatus } from "./rooms"
 export {
   ROOM_CODE_LENGTH,
@@ -82,8 +89,11 @@ export type {
   JoinRoomResponse,
   KickSupporterInput,
   ReadyInput,
+  RequestSupportInput,
+  RespondSupportRequestInput,
   RoomEvent,
   ServerToClientEvents,
+  SetSeatOrderInput,
   SocketData,
   SupportPlayerInput,
   VoiceSignal,

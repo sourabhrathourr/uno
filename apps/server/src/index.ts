@@ -129,6 +129,7 @@ io.on("connection", (socket) => {
         previousPlayerId,
         socket.id
       )
+      socket.leave(voiceChannel(previousRoomCode, previousPlayerId))
       if (previousRoomCode !== result.data.room.code)
         socket.leave(previousRoomCode)
       if (previousSnapshot)
@@ -139,6 +140,8 @@ io.on("connection", (socket) => {
     socket.data.playerId = result.data.player.id
     socket.data.sessionId = input.sessionId
     socket.join(result.data.room.code)
+    // Private lane per seat so voice signalling is addressed, not broadcast.
+    socket.join(voiceChannel(result.data.room.code, result.data.player.id))
 
     const snapshot = rooms.registerConnection(
       result.data.room.code,
@@ -238,6 +241,19 @@ io.on("connection", (socket) => {
     }
   })
 
+  socket.on("room:setSeatOrder", (input, ack) => {
+    const roomCode = socket.data.roomCode
+    const playerId = socket.data.playerId
+    const result = withJoinedPlayer(socket.data, (code, id) =>
+      rooms.setSeatOrder(code, id, input)
+    )
+    ack(result)
+    if (result.ok && roomCode && playerId) {
+      void emitRoomState(result.data.code, result.data)
+      io.to(roomCode).emit("room:event", { type: "seating-changed", playerId })
+    }
+  })
+
   socket.on("room:sendChatMessage", (input, ack) => {
     const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
       rooms.sendChatMessage(roomCode, playerId, input)
@@ -288,7 +304,7 @@ io.on("connection", (socket) => {
       targetPlayerId: input.targetPlayerId,
       signal: describeVoiceSignal(input.signal),
     })
-    io.to(roomCode).emit("voice:signal", {
+    io.to(voiceChannel(roomCode, input.targetPlayerId)).emit("voice:signal", {
       fromPlayerId: playerId,
       targetPlayerId: input.targetPlayerId,
       signal: input.signal,
@@ -367,6 +383,27 @@ io.on("connection", (socket) => {
     if (result.ok) void emitRoomState(result.data.code, result.data)
   })
 
+  socket.on("game:requestSupport", (input, ack) => {
+    const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
+      rooms.requestSupport(roomCode, playerId, input.supportedPlayerId)
+    )
+    ack(result)
+    if (result.ok) void emitRoomState(result.data.code, result.data)
+  })
+
+  socket.on("game:respondSupportRequest", (input, ack) => {
+    const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
+      rooms.respondToSupportRequest(
+        roomCode,
+        playerId,
+        input.supporterPlayerId,
+        Boolean(input.approve)
+      )
+    )
+    ack(result)
+    if (result.ok) void emitRoomState(result.data.code, result.data)
+  })
+
   socket.on("game:sendReaction", (input, ack) => {
     const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
       rooms.sendTableReaction(roomCode, playerId, input)
@@ -419,6 +456,10 @@ io.on("connection", (socket) => {
 httpServer.listen(port, () => {
   console.log(`UNO No Mercy server listening on http://localhost:${port}`)
 })
+
+function voiceChannel(roomCode: string, playerId: string) {
+  return `voice:${roomCode}:${playerId}`
+}
 
 function setCorsHeaders(req: IncomingMessage, res: ServerResponse) {
   const origin = req.headers.origin

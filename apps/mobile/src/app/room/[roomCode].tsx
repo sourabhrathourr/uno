@@ -6,7 +6,11 @@ import type {
   PlayerGameSnapshot,
   RoomSnapshot,
 } from '@workspace/game';
-import { isRoomCode, normalizeRoomCode } from '@workspace/game';
+import {
+  isRoomCode,
+  normalizeRoomCode,
+  playerInitials,
+} from '@workspace/game';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -19,7 +23,6 @@ import {
   RotateCcw,
   RotateCw,
   SkipForward,
-  User,
   Volume2,
   VolumeX,
   X,
@@ -913,7 +916,9 @@ function LobbyPanel({
           return (
             <View key={candidate.id} style={styles.playerRow}>
               <View style={styles.avatar}>
-                <Text style={styles.avatarText}>{candidate.name.slice(0, 1)}</Text>
+                <Text style={styles.avatarText}>
+                  {playerInitials(candidate.name)}
+                </Text>
               </View>
               <View style={styles.playerMeta}>
                 <Text style={styles.playerName}>{candidate.name}</Text>
@@ -1420,11 +1425,18 @@ function SeatRing({
                 isTurn && styles.seatAvatarTurn,
               ]}
             >
-              <User
-                color={isTurn ? '#141006' : 'rgba(255,255,255,0.72)'}
-                size={denseSeats ? 15 : roomySeats ? 18 : 16}
-                strokeWidth={2.1}
-              />
+              <Text
+                style={[
+                  styles.seatInitials,
+                  denseSeats && styles.seatInitialsDense,
+                  roomySeats && styles.seatInitialsRoomy,
+                  isTurn && styles.seatInitialsTurn,
+                ]}
+                numberOfLines={1}
+                allowFontScaling={false}
+              >
+                {playerInitials(candidate.name)}
+              </Text>
               <View
                 style={[
                   styles.seatCountPill,
@@ -2414,6 +2426,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.two,
     paddingVertical: 8,
+  },
+  seatInitials: {
+    color: 'rgba(255,255,255,0.82)',
+    fontSize: 13,
+    fontWeight: '900',
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  seatInitialsDense: {
+    fontSize: 11,
+  },
+  seatInitialsRoomy: {
+    fontSize: 15,
+  },
+  seatInitialsTurn: {
+    color: '#141006',
   },
   avatar: {
     width: 34,
