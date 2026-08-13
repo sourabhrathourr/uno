@@ -1,5 +1,6 @@
 import type { Card, CardFace } from "./cards"
 import { createNoMercyDeck, shuffleCards } from "./deck"
+import { MAX_COUNTED_TURN_MS } from "./game"
 import type {
   CatchUnoInput,
   Direction,
@@ -86,6 +87,8 @@ export function createGame(
     handsSwapped: 0,
     handsRotated: 0,
     biggestDrawStack: 0,
+    turnClockPlayerId: null,
+    turnStartedAtMs: null,
     playerOrder,
     direction: options.direction ?? 1,
     currentColor: colorFor(firstDiscard),
@@ -118,6 +121,8 @@ export function createGame(
     type: "game-started",
     message: "The first card is down. No Mercy begins.",
   })
+  game.turnClockPlayerId = game.turnPlayerId
+  game.turnStartedAtMs = Date.now()
 
   return game
 }
@@ -141,7 +146,37 @@ function emptyPlayerMatchStats(
     unoCatches: 0,
     timesCaught: 0,
     peakHandSize: startingHandSize,
+    totalTurnMs: 0,
+    timedTurns: 0,
   }
+}
+
+/**
+ * Closes out the previous player's turn clock whenever the turn moves on.
+ *
+ * Turn ownership changes from a dozen places — skips, stacks, roulette,
+ * eliminations — so rather than instrument each one, every command calls this
+ * afterwards and it reconciles against whoever the clock was last assigned to.
+ */
+export function settleTurnClock(game: GameState): GameState {
+  const now = Date.now()
+  const previousPlayerId = game.turnClockPlayerId ?? null
+
+  if (previousPlayerId && previousPlayerId !== game.turnPlayerId) {
+    const startedAt = game.turnStartedAtMs ?? now
+    // Someone who wandered off should not distort the speed leaderboard.
+    const elapsed = Math.min(Math.max(now - startedAt, 0), MAX_COUNTED_TURN_MS)
+    const stats = statsFor(game, previousPlayerId)
+    stats.totalTurnMs += elapsed
+    stats.timedTurns += 1
+  }
+
+  if (previousPlayerId !== game.turnPlayerId) {
+    game.turnClockPlayerId = game.turnPlayerId
+    game.turnStartedAtMs = game.turnPlayerId ? now : null
+  }
+
+  return game
 }
 
 /**

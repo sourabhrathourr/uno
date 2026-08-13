@@ -207,6 +207,9 @@ export type PlayerMatchStats = {
   /** Times this player was caught out. */
   timesCaught: number
   peakHandSize: number
+  /** Time on the clock across every turn this player actually took. */
+  totalTurnMs: number
+  timedTurns: number
 }
 
 export type MatchRecap = {
@@ -222,6 +225,10 @@ export type MatchRecap = {
   finishedAt: string | null
 }
 
+/** Longest a single turn is allowed to count for, so someone who wanders off
+ * mid-match does not distort the speed leaderboard. */
+export const MAX_COUNTED_TURN_MS = 120_000
+
 export type GameState = {
   matchId: string
   startedAt: string
@@ -230,6 +237,8 @@ export type GameState = {
   handsSwapped: number
   handsRotated: number
   biggestDrawStack: number
+  turnClockPlayerId: string | null
+  turnStartedAtMs: number | null
   playerOrder: string[]
   direction: Direction
   currentColor: PlayColor

@@ -39,6 +39,7 @@ export {
   requestSupport,
   respondToSupportRequest,
   sendAvatarEmojiReaction,
+  settleTurnClock,
   stageCards,
   supportPlayer,
   supportSquadMemberIds,
@@ -77,6 +78,7 @@ export type {
   SupportRequest,
   WinnerPlacement,
 } from "./game"
+export { MAX_COUNTED_TURN_MS } from "./game"
 export { playerInitials, turnOrderFromSeating } from "./players"
 export { AVATAR_REACTION_EMOJIS } from "./reactions"
 export type { AvatarReactionEmoji } from "./reactions"

@@ -3002,7 +3002,13 @@ function MatchRecapPanel({
   const nameFor = (playerId: string) =>
     players.find((candidate) => candidate.id === playerId)?.name ?? "Player"
 
-  const slides = ["Podium", "Cards handled", "Turning points", "Awards"]
+  const slides = [
+    "Podium",
+    "Cards handled",
+    "Turning points",
+    "Awards",
+    "Speed",
+  ]
   const safeSlide = Math.min(slide, slides.length - 1)
 
   const durationMs = recap.finishedAt
@@ -3016,6 +3022,17 @@ function MatchRecapPanel({
     1,
     ...recap.players.map((stats) => stats.cardsPlayed + stats.cardsDrawn)
   )
+
+  const timedPlayers = recap.players.filter((stats) => stats.timedTurns > 0)
+  const averageTurnMs = (stats: (typeof recap.players)[number]) =>
+    stats.timedTurns > 0 ? stats.totalTurnMs / stats.timedTurns : 0
+  // Fastest total time on the clock wins the speed board.
+  const speedBoard = [...timedPlayers].sort(
+    (a, b) => a.totalTurnMs - b.totalTurnMs
+  )
+  const ponderer = [...timedPlayers].sort(
+    (a, b) => averageTurnMs(b) - averageTurnMs(a)
+  )[0]
 
   const mostDrawDealt = [...recap.players].sort(
     (a, b) => b.drawCardsDealt - a.drawCardsDealt
@@ -3281,6 +3298,53 @@ function MatchRecapPanel({
               label="Chaos"
               value={`${recap.handsSwapped} swaps · ${recap.handsRotated} cycles`}
             />
+            <RecapStat
+              label="Slowest hand"
+              value={
+                ponderer
+                  ? `${nameFor(ponderer.playerId)} · ${formatTurnSeconds(averageTurnMs(ponderer))}/turn`
+                  : "—"
+              }
+            />
+          </div>
+        )}
+
+        {safeSlide === 4 && (
+          <div className="space-y-1">
+            {speedBoard.length === 0 ? (
+              <p className="py-3 text-center text-[11px] text-white/40">
+                Nobody took a timed turn.
+              </p>
+            ) : (
+              <>
+                <p className="text-[10px] text-white/38">
+                  Total time on the clock across the match — fastest first.
+                </p>
+                {speedBoard.map((stats, index) => (
+                  <div
+                    key={stats.playerId}
+                    className={
+                      "flex items-center gap-2 rounded-lg px-2 py-1 text-[11px] " +
+                      (stats.playerId === selfPlayerId
+                        ? "bg-white/[0.07] text-white/88"
+                        : "text-white/72")
+                    }
+                  >
+                    <span className="w-5 shrink-0 text-center font-semibold text-white/45 tabular-nums">
+                      {index + 1}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate font-medium">
+                      {nameFor(stats.playerId)}
+                      {stats.playerId === selfPlayerId ? " · You" : ""}
+                    </span>
+                    <span className="shrink-0 text-white/45 tabular-nums">
+                      {formatTurnClock(stats.totalTurnMs)} ·{" "}
+                      {formatTurnSeconds(averageTurnMs(stats))}/turn
+                    </span>
+                  </div>
+                ))}
+              </>
+            )}
           </div>
         )}
 
@@ -3314,8 +3378,47 @@ function MatchRecapPanel({
           </div>
         )}
       </div>
+
+      {/* The dots are far too small to hit on a phone, so the slides get real
+          buttons underneath. */}
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={() => changeSlide(-1)}
+          disabled={safeSlide === 0}
+          className="h-8 flex-1 rounded-lg border border-white/10 bg-white/[0.05] text-xs font-medium text-white/72 transition-colors hover:bg-white/[0.09] disabled:cursor-not-allowed disabled:opacity-30"
+        >
+          ‹ Back
+        </button>
+        <span className="shrink-0 text-[10px] text-white/38 tabular-nums">
+          {safeSlide + 1}/{slides.length}
+        </span>
+        <button
+          type="button"
+          onClick={() => changeSlide(1)}
+          disabled={safeSlide === slides.length - 1}
+          className="h-8 flex-1 rounded-lg border border-white/10 bg-white/[0.05] text-xs font-medium text-white/72 transition-colors hover:bg-white/[0.09] disabled:cursor-not-allowed disabled:opacity-30"
+        >
+          Next ›
+        </button>
+      </div>
     </div>
   )
+}
+
+/** m:ss for a whole match's worth of thinking. */
+function formatTurnClock(totalMs: number) {
+  const totalSeconds = Math.round(totalMs / 1000)
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return minutes > 0
+    ? `${minutes}m ${String(seconds).padStart(2, "0")}s`
+    : `${seconds}s`
+}
+
+/** Seconds with one decimal, for a per-turn average. */
+function formatTurnSeconds(averageMs: number) {
+  return `${(averageMs / 1000).toFixed(1)}s`
 }
 
 function RecapStat({ label, value }: { label: string; value: string }) {

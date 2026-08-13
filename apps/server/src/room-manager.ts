@@ -25,6 +25,7 @@ import {
   requestSupport as createSupportRequest,
   respondToSupportRequest as resolveSupportRequest,
   sendAvatarEmojiReaction as applyAvatarEmojiReaction,
+  settleTurnClock,
   stageCards,
   supportPlayer as createSupportLink,
   supportSquadMemberIds,
@@ -1509,6 +1510,9 @@ function analysisRoomSummary(
 
 function syncRoomStatus(room: ManagedRoom) {
   if (room.gameState) {
+    // Every game command lands here before its snapshot is built, which makes
+    // it the one place that reliably knows a turn may just have changed hands.
+    settleTurnClock(room.gameState)
     releaseInactiveSupportLinks(room.gameState, gameContext(room))
   }
   if (room.gameState?.turnPlayerId === null) {

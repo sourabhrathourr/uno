@@ -6,6 +6,8 @@ import {
   drawOne,
   playCards,
   projectPublicGame,
+  settleTurnClock,
+  MAX_COUNTED_TURN_MS,
   takeDrawPenalty,
   type GameContext,
   type GameState,
@@ -104,6 +106,36 @@ describe("match recap", () => {
     expect(
       recap?.players.find((stats) => stats.playerId === "b")?.timesCaught
     ).toBe(1)
+  })
+
+  it("banks a player's thinking time when the turn moves on", () => {
+    const game = createGame(context)
+    const first = game.turnPlayerId as string
+    game.turnStartedAtMs = Date.now() - 2_000
+
+    // Hand the turn to someone else and settle the clock.
+    game.turnPlayerId = game.playerOrder.find((id) => id !== first) as string
+    settleTurnClock(game)
+
+    finish(game)
+    const recap = projectPublicGame(game, context).matchRecap
+    const stats = recap?.players.find((entry) => entry.playerId === first)
+    expect(stats?.timedTurns).toBe(1)
+    expect(stats?.totalTurnMs).toBeGreaterThanOrEqual(1_900)
+    expect(stats?.totalTurnMs).toBeLessThan(4_000)
+  })
+
+  it("caps a single turn so an idle player cannot skew the leaderboard", () => {
+    const game = createGame(context)
+    const first = game.turnPlayerId as string
+    // Walked away for an hour.
+    game.turnStartedAtMs = Date.now() - 60 * 60 * 1000
+
+    game.turnPlayerId = game.playerOrder.find((id) => id !== first) as string
+    settleTurnClock(game)
+
+    const stats = game.statsByPlayerId[first]
+    expect(stats?.totalTurnMs).toBe(MAX_COUNTED_TURN_MS)
   })
 
   it("orders the recap by finish position, stragglers last", () => {
