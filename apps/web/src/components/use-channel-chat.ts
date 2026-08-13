@@ -64,6 +64,8 @@ export function useChannelChat({
     if (!squadPlayerId && channel === "squad") setChannel("public")
   }, [squadPlayerId, channel])
 
+  // While the panel is collapsed nothing is being read, so unread keeps
+  // building until it is opened again.
   useEffect(() => {
     if (isReading) markChannelRead()
   }, [isReading, markChannelRead])

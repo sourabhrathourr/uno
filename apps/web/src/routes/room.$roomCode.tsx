@@ -9,6 +9,7 @@ import {
   GripVertical,
   ImageIcon,
   MessageCircle,
+  PanelRightClose,
   Mic,
   MicOff,
   Play,
@@ -55,7 +56,7 @@ import type {
   SetSeatOrderInput,
   StageCardsInput,
 } from "@workspace/game"
-import type { PointerEvent, ReactNode, RefObject } from "react"
+import type { PointerEvent as ReactPointerEvent, ReactNode } from "react"
 import type { Options as ConfettiOptions } from "canvas-confetti"
 
 import type { GameSocket } from "@/lib/realtime"
@@ -916,10 +917,14 @@ function GameTable({
     string | null
   >(null)
   const [nextMatchPanelOpen, setNextMatchPanelOpen] = useState(false)
-  const tableSplitRef = useRef<HTMLDivElement | null>(null)
-  const [handPaneHeight, setHandPaneHeight] = useState<number | null>(
-    readStoredHandPaneHeight
-  )
+  const [chatCollapsed, setChatCollapsed] = useState(readStoredChatCollapsed)
+  const [directionPulseKey, setDirectionPulseKey] = useState(0)
+  const [directionPulseOn, setDirectionPulseOn] = useState(false)
+
+  function showDirectionPulse() {
+    setDirectionPulseKey((current) => current + 1)
+    setDirectionPulseOn(true)
+  }
 
   function requestSupportPlayer(targetPlayerId: string) {
     if (spectatingPlayerId) return
@@ -1056,6 +1061,15 @@ function GameTable({
           ...supportRequestCandidateIds,
         ]
       : []
+  // Seat coordinates for the direction pulse, in the same seating order the
+  // engine walks, so the arc traces the real rotation.
+  const orderedSeats = orderPlayersAroundSelf(room.players, player.id)
+  const directionPulseSeats = orderedSeats.map((candidate, index) => {
+    const seat = narrowViewport
+      ? mobileSeatPosition(index, orderedSeats.length)
+      : tableSeatPosition(index, orderedSeats.length, compactSurface)
+    return { playerId: candidate.id, left: seat.left, top: seat.top }
+  })
   const gameStartEventId =
     game?.events.find((event) => event.type === "game-started")?.id ?? null
   const drawStack = game?.drawStack ?? null
@@ -1153,29 +1167,6 @@ function GameTable({
   useEffect(() => {
     if (!gameFinished || !isNextMatchOrganiser) setNextMatchPanelOpen(false)
   }, [gameFinished, isNextMatchOrganiser])
-
-  // A split saved on a tall window would squeeze the table off a short one.
-  useEffect(() => {
-    if (handPaneHeight === null) return
-
-    function clampToViewport() {
-      const container = tableSplitRef.current
-      if (!container) return
-      const available =
-        container.getBoundingClientRect().height -
-        TABLE_SPLIT_HANDLE_PX -
-        MIN_TABLE_PANE_PX
-      setHandPaneHeight((current) => {
-        if (current === null) return current
-        const limit = Math.max(MIN_HAND_PANE_PX, Math.round(available))
-        return current > limit ? limit : current
-      })
-    }
-
-    clampToViewport()
-    window.addEventListener("resize", clampToViewport)
-    return () => window.removeEventListener("resize", clampToViewport)
-  }, [handPaneHeight])
 
   useEffect(() => {
     const celebrationCount = game?.hypeMeter.celebrationCount ?? 0
@@ -1530,11 +1521,12 @@ function GameTable({
       : isMyTurn
         ? "Your turn"
         : `${playerName(room, game?.turnPlayerId)} is playing`
+  // Only the end-of-match call to action earns a second line. The discard
+  // count and the draw-stack rules were noise: the stack amount already sits
+  // on the seat it is aimed at.
   const tableStatusDetail = gameFinished
     ? "Start a new match with the same room and players."
-    : game?.drawStack
-      ? `Draw stack is +${game.drawStack.amount}. Stack +${game.drawStack.minimum} or higher.`
-      : `${game?.discardPileCount ?? 0} cards discarded`
+    : null
 
   if (narrowViewport) {
     return (
@@ -1576,7 +1568,6 @@ function GameTable({
           ))}
 
           <div
-            ref={tableSplitRef}
             className={
               "mx-auto flex h-full min-h-0 w-full max-w-[680px] flex-col px-2 " +
               (phoneViewport ? "gap-1.5 py-1.5" : "gap-2 py-2")
@@ -1590,9 +1581,19 @@ function GameTable({
                   : "rounded-2xl py-2")
               }
             >
-              <p className="min-w-0 flex-1 truncate text-[10px] leading-4 font-medium text-white/62">
-                {room.game?.events[room.game.events.length - 1]?.message ?? ""}
-              </p>
+              <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                <LastMoveAvatar
+                  room={room}
+                  playerId={
+                    room.game?.events[room.game.events.length - 1]?.playerId
+                  }
+                  size="size-5"
+                />
+                <p className="min-w-0 flex-1 truncate text-[10px] leading-4 font-medium text-white/62">
+                  {room.game?.events[room.game.events.length - 1]?.message ??
+                    ""}
+                </p>
+              </div>
               <div className="flex shrink-0 items-center gap-1.5">
                 <VoiceToggleButton voice={voice} compact />
                 <CopyInviteButton iconOnly onCopy={onCopyInvite} />
@@ -1637,6 +1638,15 @@ function GameTable({
               >
                 <div className="pointer-events-none absolute inset-0 rounded-[1.35rem] bg-black/[0.08] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.32),inset_0_0_0_2px_rgba(255,255,255,0.045),inset_0_24px_80px_rgba(0,0,0,0.32)]" />
 
+                {directionPulseOn && (
+                  <DirectionPulse
+                    key={directionPulseKey}
+                    seats={directionPulseSeats}
+                    direction={game?.direction ?? 1}
+                    onDone={() => setDirectionPulseOn(false)}
+                  />
+                )}
+
                 <MobileSeatingRing
                   room={room}
                   game={game}
@@ -1656,18 +1666,22 @@ function GameTable({
                       {tableStatusTitle}
                     </p>
                     <div className="flex shrink-0 items-center gap-1">
-                      <DirectionPill direction={game?.direction ?? 1} compact />
+                      <DirectionPill
+                        direction={game?.direction ?? 1}
+                        compact
+                        onPreview={showDirectionPulse}
+                      />
                       <ColorPill color={game?.currentColor ?? "red"} />
                       {gameFinished &&
                         (canRestartGame ? (
                           <Button
                             type="button"
                             size="xs"
-                            onClick={onRestartGame}
+                            onClick={() => setNextMatchPanelOpen(true)}
                             className="h-7 rounded-full bg-white px-2 text-[11px] font-semibold text-neutral-950 hover:bg-white/85"
                           >
-                            <Play className="mr-1 size-3" strokeWidth={2.2} />
-                            New
+                            <Crown className="mr-1 size-3" strokeWidth={2.2} />
+                            Set up
                           </Button>
                         ) : (
                           <span
@@ -1681,27 +1695,21 @@ function GameTable({
                     </div>
                   </div>
 
-                  {(drawStack || (rouletteChoice && !canDrawRoulette)) && (
+                  {((drawStack && playerGame?.canTakeDrawPenalty) ||
+                    (rouletteChoice && !canDrawRoulette)) && (
                     <div className="mt-2 flex shrink-0 flex-wrap items-center gap-1.5">
-                      {drawStack && (
-                        <div className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-black/48 px-2.5 py-1 text-[11px] text-white/68 shadow-[0_10px_24px_rgba(0,0,0,0.22)] backdrop-blur-md">
-                          <span className="font-semibold text-red-100">
-                            Draw +{drawStack.amount}
-                          </span>
-                          <span className="text-white/42">
-                            stack +{drawStack.minimum}+
-                          </span>
-                          {playerGame?.canTakeDrawPenalty && (
-                            <Button
-                              type="button"
-                              size="xs"
-                              onClick={handleTakePenalty}
-                              className="h-6 rounded-full bg-white px-2 text-[11px] text-neutral-950 hover:bg-white/85"
-                            >
-                              Take
-                            </Button>
-                          )}
-                        </div>
+                      {/* The stack rules read as jargon; the amount already
+                          shows on the seat it is pointed at. All that is kept
+                          here is the way to actually take it. */}
+                      {drawStack && playerGame?.canTakeDrawPenalty && (
+                        <Button
+                          type="button"
+                          size="xs"
+                          onClick={handleTakePenalty}
+                          className="h-7 rounded-full bg-white px-3 text-[11px] font-semibold text-neutral-950 hover:bg-white/85"
+                        >
+                          Take +{drawStack.amount}
+                        </Button>
                       )}
                       {rouletteChoice && !canDrawRoulette && (
                         <div className="inline-flex items-center gap-1.5 rounded-full border border-amber-200/20 bg-amber-300/12 px-2.5 py-1 text-[11px] text-amber-50 shadow-[0_10px_24px_rgba(0,0,0,0.22)] backdrop-blur-md">
@@ -1800,35 +1808,31 @@ function GameTable({
               </div>
             )}
 
-            <TableSplitHandle
-              containerRef={tableSplitRef}
-              onResize={setHandPaneHeight}
-              onReset={() => setHandPaneHeight(null)}
-            />
-
             <section
               data-self-hand="true"
-              style={
-                handPaneHeight === null ? undefined : { height: handPaneHeight }
-              }
-              className={
-                "flex shrink-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-black/40 p-2 shadow-[0_18px_54px_rgba(0,0,0,0.28)] " +
-                (handPaneHeight === null ? "h-[clamp(174px,30dvh,230px)]" : "")
-              }
+              className="flex h-[clamp(174px,30dvh,230px)] shrink-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-black/40 p-2 shadow-[0_18px_54px_rgba(0,0,0,0.28)]"
             >
-              <div className="flex shrink-0 items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-white/84">
-                    {isSelfEliminated
-                      ? spectatingPlayerId
-                        ? `${playerName(room, spectatingPlayerId)}'s hand`
-                        : "Your hand"
-                      : "Your hand"}
-                  </p>
-                  {/* Only the spectating states still need explaining; how to
-                      play your own hand is self-evident after one turn. */}
+              {/* One row: reactions (or the colour picker when a wild needs
+                  one) on the left, turn actions on the right, vertically
+                  centred against each other. */}
+              <div className="flex shrink-0 items-center justify-between gap-2">
+                <div className="flex min-w-0 flex-1 items-center gap-2">
+                  {needsColor && !isSelfEliminated ? (
+                    <ColorPicker
+                      value={chosenColor}
+                      required={!chosenColor}
+                      onChange={setChosenColor}
+                    />
+                  ) : (
+                    <TableEnergyBar
+                      game={game}
+                      onReact={onSendReaction}
+                      compact
+                      inline
+                    />
+                  )}
                   {isSelfEliminated && (
-                    <p className="mt-0.5 truncate text-[11px] text-white/42">
+                    <p className="truncate text-[11px] text-white/42">
                       {spectatingPlayerId
                         ? "🙌 Supporting"
                         : "Tap an active player to spectate."}
@@ -1837,13 +1841,6 @@ function GameTable({
                 </div>
                 {!isSelfEliminated && (
                   <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-                    {needsColor && (
-                      <ColorPicker
-                        value={chosenColor}
-                        required={!chosenColor}
-                        onChange={setChosenColor}
-                      />
-                    )}
                     {canChooseRotate && (
                       <GameOptionCheckbox
                         checked={wantsRotate}
@@ -1890,8 +1887,6 @@ function GameTable({
                     room={room}
                   />
                 )}
-
-              <TableEnergyBar game={game} onReact={onSendReaction} compact />
 
               {gameFinished && game?.supportRecap && (
                 <SupportRecapPanel
@@ -1969,6 +1964,20 @@ function GameTable({
             }}
           />
         )}
+        {nextMatchPanelOpen && gameFinished && isNextMatchOrganiser && (
+          <NextMatchPanel
+            room={room}
+            selfPlayerId={player.id}
+            crownPlayerId={crownPlayerId}
+            asSheet
+            onSetSeatOrder={onSetSeatOrder}
+            onStart={() => {
+              setNextMatchPanelOpen(false)
+              onRestartGame()
+            }}
+            onClose={() => setNextMatchPanelOpen(false)}
+          />
+        )}
       </>
     )
   }
@@ -2018,26 +2027,17 @@ function GameTable({
             </div>
           </header>
 
-          <section className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] gap-2 overflow-hidden lg:grid-rows-[minmax(0,1fr)_220px] xl:grid-cols-[minmax(0,1fr)_310px] xl:grid-rows-none">
-            <div
-              ref={tableSplitRef}
-              // The split between table and hand is draggable, so the rows are
-              // only driven by the stylesheet until the player sets a size.
-              style={
-                handPaneHeight === null
-                  ? undefined
-                  : {
-                      gridTemplateRows: `minmax(0,1fr) ${TABLE_SPLIT_HANDLE_PX}px ${handPaneHeight}px`,
-                    }
-              }
-              className={
-                // The handle row doubles as the gap between the two panes.
-                "relative grid min-h-0 overflow-hidden " +
-                (handPaneHeight === null
-                  ? "grid-rows-[minmax(0,1fr)_18px_clamp(188px,30dvh,300px)] sm:grid-rows-[minmax(0,1fr)_18px_clamp(220px,30dvh,330px)]"
-                  : "")
-              }
-            >
+          {/* Collapsing the chat hands its width back to the table, which is
+              the part that actually needs the room. */}
+          <section
+            className={
+              "grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] gap-2 overflow-hidden xl:grid-rows-none " +
+              (chatCollapsed
+                ? "lg:grid-rows-[minmax(0,1fr)_52px] xl:grid-cols-[minmax(0,1fr)_52px]"
+                : "lg:grid-rows-[minmax(0,1fr)_220px] xl:grid-cols-[minmax(0,1fr)_310px]")
+            }
+          >
+            <div className="relative grid min-h-0 grid-rows-[minmax(0,1fr)_clamp(188px,30dvh,300px)] gap-2 overflow-hidden sm:grid-rows-[minmax(0,1fr)_clamp(220px,30dvh,330px)] lg:gap-3">
               <div
                 ref={tableDropRef}
                 style={{
@@ -2054,6 +2054,15 @@ function GameTable({
                 }
               >
                 <div className="pointer-events-none absolute inset-0 rounded-2xl bg-black/[0.08] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.32),inset_0_0_0_2px_rgba(255,255,255,0.045),inset_0_24px_80px_rgba(0,0,0,0.32)] sm:rounded-[1.75rem]" />
+
+                {directionPulseOn && (
+                  <DirectionPulse
+                    key={directionPulseKey}
+                    seats={directionPulseSeats}
+                    direction={game?.direction ?? 1}
+                    onDone={() => setDirectionPulseOn(false)}
+                  />
+                )}
                 <TableSeatRing
                   room={room}
                   game={game}
@@ -2074,16 +2083,22 @@ function GameTable({
                       <p className="text-sm font-semibold text-white">
                         {tableStatusTitle}
                       </p>
-                      <p className="mt-1 text-xs text-white/65">
-                        {tableStatusDetail}
-                      </p>
+                      {tableStatusDetail && (
+                        <p className="mt-1 text-xs text-white/65">
+                          {tableStatusDetail}
+                        </p>
+                      )}
                     </div>
                     <div className="flex flex-wrap items-center justify-end gap-1.5 sm:gap-2">
                       <span className="rounded-full border border-white/10 bg-black/28 px-2.5 py-1.5 text-[11px] font-medium text-white/60 sm:px-3 sm:py-2 sm:text-xs">
                         {room.players.length}/{room.houseRules.maxPlayers}{" "}
                         seated
                       </span>
-                      <DirectionPill direction={game?.direction ?? 1} compact />
+                      <DirectionPill
+                        direction={game?.direction ?? 1}
+                        compact
+                        onPreview={showDirectionPulse}
+                      />
                       <ColorPill color={game?.currentColor ?? "red"} />
                       {gameFinished &&
                         (isNextMatchOrganiser ? (
@@ -2195,27 +2210,27 @@ function GameTable({
                 ) : null}
               </div>
 
-              <TableSplitHandle
-                containerRef={tableSplitRef}
-                onResize={setHandPaneHeight}
-                onReset={() => setHandPaneHeight(null)}
-              />
-
               <div
                 data-self-hand="true"
                 className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-white/10 bg-black/35 p-2 shadow-[0_18px_60px_rgba(0,0,0,0.25)] sm:rounded-2xl sm:p-3"
               >
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-medium text-white/82">
-                      {isSelfEliminated
-                        ? spectatingPlayerId
-                          ? `${playerName(room, spectatingPlayerId)}'s hand`
-                          : "Your hand"
-                        : "Your hand"}
-                    </p>
+                  <div className="flex min-w-0 flex-1 items-center gap-2">
+                    {needsColor && !isSelfEliminated ? (
+                      <ColorPicker
+                        value={chosenColor}
+                        required={!chosenColor}
+                        onChange={setChosenColor}
+                      />
+                    ) : (
+                      <TableEnergyBar
+                        game={game}
+                        onReact={onSendReaction}
+                        inline
+                      />
+                    )}
                     {isSelfEliminated && (
-                      <p className="mt-0.5 text-xs text-white/42 sm:mt-1">
+                      <p className="truncate text-xs text-white/42">
                         {spectatingPlayerId
                           ? "🙌 Supporting"
                           : "Tap an active player to spectate."}
@@ -2224,13 +2239,6 @@ function GameTable({
                   </div>
                   {!isSelfEliminated && (
                     <div className="flex flex-wrap items-center gap-2">
-                      {needsColor && (
-                        <ColorPicker
-                          value={chosenColor}
-                          required={!chosenColor}
-                          onChange={setChosenColor}
-                        />
-                      )}
                       {canChooseRotate && (
                         <GameOptionCheckbox
                           checked={wantsRotate}
@@ -2294,8 +2302,6 @@ function GameTable({
                     />
                   )}
 
-                <TableEnergyBar game={game} onReact={onSendReaction} />
-
                 {gameFinished && game?.supportRecap && (
                   <SupportRecapPanel
                     recap={game.supportRecap}
@@ -2351,6 +2357,13 @@ function GameTable({
               )}
               selfPlayerId={player.id}
               error={error}
+              collapsed={chatCollapsed}
+              onToggleCollapsed={() =>
+                setChatCollapsed((current) => {
+                  writeStoredChatCollapsed(!current)
+                  return !current
+                })
+              }
               onSendMessage={onSendChatMessage}
               onKickSupporter={onKickSupporter}
             />
@@ -2398,6 +2411,7 @@ function NextMatchPanel({
   room,
   selfPlayerId,
   crownPlayerId,
+  asSheet = false,
   onSetSeatOrder,
   onStart,
   onClose,
@@ -2405,16 +2419,24 @@ function NextMatchPanel({
   room: RoomSnapshot
   selfPlayerId: string
   crownPlayerId: string | null
+  /** Bottom sheet on a phone, centred dialog on desktop. */
+  asSheet?: boolean
   onSetSeatOrder: (input: SetSeatOrderInput) => void
   onStart: () => void
   onClose: () => void
 }) {
   const seatedOrder = [...room.players].sort((a, b) => a.seat - b.seat)
   const direction = room.nextMatchDirection === -1 ? -1 : 1
-  const [dragIndex, setDragIndex] = useState<number | null>(null)
-  const [dropIndex, setDropIndex] = useState<number | null>(null)
+  // Pointer-driven rather than HTML5 drag-and-drop, which never fires on
+  // touch and was unreliable inside the portal on desktop.
+  const [drag, setDrag] = useState<{
+    index: number
+    offsetY: number
+    targetIndex: number
+  } | null>(null)
   const firstSeat = seatedOrder[0]
   const turnOrder = turnOrderFromSeating(seatedOrder, direction)
+  const rowHeight = SEAT_ROW_HEIGHT_PX
 
   function applyOrder(nextOrder: Array<Player>, nextDirection: 1 | -1) {
     onSetSeatOrder({
@@ -2448,13 +2470,29 @@ function NextMatchPanel({
   }, [onClose])
 
   return createPortal(
-    <div className="fixed inset-0 z-[95] grid place-items-center bg-black/72 px-4 backdrop-blur-sm">
+    <div
+      className={
+        "fixed inset-0 z-[95] bg-black/72 px-4 backdrop-blur-sm " +
+        (asSheet ? "flex items-end" : "grid place-items-center")
+      }
+    >
       <section
         role="dialog"
         aria-modal="true"
         aria-labelledby="next-match-title"
-        className="w-full max-w-md rounded-3xl border border-white/12 bg-[#11100d] p-5 text-white shadow-[0_28px_90px_rgba(0,0,0,0.66)]"
+        className={
+          "w-full border border-white/12 bg-[#11100d] p-5 text-white " +
+          (asSheet
+            ? "-mx-4 max-h-[88dvh] max-w-none overflow-y-auto rounded-t-3xl pb-[calc(env(safe-area-inset-bottom)+1.25rem)] shadow-[0_-24px_90px_rgba(0,0,0,0.7)]"
+            : "max-w-md rounded-3xl shadow-[0_28px_90px_rgba(0,0,0,0.66)]")
+        }
       >
+        {asSheet && (
+          <span
+            aria-hidden="true"
+            className="mx-auto mb-4 block h-1 w-10 rounded-full bg-white/20"
+          />
+        )}
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             <p className="text-[10px] font-semibold tracking-[0.18em] text-amber-100/70 uppercase">
@@ -2482,47 +2520,74 @@ function NextMatchPanel({
           deals first, and play runs from there.
         </p>
 
-        <ol className="mt-4 flex flex-col gap-1.5">
+        <ol
+          className="relative mt-4"
+          style={{ height: seatedOrder.length * rowHeight }}
+        >
           {seatedOrder.map((candidate, index) => {
-            const isDragging = dragIndex === index
-            const isDropTarget = dropIndex === index && dragIndex !== index
+            const isDragging = drag?.index === index
+            // Rows slide out of the way to show where the held row will land.
+            let slotIndex = index
+            if (drag && !isDragging) {
+              if (index > drag.index && index <= drag.targetIndex) {
+                slotIndex = index - 1
+              } else if (index < drag.index && index >= drag.targetIndex) {
+                slotIndex = index + 1
+              }
+            }
+            const translateY = isDragging
+              ? drag.index * rowHeight + drag.offsetY
+              : slotIndex * rowHeight
+
             return (
               <li
                 key={candidate.id}
-                draggable
-                onDragStart={(event) => {
-                  setDragIndex(index)
-                  event.dataTransfer.effectAllowed = "move"
-                  // Firefox will not start a drag without payload.
-                  event.dataTransfer.setData("text/plain", candidate.id)
-                }}
-                onDragOver={(event) => {
-                  event.preventDefault()
-                  event.dataTransfer.dropEffect = "move"
-                  setDropIndex(index)
-                }}
-                onDrop={(event) => {
-                  event.preventDefault()
-                  if (dragIndex !== null) moveSeat(dragIndex, index)
-                  setDragIndex(null)
-                  setDropIndex(null)
-                }}
-                onDragEnd={() => {
-                  setDragIndex(null)
-                  setDropIndex(null)
+                style={{
+                  transform: `translateY(${translateY}px)`,
+                  transition: isDragging ? "none" : "transform 180ms ease",
+                  zIndex: isDragging ? 10 : 1,
                 }}
                 className={
-                  "flex cursor-grab items-center gap-2 rounded-xl border bg-black/28 px-2.5 py-2 transition-[border-color,opacity,transform] active:cursor-grabbing " +
+                  "absolute inset-x-0 flex touch-none items-center gap-2 rounded-xl border bg-[#171614] px-2.5 py-2 " +
                   (isDragging
-                    ? "border-white/30 opacity-40"
-                    : isDropTarget
-                      ? "-translate-y-px border-amber-200/60 bg-amber-200/[0.07]"
-                      : "border-white/10")
+                    ? "border-amber-200/60 shadow-[0_14px_30px_rgba(0,0,0,0.5)]"
+                    : "border-white/10")
                 }
               >
                 <span
                   aria-hidden="true"
-                  className="shrink-0 text-white/28 select-none"
+                  onPointerDown={(event) => {
+                    event.preventDefault()
+                    event.currentTarget.setPointerCapture(event.pointerId)
+                    setDrag({ index, offsetY: 0, targetIndex: index })
+                  }}
+                  onPointerMove={(event) => {
+                    if (drag?.index !== index) return
+                    const offsetY =
+                      event.clientY -
+                      (event.currentTarget.getBoundingClientRect().top +
+                        event.currentTarget.offsetHeight / 2) +
+                      drag.offsetY
+                    const targetIndex = Math.max(
+                      0,
+                      Math.min(
+                        seatedOrder.length - 1,
+                        index + Math.round(offsetY / rowHeight)
+                      )
+                    )
+                    setDrag({ index, offsetY, targetIndex })
+                  }}
+                  onPointerUp={(event) => {
+                    if (
+                      event.currentTarget.hasPointerCapture(event.pointerId)
+                    ) {
+                      event.currentTarget.releasePointerCapture(event.pointerId)
+                    }
+                    if (drag?.index === index) moveSeat(index, drag.targetIndex)
+                    setDrag(null)
+                  }}
+                  onPointerCancel={() => setDrag(null)}
+                  className="-my-2 -ml-1 shrink-0 cursor-grab touch-none py-2 pr-1 pl-1 text-white/40 select-none active:cursor-grabbing"
                 >
                   <GripVertical className="size-4" strokeWidth={2} />
                 </span>
@@ -2619,148 +2684,29 @@ function NextMatchPanel({
   )
 }
 
-const TABLE_SPLIT_HANDLE_PX = 18
-const MIN_HAND_PANE_PX = 150
-const MIN_TABLE_PANE_PX = 220
-const HAND_PANE_STORAGE_KEY = "uno:hand-pane-height"
+const CHAT_COLLAPSED_STORAGE_KEY = "uno:chat-collapsed"
+/** Row pitch in the seating editor, including the gap between rows. */
+const SEAT_ROW_HEIGHT_PX = 46
 
-function readStoredHandPaneHeight(): number | null {
-  if (typeof window === "undefined") return null
+function readStoredChatCollapsed(): boolean {
+  if (typeof window === "undefined") return false
   try {
-    const stored = window.localStorage.getItem(HAND_PANE_STORAGE_KEY)
-    if (!stored) return null
-    const parsed = Number.parseInt(stored, 10)
-    return Number.isFinite(parsed) && parsed >= MIN_HAND_PANE_PX ? parsed : null
+    return window.localStorage.getItem(CHAT_COLLAPSED_STORAGE_KEY) === "1"
   } catch {
-    return null
+    return false
   }
 }
 
-function writeStoredHandPaneHeight(height: number | null) {
+function writeStoredChatCollapsed(collapsed: boolean) {
   if (typeof window === "undefined") return
   try {
-    if (height === null) {
-      window.localStorage.removeItem(HAND_PANE_STORAGE_KEY)
-      return
-    }
-    window.localStorage.setItem(HAND_PANE_STORAGE_KEY, String(height))
+    window.localStorage.setItem(
+      CHAT_COLLAPSED_STORAGE_KEY,
+      collapsed ? "1" : "0"
+    )
   } catch {
-    // A blocked storage quota should never stop the drag itself.
+    // A blocked storage quota should not stop the panel from collapsing.
   }
-}
-
-/**
- * Drag bar between the table and your hand. The table gets cramped on short
- * screens — especially the drop zone — so the split is the player's to set,
- * and it sticks between sessions. Double-click puts it back to the default.
- */
-function TableSplitHandle({
-  containerRef,
-  onResize,
-  onReset,
-}: {
-  containerRef: RefObject<HTMLDivElement | null>
-  onResize: (height: number) => void
-  onReset: () => void
-}) {
-  const [dragging, setDragging] = useState(false)
-
-  function clampToContainer(nextHeight: number) {
-    const container = containerRef.current
-    if (!container) return nextHeight
-    const available =
-      container.getBoundingClientRect().height -
-      TABLE_SPLIT_HANDLE_PX -
-      MIN_TABLE_PANE_PX
-    return Math.round(
-      Math.max(
-        MIN_HAND_PANE_PX,
-        Math.min(nextHeight, Math.max(available, MIN_HAND_PANE_PX))
-      )
-    )
-  }
-
-  function heightFromPointer(clientY: number) {
-    const container = containerRef.current
-    if (!container) return null
-    const bounds = container.getBoundingClientRect()
-    return clampToContainer(bounds.bottom - clientY - TABLE_SPLIT_HANDLE_PX / 2)
-  }
-
-  function commit(clientY: number) {
-    const nextHeight = heightFromPointer(clientY)
-    if (nextHeight === null) return
-    onResize(nextHeight)
-    return nextHeight
-  }
-
-  function nudge(delta: number) {
-    const container = containerRef.current
-    const hand = container?.querySelector<HTMLElement>(
-      '[data-self-hand="true"]'
-    )
-    if (!hand) return
-    const next = clampToContainer(hand.getBoundingClientRect().height + delta)
-    onResize(next)
-    writeStoredHandPaneHeight(next)
-  }
-
-  return (
-    <div
-      role="separator"
-      aria-orientation="horizontal"
-      aria-label="Resize the table and your hand"
-      tabIndex={0}
-      onPointerDown={(event) => {
-        if (event.button !== 0) return
-        event.currentTarget.setPointerCapture(event.pointerId)
-        setDragging(true)
-        commit(event.clientY)
-      }}
-      onPointerMove={(event) => {
-        if (!dragging) return
-        event.preventDefault()
-        commit(event.clientY)
-      }}
-      onPointerUp={(event) => {
-        if (!dragging) return
-        if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-          event.currentTarget.releasePointerCapture(event.pointerId)
-        }
-        setDragging(false)
-        const settled = commit(event.clientY)
-        if (settled !== undefined) writeStoredHandPaneHeight(settled)
-      }}
-      onPointerCancel={() => setDragging(false)}
-      onDoubleClick={() => {
-        onReset()
-        writeStoredHandPaneHeight(null)
-      }}
-      onKeyDown={(event) => {
-        if (event.key === "ArrowUp") {
-          event.preventDefault()
-          nudge(24)
-        } else if (event.key === "ArrowDown") {
-          event.preventDefault()
-          nudge(-24)
-        }
-      }}
-      title="Drag to resize · double-click to reset"
-      className={
-        // min-h keeps it grabbable in the phone layout's flex column, which
-        // has no fixed grid row to size it.
-        "group flex min-h-[18px] shrink-0 cursor-row-resize touch-none items-center justify-center outline-none " +
-        (dragging ? "cursor-grabbing" : "")
-      }
-    >
-      <span
-        className={
-          "h-1 w-16 rounded-full transition-[background-color,width] duration-200 group-hover:w-24 group-hover:bg-white/40 group-focus-visible:bg-white/50 " +
-          (dragging ? "w-24 bg-white/55" : "bg-white/14")
-        }
-      />
-    </div>
-  )
 }
 
 /**
@@ -2786,23 +2732,57 @@ function MatchEventFeed({
     // The row keeps its height whether or not there is a move to show, so the
     // header never shifts.
     <div
-      className="pointer-events-none hidden h-7 min-w-0 flex-1 items-center justify-start pr-4 lg:flex"
+      className="pointer-events-none hidden h-7 min-w-0 flex-1 items-center justify-start gap-2 pr-4 lg:flex"
       aria-live="polite"
       aria-label="Last move"
     >
       {latest && (
-        <p
-          key={latest.id}
-          className={
-            "max-w-full truncate text-[13px] font-medium " +
-            (isSelf ? "text-amber-50" : "text-white/88")
-          }
-          title={latest.message}
-        >
-          {latest.message}
-        </p>
+        <>
+          <LastMoveAvatar room={room} playerId={latest.playerId} />
+          <p
+            key={latest.id}
+            className={
+              "min-w-0 truncate text-[13px] font-medium " +
+              (isSelf ? "text-amber-50" : "text-white/88")
+            }
+            title={latest.message}
+          >
+            {latest.message}
+          </p>
+        </>
       )}
     </div>
+  )
+}
+
+/** Whose move it was reads faster from the face than from the name. */
+function LastMoveAvatar({
+  room,
+  playerId,
+  size = "size-6",
+}: {
+  room: RoomSnapshot
+  playerId?: string
+  size?: string
+}) {
+  const actor = room.players.find((candidate) => candidate.id === playerId)
+  if (!actor) return null
+
+  const avatarUrls = avatarsByPlayerId(room.code, room.players)
+  return (
+    <span
+      className={
+        "grid shrink-0 place-items-center overflow-hidden rounded-full border border-white/12 bg-white/[0.06] " +
+        size
+      }
+    >
+      <PlayerAvatar
+        name={actor.name}
+        src={avatarUrls.get(actor.id) ?? PLAYER_AVATARS[0]!}
+        className="size-full rounded-full object-cover"
+        initialsClassName="text-[9px]"
+      />
+    </span>
   )
 }
 
@@ -2810,26 +2790,37 @@ function TableEnergyBar({
   game,
   onReact,
   compact = false,
+  inline = false,
 }: {
   game: RoomSnapshot["game"]
   onReact: (input: SendTableReactionInput) => void
   compact?: boolean
+  /** Sits in a flex row beside the turn actions: no top margin, tighter box. */
+  inline?: boolean
 }) {
   if (!game || game.turnPlayerId === null) return null
   return (
     <div
       className={
-        (compact ? "mt-0.5" : "mt-1") +
-        " flex shrink-0 items-center gap-1 overflow-x-auto"
+        (inline ? "" : compact ? "mt-0.5 " : "mt-1 ") +
+        "flex min-w-0 shrink items-center gap-1 overflow-x-auto"
       }
     >
-      <div className="flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-black/30 p-1">
+      <div
+        className={
+          "flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-black/30 " +
+          (inline ? "px-1 py-0.5" : "p-1")
+        }
+      >
         {TABLE_REACTION_EMOJIS.map((emoji) => (
           <button
             key={emoji}
             type="button"
             onClick={() => onReact({ kind: "emoji", body: emoji })}
-            className="grid size-7 place-items-center rounded-full text-sm hover:bg-white/10 active:scale-90"
+            className={
+              "grid place-items-center rounded-full text-sm hover:bg-white/10 active:scale-90 " +
+              (inline ? "size-6" : "size-7")
+            }
             aria-label={`React ${emoji}`}
           >
             {emoji}
@@ -2990,6 +2981,8 @@ function TableChatPanel({
   squadMemberIds = [],
   selfPlayerId,
   error,
+  collapsed = false,
+  onToggleCollapsed,
   onSendMessage,
   onKickSupporter,
 }: {
@@ -3000,6 +2993,8 @@ function TableChatPanel({
   squadMemberIds?: Array<string>
   selfPlayerId: string
   error: string | null
+  collapsed?: boolean
+  onToggleCollapsed?: () => void
   onSendMessage: (input: SendChatMessageInput) => void
   onKickSupporter?: (supporterPlayerId: string) => void
 }) {
@@ -3017,6 +3012,7 @@ function TableChatPanel({
     squadMention,
     text,
     tray,
+    unreadMessageCount,
   } = useChannelChat({
     messages,
     squadMessages,
@@ -3024,9 +3020,35 @@ function TableChatPanel({
     players,
     squadMemberIds,
     selfPlayerId,
-    isReading: true,
+    // Collapsed means nobody is reading, so unread piles up until reopened.
+    isReading: !collapsed,
     onSendMessage,
   })
+
+  if (collapsed) {
+    return (
+      <aside className="hidden min-h-0 items-start justify-center rounded-2xl border border-white/10 bg-white/[0.035] p-1.5 shadow-[0_18px_56px_rgba(0,0,0,0.28)] lg:flex xl:items-start">
+        <button
+          type="button"
+          onClick={onToggleCollapsed}
+          title="Open match chat"
+          aria-label={
+            unreadMessageCount > 0
+              ? `Open match chat, ${unreadMessageCount} unread message${unreadMessageCount === 1 ? "" : "s"}`
+              : "Open match chat"
+          }
+          className="relative grid size-9 place-items-center rounded-full border border-white/10 bg-black/28 text-white/72 transition-[background-color,border-color,color] hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
+        >
+          <MessageCircle className="size-4" strokeWidth={1.9} />
+          {unreadMessageCount > 0 && (
+            <span className="absolute -top-1 -right-1 grid min-w-4 place-items-center rounded-full bg-red-500 px-1 text-[9px] font-semibold text-white tabular-nums shadow-[0_6px_16px_rgba(0,0,0,0.4)]">
+              {Math.min(unreadMessageCount, 99)}
+            </span>
+          )}
+        </button>
+      </aside>
+    )
+  }
 
   return (
     <aside className="hidden min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035] p-2 shadow-[0_18px_56px_rgba(0,0,0,0.28)] lg:flex xl:p-3">
@@ -3042,9 +3064,22 @@ function TableChatPanel({
             </p>
           </div>
         </div>
-        <span className="rounded-full border border-white/10 bg-black/26 px-2 py-1 text-[11px] text-white/52 tabular-nums">
-          {channelMessages.length}
-        </span>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <span className="rounded-full border border-white/10 bg-black/26 px-2 py-1 text-[11px] text-white/52 tabular-nums">
+            {channelMessages.length}
+          </span>
+          {onToggleCollapsed && (
+            <button
+              type="button"
+              onClick={onToggleCollapsed}
+              title="Collapse match chat"
+              aria-label="Collapse match chat"
+              className="grid size-7 place-items-center rounded-full border border-white/10 bg-black/26 text-white/60 hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
+            >
+              <PanelRightClose className="size-3.5" strokeWidth={1.9} />
+            </button>
+          )}
+        </div>
       </div>
 
       <ChatChannelTabs
@@ -3334,6 +3369,9 @@ function MobileSeatingRing({
             : null
         const handCount = state?.handCount ?? 0
         const isWinner = winnerPlacement?.position === 1
+        const mobilePlacementCrown = placementCrownFor(
+          winnerPlacement?.position
+        )
         const fadedOpacity = eliminated || !candidate.connected
         // A packed ring has no room for full names, but an empty nameplate
         // makes seven identical seats unreadable — initials keep it legible.
@@ -3406,7 +3444,9 @@ function MobileSeatingRing({
           >
             <div
               className={
-                "relative grid place-items-center rounded-lg border bg-white/[0.06] text-white/82 transition-transform duration-300 " +
+                // Round to match the avatar inside it — a square frame around a
+                // circular portrait left visible corners.
+                "relative grid place-items-center rounded-full border bg-white/[0.06] text-white/82 transition-transform duration-300 " +
                 (dense ? "size-8" : "size-9") +
                 " " +
                 ringClass +
@@ -3451,10 +3491,15 @@ function MobileSeatingRing({
                   🙌 {supporterCount}
                 </span>
               )}
-              {(isWinner || candidate.id === crownPlayerId) && (
-                <CrownBadge
-                  className="absolute -top-3 left-1/2 size-6 -translate-x-1/2"
-                  title={isWinner ? "Won this match" : "Won the last match"}
+              {/* Left of centre so it clears the placement badge pinned to
+                  the top-right corner. */}
+              {(mobilePlacementCrown || candidate.id === crownPlayerId) && (
+                <PlacementCrown
+                  placement={mobilePlacementCrown ?? 1}
+                  className="absolute -top-4 -left-2 z-20 h-6 w-8 -rotate-12"
+                  title={
+                    mobilePlacementCrown ? undefined : "Won the last match"
+                  }
                 />
               )}
               <span
@@ -4411,6 +4456,7 @@ function TableAvatarSeat({
     ? `${ordinalLabel(winnerPlacement.position)} place`
     : null
   const isFirstPlace = winnerPlacement?.position === 1
+  const placementCrown = placementCrownFor(winnerPlacement?.position)
   const isUno = declaredUno && !winnerPlacement && !eliminated
   const hasVoiceOn = Boolean(voiceState?.enabled)
   const isMuted = !hasVoiceOn || Boolean(voiceState?.muted)
@@ -4464,57 +4510,54 @@ function TableAvatarSeat({
                     : "border-white/12 bg-black/38")
         }
       >
-        {/* One crown per seat: first place this match outranks last match's. */}
-        {isFirstPlace ? (
-          <CrownBadge
-            className="absolute -top-5 -right-3 size-10 rotate-12"
-            title="Won this match"
-          />
-        ) : wearsCrown ? (
-          <CrownBadge
-            className="absolute -top-4 left-1/2 size-8 -translate-x-1/2"
-            title="Won the last match"
-          />
-        ) : null}
-        {winnerPlacement && !isFirstPlace && (
-          <div
-            className="absolute -top-2 -right-2 grid size-8 place-items-center rounded-full border border-white/16 bg-neutral-900 text-white/70 shadow-[0_8px_18px_rgba(0,0,0,0.28)]"
-            aria-label={`${placementText} finish`}
-          >
-            <Trophy className="size-4" strokeWidth={2.2} />
-          </div>
-        )}
         {supporterCount > 0 && (
           <div className="absolute -top-2 -left-2 rounded-full border border-pink-200/30 bg-pink-300/18 px-2 py-0.5 text-[10px] font-semibold text-pink-50 shadow-[0_8px_18px_rgba(0,0,0,0.28)]">
             🙌 {supporterCount}
           </div>
         )}
-        <div
-          className={
-            "grid size-9 shrink-0 place-items-center overflow-hidden rounded-full border transition-[background-color,border-color,color,box-shadow] sm:size-12 " +
-            (winnerPlacement
-              ? isFirstPlace
-                ? "border-amber-100/75 bg-amber-100/24 text-amber-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.32),0_0_28px_rgba(252,211,77,0.28)]"
-                : "border-white/18 bg-white/[0.08] text-white/74"
-              : active
-                ? "border-amber-100/65 bg-amber-100/24 text-amber-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_0_24px_rgba(252,211,77,0.24)]"
-                : isUno
-                  ? "border-yellow-100/70 bg-red-400/[0.18] text-yellow-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.24),0_0_24px_rgba(250,204,21,0.22)]"
-                  : "border-white/12 bg-white/[0.075] text-white/74")
-          }
-        >
-          <ReactionAvatarContent
-            reaction={latestReaction}
-            emojiClassName="text-3xl sm:text-4xl"
-            fallback={
-              <PlayerAvatar
-                name={player.name}
-                src={avatarUrl}
-                className="size-full rounded-full object-cover"
-                initialsClassName="text-xs sm:text-sm"
-              />
+        {/* The crown belongs on the head, so it hangs off the avatar rather
+            than floating over the whole card. */}
+        <div className="relative shrink-0">
+          {placementCrown && (
+            <PlacementCrown
+              placement={placementCrown}
+              className="absolute -top-4 -left-1 z-20 h-6 w-8 -rotate-12 sm:-top-5 sm:h-8 sm:w-10"
+            />
+          )}
+          {!placementCrown && wearsCrown && (
+            <PlacementCrown
+              placement={1}
+              className="absolute -top-4 -left-1 z-20 h-6 w-8 -rotate-12 opacity-80 sm:-top-5 sm:h-8 sm:w-10"
+              title="Won the last match"
+            />
+          )}
+          <div
+            className={
+              "grid size-9 place-items-center overflow-hidden rounded-full border transition-[background-color,border-color,color,box-shadow] sm:size-12 " +
+              (winnerPlacement
+                ? isFirstPlace
+                  ? "border-amber-100/75 bg-amber-100/24 text-amber-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.32),0_0_28px_rgba(252,211,77,0.28)]"
+                  : "border-white/18 bg-white/[0.08] text-white/74"
+                : active
+                  ? "border-amber-100/65 bg-amber-100/24 text-amber-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_0_24px_rgba(252,211,77,0.24)]"
+                  : isUno
+                    ? "border-yellow-100/70 bg-red-400/[0.18] text-yellow-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.24),0_0_24px_rgba(250,204,21,0.22)]"
+                    : "border-white/12 bg-white/[0.075] text-white/74")
             }
-          />
+          >
+            <ReactionAvatarContent
+              reaction={latestReaction}
+              emojiClassName="text-3xl sm:text-4xl"
+              fallback={
+                <PlayerAvatar
+                  name={player.name}
+                  src={avatarUrl}
+                  className="size-full rounded-full object-cover"
+                  initialsClassName="text-xs sm:text-sm"
+                />
+              }
+            />
+          </div>
         </div>
         <div className="hidden min-w-0 flex-1 sm:block">
           <p className="truncate text-xs font-semibold text-white/86">
@@ -4829,19 +4872,19 @@ function DeckStack({
   const cardScale = denseCompact ? 0.88 : 1
   const showRoulette = rouletteMode && Boolean(onDrawRoulette)
 
-  const buttonLabel = showRoulette
-    ? "Draw card"
-    : alreadyDrawn
-      ? "Drawn"
-      : "Draw one"
+  const buttonLabel = alreadyDrawn && !showRoulette ? "Drawn" : "Draw"
   const handleClick = showRoulette ? onDrawRoulette : onDraw
   const buttonDisabled = showRoulette ? false : !canDraw
-  const buttonClass = showRoulette
-    ? "rounded-lg border border-amber-200/55 bg-amber-300/22 font-semibold text-amber-50 shadow-[0_0_0_3px_rgba(252,211,77,0.18)] transition-[background-color,border-color,color,transform] hover:border-amber-200/75 hover:bg-amber-300/32 active:scale-[0.96]"
-    : "rounded-lg border border-white/12 bg-black/35 font-medium text-white/84 transition-[background-color,border-color,color,transform] hover:border-white/22 hover:bg-white/10 hover:text-white active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-45"
+  // Sitting on top of the card art, so it needs its own dark, heavily blurred
+  // ground to stay readable against the red oval and the black border alike.
+  const buttonClass =
+    "rounded-full border backdrop-blur-2xl backdrop-saturate-150 font-semibold tracking-wide shadow-[0_10px_28px_rgba(0,0,0,0.55)] transition-[background-color,border-color,opacity,transform] active:scale-[0.96] " +
+    (showRoulette
+      ? "border-amber-200/60 bg-amber-950/72 text-amber-50 hover:bg-amber-900/78"
+      : "border-white/28 bg-black/62 text-white hover:border-white/40 hover:bg-black/72 disabled:cursor-not-allowed disabled:border-white/20 disabled:bg-black/60 disabled:text-white/80")
   const buttonSize = denseCompact
-    ? "h-7 px-2 text-[11px]"
-    : "h-8 px-2.5 text-xs sm:h-9 sm:px-3 sm:text-sm"
+    ? "h-6 px-2.5 text-[10px]"
+    : "h-7 px-3 text-[11px] sm:h-8 sm:px-4 sm:text-xs"
 
   return (
     <div
@@ -4851,14 +4894,13 @@ function DeckStack({
         (denseCompact ? "gap-1" : "gap-1.5 sm:gap-2")
       }
     >
+      {/* Deck and discard share one box height so their captions line up. */}
       <div
-        className={
-          compact
-            ? denseCompact
-              ? "relative h-[94px] w-[72px]"
-              : "relative h-[112px] w-[82px]"
-            : "relative h-[178px] w-[128px]"
-        }
+        className="relative"
+        style={{
+          height: pileBoxHeight(size, dense),
+          width: compact ? (denseCompact ? 72 : 82) : 128,
+        }}
       >
         {[0, 1, 2, 3].map((layer) => (
           <div
@@ -4878,15 +4920,21 @@ function DeckStack({
         >
           <UnoCard card={cardBackPlaceholder} faceDown size={size} static />
         </div>
+        {/* Sitting on the card rather than under it saves a row of height. */}
+        <button
+          type="button"
+          disabled={buttonDisabled}
+          onClick={handleClick}
+          className={
+            "absolute top-1/2 left-1/2 z-20 -translate-x-1/2 -translate-y-1/2 " +
+            buttonClass +
+            " " +
+            buttonSize
+          }
+        >
+          {buttonLabel}
+        </button>
       </div>
-      <button
-        type="button"
-        disabled={buttonDisabled}
-        onClick={handleClick}
-        className={buttonClass + " " + buttonSize}
-      >
-        {buttonLabel}
-      </button>
       {showRoulette && rouletteColor ? (
         <p
           className={
@@ -4915,6 +4963,12 @@ function DeckStack({
   )
 }
 
+/** Shared so the deck and the discard pile keep a common baseline. */
+function pileBoxHeight(size: ResponsiveCardSize, dense: boolean) {
+  if (size !== "sm") return 178
+  return dense ? 94 : 112
+}
+
 function DiscardStack({
   card,
   size,
@@ -4936,13 +4990,11 @@ function DiscardStack({
       }
     >
       <div
-        className={
-          compact
-            ? denseCompact
-              ? "relative h-[94px] w-[68px]"
-              : "relative h-[102px] w-[72px]"
-            : "relative h-[170px] w-[120px]"
-        }
+        className="relative"
+        style={{
+          height: pileBoxHeight(size, dense),
+          width: compact ? (denseCompact ? 68 : 72) : 120,
+        }}
       >
         <div className="absolute inset-0 translate-x-2 translate-y-1.5 rounded-xl border border-black/40 bg-black/24 sm:translate-x-3 sm:translate-y-2 sm:rounded-2xl" />
         <div className="absolute inset-0 translate-x-1 translate-y-0.5 rounded-xl border border-black/30 bg-white/8 sm:translate-x-1.5 sm:translate-y-1 sm:rounded-2xl" />
@@ -4956,15 +5008,7 @@ function DiscardStack({
             <UnoCard card={card} size={size} static />
           </div>
         ) : (
-          <div
-            className={
-              compact
-                ? denseCompact
-                  ? "h-[94px] w-[68px] rounded-lg border border-white/10 bg-black/20"
-                  : "h-[102px] w-[72px] rounded-lg border border-white/10 bg-black/20"
-                : "h-[170px] w-[120px] rounded-xl border border-white/10 bg-black/20"
-            }
-          />
+          <div className="absolute inset-0 rounded-xl border border-white/10 bg-black/20" />
         )}
       </div>
       <p
@@ -5169,24 +5213,130 @@ function TableStagedPlay({
 function DirectionPill({
   direction,
   compact = false,
+  onPreview,
 }: {
   direction: 1 | -1
   compact?: boolean
+  /** Tap to flash the rotation over the table for a beat. */
+  onPreview?: () => void
 }) {
   const clockwise = direction === 1
-  return (
-    <div className="flex items-center gap-1.5 rounded-full border border-white/10 bg-black/28 px-2 py-1.5 text-[11px] font-medium text-white/70 sm:gap-2 sm:px-3 sm:py-2 sm:text-xs">
+  const label = clockwise ? "Clockwise" : "Counter-clockwise"
+  const content = (
+    <>
       <RotateCw
         className={"size-3.5 " + (clockwise ? "" : "-scale-x-100")}
         aria-hidden="true"
       />
-      {compact
-        ? clockwise
-          ? "CW"
-          : "CCW"
-        : clockwise
-          ? "Clockwise"
-          : "Counter-clockwise"}
+      {compact ? (clockwise ? "CW" : "CCW") : label}
+    </>
+  )
+  const className =
+    "flex items-center gap-1.5 rounded-full border border-white/10 bg-black/28 px-2 py-1.5 text-[11px] font-medium text-white/70 sm:gap-2 sm:px-3 sm:py-2 sm:text-xs"
+
+  if (!onPreview) return <div className={className}>{content}</div>
+
+  return (
+    <button
+      type="button"
+      onClick={onPreview}
+      title={`${label} — tap to show the turn order`}
+      aria-label={`${label}. Show the turn order`}
+      className={
+        className +
+        " transition-[background-color,border-color,color] hover:border-white/22 hover:bg-black/40 hover:text-white active:scale-[0.97]"
+      }
+    >
+      {content}
+    </button>
+  )
+}
+
+/**
+ * A one-shot arc drawn between the seats, in turn order, when a player taps
+ * the direction pill. Local to whoever tapped — it answers "which way is it
+ * going?" without pushing anything to the rest of the table.
+ */
+function DirectionPulse({
+  seats,
+  direction,
+  onDone,
+}: {
+  seats: Array<{ playerId: string; left: number; top: number }>
+  direction: 1 | -1
+  onDone: () => void
+}) {
+  useEffect(() => {
+    const timer = window.setTimeout(onDone, 1600)
+    return () => window.clearTimeout(timer)
+  }, [onDone])
+
+  if (seats.length < 2) return null
+
+  const ordered = turnOrderFromSeating(seats, direction)
+  const arcs = ordered.map((seat, index) => {
+    const next = ordered[
+      (index + 1) % ordered.length
+    ] as (typeof ordered)[number]
+    return { from: seat, to: next, index }
+  })
+
+  return (
+    <div
+      // z-40 puts it over the seats, which matters most at a full table.
+      className="pointer-events-none absolute inset-0 z-40"
+      aria-hidden="true"
+    >
+      <style>
+        {`@keyframes uno-direction-arc {
+            0% { opacity: 0; stroke-dashoffset: 100; }
+            25% { opacity: 0.55; }
+            70% { opacity: 0.55; stroke-dashoffset: 0; }
+            100% { opacity: 0; stroke-dashoffset: 0; }
+          }`}
+      </style>
+      <svg
+        viewBox="0 0 100 100"
+        preserveAspectRatio="none"
+        className="size-full overflow-visible"
+      >
+        {arcs.map(({ from, to, index }) => (
+          <line
+            key={`${from.playerId}:${to.playerId}`}
+            x1={from.left}
+            y1={from.top}
+            x2={to.left}
+            y2={to.top}
+            stroke="rgb(74 222 128)"
+            strokeWidth={0.5}
+            strokeLinecap="round"
+            strokeDasharray="100"
+            vectorEffect="non-scaling-stroke"
+            style={{
+              opacity: 0,
+              animation: `uno-direction-arc 1.5s cubic-bezier(0.2,0,0,1) ${index * 110}ms forwards`,
+            }}
+          />
+        ))}
+        {arcs.map(({ from, to, index }) => {
+          const midLeft = (from.left + to.left) / 2
+          const midTop = (from.top + to.top) / 2
+          const angle =
+            (Math.atan2(to.top - from.top, to.left - from.left) * 180) / Math.PI
+          return (
+            <polygon
+              key={`arrow:${from.playerId}:${to.playerId}`}
+              points="-1.6,-1.4 1.8,0 -1.6,1.4"
+              fill="rgb(74 222 128)"
+              transform={`translate(${midLeft} ${midTop}) rotate(${angle})`}
+              style={{
+                opacity: 0,
+                animation: `uno-direction-arc 1.5s cubic-bezier(0.2,0,0,1) ${index * 110 + 90}ms forwards`,
+              }}
+            />
+          )
+        })}
+      </svg>
     </div>
   )
 }
@@ -5234,10 +5384,13 @@ function FannedGameHand({
 
   const activeDragRef = useRef<ActiveCardDrag | null>(null)
   const [fanElement, setFanElement] = useState<HTMLDivElement | null>(null)
-  const fanWidth = useElementWidth(fanElement)
+  const { width: fanWidth, height: fanHeight } = useElementSize(fanElement)
+  const spreadFactor = useHandSpreadGesture(fanElement)
   const ignoreNextClickRef = useRef(false)
   const [activeDrag, setActiveDragState] = useState<ActiveCardDrag | null>(null)
   const [magnifyId, setMagnifyId] = useState<string | null>(null)
+  const [page, setPage] = useState(0)
+  const swipeStartRef = useRef<{ x: number; y: number } | null>(null)
   const haptic = useWebHaptics()
 
   function setActiveDrag(nextDrag: ActiveCardDrag | null) {
@@ -5272,37 +5425,91 @@ function FannedGameHand({
     )
   }
 
-  const half = (visibleCards.length - 1) / 2
+  const cardBaseWidth = compact ? 72 : 120
+  const cardBaseHeight = compact ? 102 : 170
+  const arcDepth = compact ? 20 : 34
+
+  // The tray can be dragged to any height, so the fan is sized from the room
+  // it actually has. Without this the cards kept their full size and spilled
+  // over the table once the split was pulled down.
+  const heightBudget = fanHeight > 0 ? fanHeight - FAN_BASELINE_OFFSET : 0
+  const heightScale =
+    heightBudget > 0
+      ? Math.min(1, (heightBudget - arcDepth) / cardBaseHeight)
+      : 1
+  const usableWidth = Math.max(fanWidth - 24, cardBaseWidth * 0.5)
+
+  // Once a hand is so wide that even the tightest fan fills the tray, spreading
+  // further flips it into pages: a readable handful at a time that you swipe
+  // through, and pinching back in returns to the whole hand.
+  const approxCardWidth = cardBaseWidth * DESKTOP_HAND_CARD_SCALE * heightScale
+  const crowded =
+    visibleCards.length > 1 &&
+    (usableWidth - approxCardWidth) / (visibleCards.length - 1) <
+      approxCardWidth * 0.42
+  const paged = crowded && spreadFactor >= PAGE_SPREAD_FACTOR
+  const cardsPerPage = paged
+    ? Math.max(
+        4,
+        Math.min(
+          visibleCards.length,
+          Math.floor(usableWidth / (approxCardWidth * 0.8))
+        )
+      )
+    : visibleCards.length
+  const pageCount = paged ? Math.ceil(visibleCards.length / cardsPerPage) : 1
+  const safePage = Math.min(page, pageCount - 1)
+  const laidOutCards = paged
+    ? visibleCards.slice(safePage * cardsPerPage, (safePage + 1) * cardsPerPage)
+    : visibleCards
+
+  const half = (laidOutCards.length - 1) / 2
   const rotation =
-    visibleCards.length <= 8
+    laidOutCards.length <= 8
       ? compact
         ? 5
         : 6
-      : visibleCards.length <= 14
+      : laidOutCards.length <= 14
         ? 4
         : 2.35
-  const cardScale =
-    !compact && visibleCards.length > 22
+  const baseCrowdScale =
+    !compact && laidOutCards.length > 22
       ? 0.9
-      : !compact && visibleCards.length > 18
+      : !compact && laidOutCards.length > 18
         ? 0.95
-        : 1
+        : DESKTOP_HAND_CARD_SCALE
+  const cardScale = Math.max(
+    MIN_HAND_CARD_SCALE,
+    baseCrowdScale * Math.max(heightScale, MIN_HAND_CARD_SCALE)
+  )
 
-  // A big hand used to collapse into a stack where only a sliver of each card
-  // showed. Spread the fan across whatever width the tray actually has, and
-  // only fall back to tight overlap when the cards genuinely do not fit.
-  const visualCardWidth = (compact ? 72 : 120) * cardScale
-  const maxSpread = compact ? 34 : 58
-  const minSpread = compact ? 15 : 26
-  const usableWidth = Math.max(fanWidth - 16, visualCardWidth)
-  const fittedSpread =
-    visibleCards.length > 1
-      ? (usableWidth - visualCardWidth) / (visibleCards.length - 1)
-      : maxSpread
-  const spread =
-    fanWidth > 0
-      ? Math.max(minSpread, Math.min(maxSpread, fittedSpread))
-      : maxSpread
+  // Three bounds, in priority order:
+  //   fit   — the widest spread that still fits the tray, so the fan can never
+  //           run past its container however hard it is pinched.
+  //   loose — cards always keep some overlap; fully separated reads as a row
+  //           of loose cards rather than a held hand.
+  //   tight — never so bunched that the corner index is hidden.
+  const visualCardWidth = cardBaseWidth * cardScale
+  const tightSpread = visualCardWidth * 0.24
+  const looseSpread = visualCardWidth * 0.72
+  const fitSpread =
+    laidOutCards.length > 1
+      ? (usableWidth - visualCardWidth) / (laidOutCards.length - 1)
+      : looseSpread
+  const naturalSpread = Math.min(
+    looseSpread,
+    Math.max(tightSpread, fanWidth > 0 ? fitSpread : looseSpread)
+  )
+  const spread = paged
+    ? Math.max(tightSpread, Math.min(looseSpread, fitSpread))
+    : Math.max(
+        tightSpread,
+        Math.min(
+          naturalSpread * spreadFactor,
+          looseSpread,
+          fanWidth > 0 ? Math.max(fitSpread, tightSpread) : looseSpread
+        )
+      )
 
   function canSelectCard(card: Card) {
     return canStageCardWithSelection(
@@ -5319,7 +5526,7 @@ function FannedGameHand({
   }
 
   function startPointerDrag(
-    event: PointerEvent<HTMLElement>,
+    event: ReactPointerEvent<HTMLElement>,
     card: Card,
     cardRotation: number
   ) {
@@ -5342,13 +5549,17 @@ function FannedGameHand({
     })
   }
 
-  function movePointerDrag(event: PointerEvent<HTMLElement>, card: Card) {
+  function movePointerDrag(event: ReactPointerEvent<HTMLElement>, card: Card) {
     const drag = activeDragRef.current
     if (drag?.cardId !== card.id) return
 
     const dx = event.clientX - drag.startX
     const dy = event.clientY - drag.startY
-    const dragging = drag.dragging || Math.hypot(dx, dy) > 8
+    // In paged mode a sideways drag is a page swipe, so only a clearly
+    // vertical pull picks the card up.
+    const dragging =
+      drag.dragging ||
+      (Math.hypot(dx, dy) > 8 && (!paged || Math.abs(dy) > Math.abs(dx)))
 
     if (dragging) event.preventDefault()
     if (dragging && !drag.dragging) onDragStart(card.id)
@@ -5364,7 +5575,7 @@ function FannedGameHand({
     })
   }
 
-  function endPointerDrag(event: PointerEvent<HTMLElement>, card: Card) {
+  function endPointerDrag(event: ReactPointerEvent<HTMLElement>, card: Card) {
     const drag = activeDragRef.current
     if (drag?.cardId !== card.id) return
 
@@ -5378,6 +5589,11 @@ function FannedGameHand({
     }
 
     setActiveDrag(null)
+  }
+
+  function changePage(delta: number) {
+    setPage((current) => Math.max(0, Math.min(pageCount - 1, current + delta)))
+    haptic.trigger("selection")
   }
 
   function handleCardClick(card: Card) {
@@ -5396,7 +5612,7 @@ function FannedGameHand({
     }, 170)
   }
 
-  function cancelPointerDrag(event: PointerEvent<HTMLElement>) {
+  function cancelPointerDrag(event: ReactPointerEvent<HTMLElement>) {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
@@ -5407,27 +5623,34 @@ function FannedGameHand({
   return (
     <div
       ref={setFanElement}
+      // touch-none so the two-finger spread gesture is not swallowed by the
+      // browser's own pan handling.
       className={
-        "mt-2 min-h-0 flex-1 overflow-visible pb-0 transition-opacity " +
+        "mt-2 min-h-0 flex-1 touch-none overflow-visible pb-0 transition-opacity " +
         (isMyTurn ? "opacity-100" : "opacity-45")
       }
+      onPointerDown={(event) => {
+        if (!paged) return
+        swipeStartRef.current = { x: event.clientX, y: event.clientY }
+      }}
+      onPointerUp={(event) => {
+        const start = swipeStartRef.current
+        swipeStartRef.current = null
+        if (!paged || !start) return
+        const dx = event.clientX - start.x
+        const dy = event.clientY - start.y
+        if (Math.abs(dx) < 48 || Math.abs(dx) <= Math.abs(dy)) return
+        changePage(dx < 0 ? 1 : -1)
+      }}
     >
-      <div
-        className={
-          compact
-            ? "relative mx-auto h-full min-h-[112px] max-w-full"
-            : "relative mx-auto h-full min-h-[178px] max-w-full"
-        }
-      >
+      <div className="relative mx-auto h-full max-w-full">
         {/* The fan arcs downward from its baseline, so the baseline sits clear
             of the tray floor — otherwise the outermost cards get clipped. */}
         <div
-          className={
-            "absolute inset-x-0 flex justify-center " +
-            (compact ? "bottom-6" : "bottom-10")
-          }
+          className="absolute inset-x-0 flex justify-center"
+          style={{ bottom: Math.min(FAN_BASELINE_OFFSET, fanHeight * 0.24) }}
         >
-          {visibleCards.map((card, index) => {
+          {laidOutCards.map((card, index) => {
             const offset = index - half
             const playable = playableCardIds.includes(card.id)
             const stageable = canSelectCard(card)
@@ -5515,6 +5738,42 @@ function FannedGameHand({
             )
           })}
         </div>
+
+        {paged && pageCount > 1 && (
+          <div className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-2">
+            <button
+              type="button"
+              aria-label="Previous cards"
+              disabled={safePage === 0}
+              onClick={() => changePage(-1)}
+              className="grid size-6 place-items-center rounded-full border border-white/10 bg-black/40 text-white/70 disabled:opacity-25"
+            >
+              ‹
+            </button>
+            <div className="flex items-center gap-1">
+              {Array.from({ length: pageCount }, (_, index) => (
+                <span
+                  key={index}
+                  className={
+                    "h-1 rounded-full transition-[width,background-color] " +
+                    (index === safePage
+                      ? "w-4 bg-white/75"
+                      : "w-1.5 bg-white/25")
+                  }
+                />
+              ))}
+            </div>
+            <button
+              type="button"
+              aria-label="More cards"
+              disabled={safePage >= pageCount - 1}
+              onClick={() => changePage(1)}
+              className="grid size-6 place-items-center rounded-full border border-white/10 bg-black/40 text-white/70 disabled:opacity-25"
+            >
+              ›
+            </button>
+          </div>
+        )}
       </div>
       {activeDrag?.dragging &&
         activeDragCard &&
@@ -5926,6 +6185,48 @@ const PLAYER_AVATARS = [
  * A rendered crown rather than a line icon — the flat glyph read as a sticker
  * on top of the seat instead of something the winner had earned.
  */
+/**
+ * The metaphor carries down the podium: gold for the win, silver for second,
+ * bronze for third. Below that a placement is just a number, so no crown.
+ */
+const PLACEMENT_CROWNS: Record<number, { src: string; label: string }> = {
+  1: { src: "/crown.png", label: "1st place" },
+  2: { src: "/crown-silver.png", label: "2nd place" },
+  3: { src: "/crown-bronze.png", label: "3rd place" },
+}
+
+function placementCrownFor(position: number | null | undefined) {
+  if (!position) return null
+  return position in PLACEMENT_CROWNS ? position : null
+}
+
+function PlacementCrown({
+  placement,
+  className,
+  title,
+}: {
+  placement: number
+  className?: string
+  title?: string
+}) {
+  const crown = PLACEMENT_CROWNS[placement]
+  if (!crown) return null
+
+  return (
+    <img
+      src={crown.src}
+      alt=""
+      aria-hidden="true"
+      draggable={false}
+      title={title ?? crown.label}
+      className={
+        "pointer-events-none object-contain drop-shadow-[0_4px_10px_rgba(0,0,0,0.5)] select-none " +
+        (className ?? "size-7")
+      }
+    />
+  )
+}
+
 function CrownBadge({
   className,
   title,
@@ -5933,19 +6234,7 @@ function CrownBadge({
   className?: string
   title?: string
 }) {
-  return (
-    <img
-      src="/crown.png"
-      alt=""
-      aria-hidden="true"
-      draggable={false}
-      title={title}
-      className={
-        "pointer-events-none drop-shadow-[0_4px_10px_rgba(0,0,0,0.45)] select-none " +
-        (className ?? "size-7")
-      }
-    />
-  )
+  return <PlacementCrown placement={1} className={className} title={title} />
 }
 
 function PlayerAvatar({
@@ -6068,22 +6357,125 @@ function colorValue(color: PlayColor): string {
   }
 }
 
-function useElementWidth(element: HTMLElement | null) {
-  const [width, setWidth] = useState(0)
+/** How much of its natural size a hand card keeps on a roomy desktop tray. */
+const DESKTOP_HAND_CARD_SCALE = 0.82
+const MIN_HAND_CARD_SCALE = 0.42
+/** Space kept under the fan so the arc never touches the tray floor. */
+const FAN_BASELINE_OFFSET = 44
+const MIN_SPREAD_FACTOR = 0.6
+const MAX_SPREAD_FACTOR = 2.6
+/** Spreading past this on an already-full fan switches it into pages. */
+const PAGE_SPREAD_FACTOR = 1.9
+
+/**
+ * Trackpad pinch on desktop, two-finger pinch on touch: widens or tightens the
+ * gap between held cards. It only scales the gap the layout already computes,
+ * so the fan still cannot grow past the width of its tray.
+ */
+function useHandSpreadGesture(element: HTMLElement | null) {
+  const [spreadFactor, setSpreadFactor] = useState(1)
+  const pinchStartRef = useRef<{ distance: number; factor: number } | null>(
+    null
+  )
+  const pointersRef = useRef(new Map<number, { x: number; y: number }>())
+  const spreadFactorRef = useRef(spreadFactor)
+
+  useEffect(() => {
+    spreadFactorRef.current = spreadFactor
+  }, [spreadFactor])
+
+  useEffect(() => {
+    if (!element) return
+
+    const clamp = (value: number) =>
+      Math.min(MAX_SPREAD_FACTOR, Math.max(MIN_SPREAD_FACTOR, value))
+
+    // Trackpad pinch arrives as a wheel event with ctrlKey set.
+    function handleWheel(event: WheelEvent) {
+      if (!event.ctrlKey) return
+      event.preventDefault()
+      setSpreadFactor((current) => clamp(current * (1 - event.deltaY * 0.01)))
+    }
+
+    function pinchDistance() {
+      const [first, second] = [...pointersRef.current.values()]
+      if (!first || !second) return null
+      return Math.hypot(first.x - second.x, first.y - second.y)
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (event.pointerType !== "touch") return
+      pointersRef.current.set(event.pointerId, {
+        x: event.clientX,
+        y: event.clientY,
+      })
+      const distance = pinchDistance()
+      if (distance) {
+        pinchStartRef.current = { distance, factor: spreadFactorRef.current }
+      }
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      if (!pointersRef.current.has(event.pointerId)) return
+      pointersRef.current.set(event.pointerId, {
+        x: event.clientX,
+        y: event.clientY,
+      })
+      const start = pinchStartRef.current
+      const distance = pinchDistance()
+      if (!start || !distance || start.distance === 0) return
+      event.preventDefault()
+      setSpreadFactor(clamp(start.factor * (distance / start.distance)))
+    }
+
+    function handlePointerUp(event: PointerEvent) {
+      pointersRef.current.delete(event.pointerId)
+      if (pointersRef.current.size < 2) pinchStartRef.current = null
+    }
+
+    element.addEventListener("wheel", handleWheel, { passive: false })
+    element.addEventListener("pointerdown", handlePointerDown)
+    element.addEventListener("pointermove", handlePointerMove, {
+      passive: false,
+    })
+    window.addEventListener("pointerup", handlePointerUp)
+    window.addEventListener("pointercancel", handlePointerUp)
+
+    return () => {
+      element.removeEventListener("wheel", handleWheel)
+      element.removeEventListener("pointerdown", handlePointerDown)
+      element.removeEventListener("pointermove", handlePointerMove)
+      window.removeEventListener("pointerup", handlePointerUp)
+      window.removeEventListener("pointercancel", handlePointerUp)
+    }
+  }, [element])
+
+  return spreadFactor
+}
+
+function useElementSize(element: HTMLElement | null) {
+  const [size, setSize] = useState({ width: 0, height: 0 })
 
   useEffect(() => {
     if (!element || typeof ResizeObserver === "undefined") return
 
-    setWidth(element.getBoundingClientRect().width)
+    const rect = element.getBoundingClientRect()
+    setSize({ width: rect.width, height: rect.height })
     const observer = new ResizeObserver((entries) => {
-      const next = entries[0]?.contentRect.width ?? 0
-      setWidth((current) => (Math.abs(current - next) < 1 ? current : next))
+      const box = entries[0]?.contentRect
+      if (!box) return
+      setSize((current) =>
+        Math.abs(current.width - box.width) < 1 &&
+        Math.abs(current.height - box.height) < 1
+          ? current
+          : { width: box.width, height: box.height }
+      )
     })
     observer.observe(element)
     return () => observer.disconnect()
   }, [element])
 
-  return width
+  return size
 }
 
 function useMediaQuery(query: string) {
@@ -6953,7 +7345,11 @@ function GameStartIntro({
       delay: number
     }> = []
     let nextId = 0
-    for (let round = 0; round < handSize; round += 1) {
+    // A full deal at a full table is 56 tokens, which is what made the intro
+    // stutter. Three passes still read as "everyone is being dealt in", and
+    // keep the whole thing under a second.
+    const visualRounds = Math.min(handSize, DEAL_VISUAL_ROUNDS)
+    for (let round = 0; round < visualRounds; round += 1) {
       orderedPlayers.forEach((_, seatIndex) => {
         const seat = tableSeatPosition(
           seatIndex,
@@ -6964,7 +7360,7 @@ function GameStartIntro({
           id: nextId++,
           left: seat.left,
           top: seat.top,
-          delay: round * 140 + seatIndex * 30,
+          delay: round * 96 + seatIndex * 22,
         })
       })
     }
@@ -6972,17 +7368,14 @@ function GameStartIntro({
 
     if (!playedDealRef.current) {
       playedDealRef.current = true
-      const dealSoundCount = Math.min(handSize * orderedPlayers.length, 7)
+      const dealSoundCount = Math.min(tokens.length, 5)
       for (let index = 0; index < dealSoundCount; index += 1) {
-        window.setTimeout(
-          () => playCardSound("draw", 1),
-          index * Math.max(120, 180 - dealSoundCount * 8)
-        )
+        window.setTimeout(() => playCardSound("draw", 1), index * 110)
       }
     }
 
     const total = tokens.length
-    const longest = total > 0 ? tokens[total - 1].delay + 520 : 600
+    const longest = total > 0 ? tokens[total - 1].delay + 420 : 520
     const timer = window.setTimeout(() => {
       onPhaseChange("done")
       onFinish()
@@ -7071,15 +7464,19 @@ function GameStartIntro({
                   marginLeft: compact ? -28 : -38,
                   marginTop: compact ? -40 : -54,
                   borderRadius: 10,
-                  background:
-                    "linear-gradient(140deg, #1a1a1a, #2a2a2a 40%, #0a0a0a)",
-                  boxShadow:
-                    "0 14px 28px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.06)",
+                  // Flat fill and a hairline instead of a large blurred
+                  // shadow: a drop shadow on two dozen moving elements is
+                  // repainted every frame and is what dropped the frame rate.
+                  background: "#1c1c1c",
+                  outline: "1px solid rgba(255,255,255,0.07)",
+                  outlineOffset: "-1px",
                   ["--uno-dx" as string]: `${dx}px`,
                   ["--uno-dy" as string]: `${dy}px`,
-                  animation: `uno-intro-deal 520ms cubic-bezier(0.22, 0.9, 0.18, 1) ${token.delay}ms forwards`,
+                  animation: `uno-intro-deal 420ms cubic-bezier(0.22, 0.9, 0.18, 1) ${token.delay}ms forwards`,
                   opacity: 0,
                   zIndex: 30 + token.id,
+                  willChange: "transform, opacity",
+                  contain: "layout paint",
                 }}
               />
             )
@@ -7171,8 +7568,8 @@ function RouletteFlyToHand({
     if (!layout) return
     if (cards.length === 0) return
 
-    const stagger = 90
-    const flightDuration = 620
+    const stagger = 70
+    const flightDuration = 520
     const totalMs = (cards.length - 1) * stagger + flightDuration + 60
 
     const timer = window.setTimeout(onDone, totalMs)
@@ -7188,7 +7585,7 @@ function RouletteFlyToHand({
     38,
     Math.max(22, layout.source.width / Math.max(cards.length, 1))
   )
-  const stagger = 90
+  const stagger = 70
 
   return (
     <div
@@ -7240,10 +7637,11 @@ function RouletteFlyToHand({
               ["--uno-roulette-to-x" as string]: `${toX}px`,
               ["--uno-roulette-to-y" as string]: `${toY}px`,
               ["--uno-roulette-to-rot" as string]: `${toRot}deg`,
-              animation: `uno-roulette-fly 620ms cubic-bezier(0.32, 0.72, 0.24, 1) ${delay}ms forwards`,
+              animation: `uno-roulette-fly 520ms cubic-bezier(0.32, 0.72, 0.24, 1) ${delay}ms forwards`,
               opacity: 0,
               zIndex: 60 + index,
               willChange: "transform, opacity",
+              contain: "layout paint",
             }}
           >
             <UnoCard card={card} size="sm" static />
@@ -7252,6 +7650,41 @@ function RouletteFlyToHand({
       })}
     </div>
   )
+}
+
+/**
+ * A flat stand-in for a face-down card, used only by the flight animations.
+ *
+ * `UnoCard` renders layered SVG art; mounting a dozen of them mid-deal was
+ * what made dealing and drawing stutter. Nothing of the real card is legible
+ * at flight speed, so these are plain painted divs that the compositor can
+ * move without touching layout or the SVG rasteriser.
+ */
+function FlyingCardBack({ width, height }: { width: number; height: number }) {
+  return (
+    <div
+      style={{
+        width,
+        height,
+        borderRadius: Math.round(width * 0.11),
+        background:
+          "linear-gradient(140deg, #1d1d1d, #2b2b2b 42%, #0b0b0b), radial-gradient(circle at 50% 50%, #d81f26 0 38%, transparent 39%)",
+        backgroundBlendMode: "screen",
+        boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.08)",
+      }}
+    />
+  )
+}
+
+/**
+ * A +10 penalty does not need ten separate cards in the air to read as "a lot"
+ * — six do, and they animate without dropping frames.
+ */
+const DRAW_FLIGHT_STAGGER_MS = 42
+/** Visual passes in the opening deal, regardless of the real hand size. */
+const DEAL_VISUAL_ROUNDS = 3
+function drawFlightCardCount(cardCount: number) {
+  return Math.min(Math.max(cardCount, 1), 6)
 }
 
 function DeckDrawFlight({
@@ -7309,16 +7742,16 @@ function DeckDrawFlight({
 
   useEffect(() => {
     if (!layout) return
-    const visibleCount = Math.min(Math.max(cardCount, 1), 10)
-    const stagger = visibleCount > 6 ? 52 : 68
-    const timer = window.setTimeout(onDone, (visibleCount - 1) * stagger + 660)
+    const visibleCount = drawFlightCardCount(cardCount)
+    const stagger = DRAW_FLIGHT_STAGGER_MS
+    const timer = window.setTimeout(onDone, (visibleCount - 1) * stagger + 520)
     return () => window.clearTimeout(timer)
   }, [layout, cardCount, onDone])
 
   if (!layout) return null
 
-  const visibleCount = Math.min(Math.max(cardCount, 1), 10)
-  const stagger = visibleCount > 6 ? 52 : 68
+  const visibleCount = drawFlightCardCount(cardCount)
+  const stagger = DRAW_FLIGHT_STAGGER_MS
 
   return (
     <div
@@ -7360,15 +7793,16 @@ function DeckDrawFlight({
               ["--uno-draw-to-y" as string]: `${layout.dest.top}px`,
               ["--uno-draw-rot-start" as string]: `${offset * 3}deg`,
               ["--uno-draw-rot-end" as string]: `${offset > 0 ? 14 : -14}deg`,
-              animation: `uno-deck-draw-flight 580ms cubic-bezier(0.3, 0.72, 0.18, 1) ${
+              animation: `uno-deck-draw-flight 440ms cubic-bezier(0.3, 0.72, 0.18, 1) ${
                 index * stagger
               }ms forwards`,
               opacity: 0,
               zIndex: 58 + index,
               willChange: "transform, opacity",
+              contain: "layout paint",
             }}
           >
-            <UnoCard card={cardBackPlaceholder} faceDown size="sm" static />
+            <FlyingCardBack width={58} height={82} />
           </div>
         )
       })}
