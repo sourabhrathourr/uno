@@ -1,6 +1,35 @@
 import { describe, expect, it } from "vitest"
 
-import { playerInitials } from "./players"
+import { playerInitials, turnOrderFromSeating } from "./players"
+
+describe("turnOrderFromSeating", () => {
+  const seating = ["Rushil", "Nishant", "Palak", "Sourabh"]
+
+  it("follows the seating list as written when play runs clockwise", () => {
+    expect(turnOrderFromSeating(seating, 1)).toEqual(seating)
+  })
+
+  it("opens with the same seat but walks backwards counter-clockwise", () => {
+    expect(turnOrderFromSeating(seating, -1)).toEqual([
+      "Rushil",
+      "Sourabh",
+      "Palak",
+      "Nishant",
+    ])
+  })
+
+  it("is unchanged for tables too small for direction to matter", () => {
+    expect(turnOrderFromSeating(["A", "B"], -1)).toEqual(["A", "B"])
+    expect(turnOrderFromSeating(["A"], -1)).toEqual(["A"])
+    expect(turnOrderFromSeating([], -1)).toEqual([])
+  })
+
+  it("does not mutate the seating it was given", () => {
+    const original = [...seating]
+    turnOrderFromSeating(seating, -1)
+    expect(seating).toEqual(original)
+  })
+})
 
 describe("playerInitials", () => {
   it("uses the first two letters of a single-word name", () => {

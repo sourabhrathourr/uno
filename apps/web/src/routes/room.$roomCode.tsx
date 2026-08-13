@@ -6,6 +6,7 @@ import {
   Circle,
   Clipboard,
   Crown,
+  GripVertical,
   ImageIcon,
   MessageCircle,
   Mic,
@@ -31,6 +32,7 @@ import {
   CHAT_PRESETS,
   TABLE_REACTION_EMOJIS,
   playerInitials,
+  turnOrderFromSeating,
 } from "@workspace/game"
 import { Button } from "@workspace/ui/components/button"
 import { Checkbox } from "@workspace/ui/components/checkbox"
@@ -1950,6 +1952,7 @@ function GameTable({
           <SupportConfirmDialog
             playerName={pendingSupportPlayer.name}
             needsApproval={pendingSupportNeedsApproval}
+            asSheet
             onCancel={() => setPendingSupportPlayerId(null)}
             onConfirm={() => {
               if (pendingSupportNeedsApproval) {
@@ -2410,6 +2413,10 @@ function NextMatchPanel({
 }) {
   const seatedOrder = [...room.players].sort((a, b) => a.seat - b.seat)
   const direction = room.nextMatchDirection === -1 ? -1 : 1
+  const [dragIndex, setDragIndex] = useState<number | null>(null)
+  const [dropIndex, setDropIndex] = useState<number | null>(null)
+  const firstSeat = seatedOrder[0]
+  const turnOrder = turnOrderFromSeating(seatedOrder, direction)
 
   function applyOrder(nextOrder: Array<Player>, nextDirection: 1 | -1) {
     onSetSeatOrder({
@@ -2418,13 +2425,19 @@ function NextMatchPanel({
     })
   }
 
-  function moveSeat(index: number, delta: number) {
-    const target = index + delta
-    if (target < 0 || target >= seatedOrder.length) return
+  function moveSeat(fromIndex: number, toIndex: number) {
+    if (
+      fromIndex === toIndex ||
+      toIndex < 0 ||
+      toIndex >= seatedOrder.length ||
+      fromIndex < 0
+    ) {
+      return
+    }
     const nextOrder = [...seatedOrder]
-    const moved = nextOrder[index]
-    nextOrder[index] = nextOrder[target]
-    nextOrder[target] = moved
+    const [moved] = nextOrder.splice(fromIndex, 1)
+    if (!moved) return
+    nextOrder.splice(toIndex, 0, moved)
     applyOrder(nextOrder, direction)
   }
 
@@ -2467,44 +2480,90 @@ function NextMatchPanel({
         </div>
 
         <p className="mt-2 text-sm leading-6 text-white/52">
-          Move players to decide who sits next to whom, then choose which way
-          the turn passes.
+          Drag players to decide who sits next to whom. The seat at the top
+          deals first, and play runs from there.
         </p>
 
         <ol className="mt-4 flex flex-col gap-1.5">
-          {seatedOrder.map((candidate, index) => (
-            <li
-              key={candidate.id}
-              className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/28 px-2.5 py-2"
-            >
-              <span className="grid size-6 shrink-0 place-items-center rounded-full bg-white/[0.08] text-[11px] font-semibold text-white/60 tabular-nums">
-                {index + 1}
-              </span>
-              <span className="min-w-0 flex-1 truncate text-sm font-medium text-white/86">
-                {candidate.name}
-                {candidate.id === selfPlayerId ? " · You" : ""}
-                {candidate.id === crownPlayerId ? " 👑" : ""}
-              </span>
-              <button
-                type="button"
-                aria-label={`Move ${candidate.name} earlier`}
-                disabled={index === 0}
-                onClick={() => moveSeat(index, -1)}
-                className="grid size-7 place-items-center rounded-lg border border-white/10 bg-white/[0.05] text-white/70 hover:bg-white/[0.09] disabled:cursor-not-allowed disabled:opacity-30"
+          {seatedOrder.map((candidate, index) => {
+            const isDragging = dragIndex === index
+            const isDropTarget = dropIndex === index && dragIndex !== index
+            return (
+              <li
+                key={candidate.id}
+                draggable
+                onDragStart={(event) => {
+                  setDragIndex(index)
+                  event.dataTransfer.effectAllowed = "move"
+                  // Firefox will not start a drag without payload.
+                  event.dataTransfer.setData("text/plain", candidate.id)
+                }}
+                onDragOver={(event) => {
+                  event.preventDefault()
+                  event.dataTransfer.dropEffect = "move"
+                  setDropIndex(index)
+                }}
+                onDrop={(event) => {
+                  event.preventDefault()
+                  if (dragIndex !== null) moveSeat(dragIndex, index)
+                  setDragIndex(null)
+                  setDropIndex(null)
+                }}
+                onDragEnd={() => {
+                  setDragIndex(null)
+                  setDropIndex(null)
+                }}
+                className={
+                  "flex cursor-grab items-center gap-2 rounded-xl border bg-black/28 px-2.5 py-2 transition-[border-color,opacity,transform] active:cursor-grabbing " +
+                  (isDragging
+                    ? "border-white/30 opacity-40"
+                    : isDropTarget
+                      ? "-translate-y-px border-amber-200/60 bg-amber-200/[0.07]"
+                      : "border-white/10")
+                }
               >
-                ↑
-              </button>
-              <button
-                type="button"
-                aria-label={`Move ${candidate.name} later`}
-                disabled={index === seatedOrder.length - 1}
-                onClick={() => moveSeat(index, 1)}
-                className="grid size-7 place-items-center rounded-lg border border-white/10 bg-white/[0.05] text-white/70 hover:bg-white/[0.09] disabled:cursor-not-allowed disabled:opacity-30"
-              >
-                ↓
-              </button>
-            </li>
-          ))}
+                <span
+                  aria-hidden="true"
+                  className="shrink-0 text-white/28 select-none"
+                >
+                  <GripVertical className="size-4" strokeWidth={2} />
+                </span>
+                <span className="grid size-6 shrink-0 place-items-center rounded-full bg-white/[0.08] text-[11px] font-semibold text-white/60 tabular-nums">
+                  {index + 1}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-sm font-medium text-white/86">
+                  {candidate.name}
+                  {candidate.id === selfPlayerId ? " · You" : ""}
+                  {candidate.id === crownPlayerId ? " 👑" : ""}
+                </span>
+                {index === 0 && (
+                  <span className="shrink-0 rounded-full border border-amber-200/25 bg-amber-300/10 px-2 py-0.5 text-[10px] font-semibold text-amber-100/80">
+                    Starts
+                  </span>
+                )}
+                <span className="flex shrink-0 flex-col">
+                  <button
+                    type="button"
+                    aria-label={`Move ${candidate.name} earlier`}
+                    disabled={index === 0}
+                    onClick={() => moveSeat(index, index - 1)}
+                    className="grid h-4 w-6 place-items-center rounded text-[10px] text-white/55 hover:bg-white/[0.09] hover:text-white disabled:cursor-not-allowed disabled:opacity-25"
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Move ${candidate.name} later`}
+                    disabled={index === seatedOrder.length - 1}
+                    onClick={() => moveSeat(index, index + 1)}
+                    className="grid h-4 w-6 place-items-center rounded text-[10px] text-white/55 hover:bg-white/[0.09] hover:text-white disabled:cursor-not-allowed disabled:opacity-25"
+                  >
+                    ↓
+                  </button>
+                </span>
+              </li>
+            )
+          })}
         </ol>
 
         <div className="mt-4">
@@ -2519,16 +2578,33 @@ function NextMatchPanel({
                 onClick={() => applyOrder(seatedOrder, option)}
                 aria-pressed={direction === option}
                 className={
-                  "h-9 rounded-lg text-xs font-semibold transition-colors " +
+                  "flex h-9 items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-colors " +
                   (direction === option
                     ? "bg-white text-neutral-950"
                     : "text-white/55 hover:bg-white/[0.06] hover:text-white/80")
                 }
               >
+                <RotateCw
+                  className={"size-3.5 " + (option === 1 ? "" : "-scale-x-100")}
+                  strokeWidth={2.1}
+                />
                 {option === 1 ? "Clockwise" : "Counter-clockwise"}
               </button>
             ))}
           </div>
+          {/* Spelling out the resulting rotation — "clockwise" alone tells you
+              nothing about where it begins or who you end up beside. */}
+          <p className="mt-2 rounded-xl border border-white/8 bg-black/22 px-3 py-2 text-[11px] leading-5 text-white/58">
+            <span className="font-semibold text-white/80">
+              {firstSeat?.name ?? "The top seat"}
+            </span>{" "}
+            plays first, then it passes {direction === 1 ? "down" : "up"} this
+            list:{" "}
+            <span className="text-white/78">
+              {turnOrder.map((candidate) => candidate.name).join(" → ")}
+            </span>{" "}
+            → back to {firstSeat?.name ?? "the top"}.
+          </p>
         </div>
 
         <Button

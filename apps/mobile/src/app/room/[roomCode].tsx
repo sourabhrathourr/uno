@@ -10,12 +10,14 @@ import {
   isRoomCode,
   normalizeRoomCode,
   playerInitials,
+  turnOrderFromSeating,
 } from '@workspace/game';
 import * as Haptics from 'expo-haptics';
 import * as Clipboard from 'expo-clipboard';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import {
   ArrowLeft,
+  GripVertical,
   LogOut,
   Mic,
   Play,
@@ -113,6 +115,7 @@ export default function RoomScreen() {
   const [inviteCopied, setInviteCopied] = useState(false);
   const [socket, setSocket] = useState<GameSocket | null>(null);
   const [activePlayerId, setActivePlayerId] = useState('');
+  const [nextMatchSheetOpen, setNextMatchSheetOpen] = useState(false);
   const hasAutoJoinedRef = useRef(false);
   const joinAttemptRef = useRef(0);
   const seenInitialGameSnapshotRef = useRef(false);
@@ -123,6 +126,17 @@ export default function RoomScreen() {
   );
   const isHost = room?.hostPlayerId === player?.id;
   const isPlaying = room?.status === 'playing' && Boolean(player);
+  // The last winner wears the crown and runs the next match; before anyone has
+  // won, or if they have left the room, it falls back to the host.
+  const crownPlayerId =
+    room?.crownPlayerId &&
+    room.players.some((candidate) => candidate.id === room.crownPlayerId)
+      ? room.crownPlayerId
+      : null;
+  const nextMatchOrganiserId = crownPlayerId ?? room?.hostPlayerId ?? null;
+  const isNextMatchOrganiser = Boolean(
+    player && nextMatchOrganiserId === player.id,
+  );
   const isMyTurn = room?.game?.turnPlayerId === player?.id;
   const stagedCards = useMemo(
     () => cardsInIdOrder(playerGame?.hand ?? [], stagedCardIds),
@@ -483,6 +497,7 @@ export default function RoomScreen() {
     event:
       | 'room:setReady'
       | 'room:start'
+      | 'room:restart'
       | 'game:drawOne'
       | 'game:endTurn'
       | 'game:takeDrawPenalty'
@@ -498,6 +513,12 @@ export default function RoomScreen() {
     }
 
     socket.emit(event, handleRoomAck);
+  }
+
+  function emitSeatOrder(playerOrder: string[], direction: 1 | -1) {
+    if (!socket) return;
+    setError(null);
+    socket.emit('room:setSeatOrder', { playerOrder, direction }, handleRoomAck);
   }
 
   function handleRoomAck(result: { ok: true; data: RoomSnapshot } | { ok: false; error: GameError }) {
@@ -764,15 +785,35 @@ export default function RoomScreen() {
                 inviteCopied={inviteCopied}
               />
             ) : (
-              <View style={styles.panel}>
-                <Text style={styles.sectionTitle}>This hand is complete.</Text>
-              </View>
+              <MatchFinishedPanel
+                room={room}
+                selfPlayerId={player?.id ?? null}
+                organiserPlayerId={nextMatchOrganiserId}
+                isOrganiser={isNextMatchOrganiser}
+                onOpenSetup={() => {
+                  void impact('light');
+                  setNextMatchSheetOpen(true);
+                }}
+              />
             )
           ) : null}
 
           {error && player ? <Text style={styles.error}>{error}</Text> : null}
         </ScrollView>
 
+        {room && nextMatchSheetOpen && isNextMatchOrganiser ? (
+          <NextMatchSheet
+            room={room}
+            selfPlayerId={player?.id ?? null}
+            crownPlayerId={crownPlayerId}
+            onApply={emitSeatOrder}
+            onStart={() => {
+              setNextMatchSheetOpen(false);
+              emitRoomCommand('room:restart');
+            }}
+            onClose={() => setNextMatchSheetOpen(false)}
+          />
+        ) : null}
       </SafeAreaView>
     </View>
   );
@@ -1372,6 +1413,7 @@ function SeatRing({
   const players = orderPlayersAroundSelf(room.players, selfPlayerId);
   const game = room.game;
   const total = Math.max(players.length, 2);
+  const crownPlayerId = room.crownPlayerId;
 
   return (
     <View style={StyleSheet.absoluteFillObject} pointerEvents="none">
@@ -1405,6 +1447,10 @@ function SeatRing({
         const cardCountLabel = gamePlayer?.eliminated
           ? 'Out'
           : String(gamePlayer?.handCount ?? 0);
+        // Won this match, or came in wearing last match's crown.
+        const wearsCrown =
+          gamePlayer?.winnerPlacement?.position === 1 ||
+          candidate.id === crownPlayerId;
 
         return (
           <View
@@ -1437,6 +1483,11 @@ function SeatRing({
               >
                 {playerInitials(candidate.name)}
               </Text>
+              {wearsCrown ? (
+                <Text style={styles.seatCrown} allowFontScaling={false}>
+                  👑
+                </Text>
+              ) : null}
               <View
                 style={[
                   styles.seatCountPill,
@@ -1546,6 +1597,312 @@ function StagingTray({
         ) : null}
       </View>
     </View>
+  );
+}
+
+function MatchFinishedPanel({
+  room,
+  selfPlayerId,
+  organiserPlayerId,
+  isOrganiser,
+  onOpenSetup,
+}: {
+  room: RoomSnapshot;
+  selfPlayerId: string | null;
+  organiserPlayerId: string | null;
+  isOrganiser: boolean;
+  onOpenSetup: () => void;
+}) {
+  const winnerId =
+    room.game?.winnerPlacements.find((placement) => placement.position === 1)
+      ?.playerId ?? null;
+  const winnerName =
+    room.players.find((candidate) => candidate.id === winnerId)?.name ??
+    'Nobody';
+  const organiserName =
+    room.players.find((candidate) => candidate.id === organiserPlayerId)?.name ??
+    'The host';
+
+  return (
+    <View style={styles.panel}>
+      <Text style={styles.panelEyebrow}>Match over</Text>
+      <Text style={styles.sectionTitle}>
+        {winnerId === selfPlayerId
+          ? '👑 You won this match'
+          : `👑 ${winnerName} won this match`}
+      </Text>
+      <Text style={styles.copy}>
+        {isOrganiser
+          ? 'You take the crown, so the next table is yours to set: choose who sits where and which way play runs.'
+          : `${organiserName} won, so they choose the seating and start the next match.`}
+      </Text>
+      {isOrganiser ? (
+        <Pressable
+          onPress={onOpenSetup}
+          style={({ pressed }) => [
+            styles.primaryButton,
+            pressed && styles.pressed,
+          ]}
+        >
+          <Text style={styles.primaryButtonLabel}>Set up next match</Text>
+        </Pressable>
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * The winner's table, as a bottom sheet: drag seats into the order you want,
+ * pick a direction, start the match.
+ */
+function NextMatchSheet({
+  room,
+  selfPlayerId,
+  crownPlayerId,
+  onApply,
+  onStart,
+  onClose,
+}: {
+  room: RoomSnapshot;
+  selfPlayerId: string | null;
+  crownPlayerId: string | null;
+  onApply: (playerOrder: string[], direction: 1 | -1) => void;
+  onStart: () => void;
+  onClose: () => void;
+}) {
+  const seated = useMemo(
+    () => [...room.players].sort((a, b) => a.seat - b.seat),
+    [room.players],
+  );
+  const direction: 1 | -1 = room.nextMatchDirection === -1 ? -1 : 1;
+  const [draft, setDraft] = useState<Player[]>(seated);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+
+  // Someone else's change (or our own, echoed back) wins over a stale draft,
+  // unless a drag is in flight.
+  useEffect(() => {
+    if (draggingId) return;
+    setDraft(seated);
+  }, [seated, draggingId]);
+
+  const turnOrder = turnOrderFromSeating(draft, direction);
+  const firstSeatName = draft[0]?.name ?? 'The top seat';
+
+  function commitOrder(nextOrder: Player[]) {
+    setDraft(nextOrder);
+    onApply(
+      nextOrder.map((candidate) => candidate.id),
+      direction,
+    );
+  }
+
+  function moveSeat(fromIndex: number, toIndex: number) {
+    if (
+      fromIndex === toIndex ||
+      toIndex < 0 ||
+      toIndex >= draft.length ||
+      fromIndex < 0
+    ) {
+      return;
+    }
+    const nextOrder = [...draft];
+    const [moved] = nextOrder.splice(fromIndex, 1);
+    if (!moved) return;
+    nextOrder.splice(toIndex, 0, moved);
+    void impact('selection');
+    commitOrder(nextOrder);
+  }
+
+  return (
+    <View style={styles.sheetBackdrop}>
+      <Pressable
+        style={StyleSheet.absoluteFill}
+        accessibilityLabel="Close next match setup"
+        onPress={onClose}
+      />
+      <View style={styles.sheet}>
+        <View style={styles.sheetGrabber} />
+        <View style={styles.sheetHeader}>
+          <View style={styles.sheetHeaderText}>
+            <Text style={styles.panelEyebrow}>Winner&apos;s call</Text>
+            <Text style={styles.sectionTitle}>Set up next match</Text>
+          </View>
+          <Pressable
+            onPress={onClose}
+            accessibilityLabel="Close"
+            style={({ pressed }) => [styles.sheetClose, pressed && styles.pressed]}
+          >
+            <X color="rgba(255,255,255,0.72)" size={18} strokeWidth={2.2} />
+          </Pressable>
+        </View>
+
+        <Text style={styles.sheetCopy}>
+          Drag a seat to move it. The seat at the top plays first.
+        </Text>
+
+        <ScrollView
+          style={styles.sheetList}
+          contentContainerStyle={styles.sheetListContent}
+          showsVerticalScrollIndicator={false}
+        >
+          {draft.map((candidate, index) => (
+            <DraggableSeatRow
+              key={candidate.id}
+              index={index}
+              rowCount={draft.length}
+              label={`${candidate.name}${
+                candidate.id === selfPlayerId ? ' · You' : ''
+              }${candidate.id === crownPlayerId ? ' 👑' : ''}`}
+              dragging={draggingId === candidate.id}
+              onDragStart={() => setDraggingId(candidate.id)}
+              onDragEnd={(targetIndex) => {
+                setDraggingId(null);
+                moveSeat(index, targetIndex);
+              }}
+            />
+          ))}
+        </ScrollView>
+
+        <Text style={styles.sheetLabel}>Turn direction</Text>
+        <View style={styles.directionRow}>
+          {([1, -1] as const).map((option) => {
+            const active = direction === option;
+            const Icon = option === 1 ? RotateCw : RotateCcw;
+            return (
+              <Pressable
+                key={option}
+                onPress={() => {
+                  void impact('selection');
+                  onApply(
+                    draft.map((candidate) => candidate.id),
+                    option,
+                  );
+                }}
+                style={({ pressed }) => [
+                  styles.directionOption,
+                  active && styles.directionOptionActive,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <Icon
+                  color={active ? '#151006' : 'rgba(255,255,255,0.6)'}
+                  size={15}
+                  strokeWidth={2.2}
+                />
+                <Text
+                  style={[
+                    styles.directionLabel,
+                    active && styles.directionLabelActive,
+                  ]}
+                >
+                  {option === 1 ? 'Clockwise' : 'Anti-clockwise'}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        {/* "Clockwise" on its own says nothing about where play begins or who
+            you end up beside, so the resulting rotation is spelled out. */}
+        <Text style={styles.directionExplainer}>
+          <Text style={styles.directionExplainerStrong}>{firstSeatName}</Text>
+          {' plays first, then it passes '}
+          {direction === 1 ? 'down' : 'up'}
+          {' this list: '}
+          <Text style={styles.directionExplainerStrong}>
+            {turnOrder.map((candidate) => candidate.name).join(' → ')}
+          </Text>
+          {` → back to ${firstSeatName}.`}
+        </Text>
+
+        <Pressable
+          onPress={onStart}
+          style={({ pressed }) => [
+            styles.primaryButton,
+            pressed && styles.pressed,
+          ]}
+        >
+          <Play color="#151006" size={16} strokeWidth={2.4} />
+          <Text style={styles.primaryButtonLabel}>Start next match</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+const SEAT_ROW_HEIGHT = 52;
+
+/** One seat that can be dragged up or down the list to reorder it. */
+function DraggableSeatRow({
+  index,
+  rowCount,
+  label,
+  dragging,
+  onDragStart,
+  onDragEnd,
+}: {
+  index: number;
+  rowCount: number;
+  label: string;
+  dragging: boolean;
+  onDragStart: () => void;
+  onDragEnd: (targetIndex: number) => void;
+}) {
+  const translateY = useSharedValue(0);
+  const lifted = useSharedValue(0);
+
+  const pan = Gesture.Pan()
+    .activateAfterLongPress(120)
+    .onStart(() => {
+      lifted.value = withSpring(1, { damping: 20, stiffness: 240 });
+      runOnJS(onDragStart)();
+    })
+    .onUpdate((event) => {
+      translateY.value = event.translationY;
+    })
+    .onEnd((event) => {
+      const rowsMoved = Math.round(event.translationY / SEAT_ROW_HEIGHT);
+      const target = Math.max(0, Math.min(rowCount - 1, index + rowsMoved));
+      translateY.value = withSpring(0, { damping: 20, stiffness: 240 });
+      lifted.value = withSpring(0, { damping: 20, stiffness: 240 });
+      runOnJS(onDragEnd)(target);
+    })
+    .onFinalize(() => {
+      translateY.value = withSpring(0, { damping: 20, stiffness: 240 });
+      lifted.value = withSpring(0, { damping: 20, stiffness: 240 });
+    });
+
+  const animatedStyle = useAnimatedStyle(() => ({
+    transform: [
+      { translateY: translateY.value },
+      { scale: 1 + lifted.value * 0.03 },
+    ],
+    zIndex: lifted.value > 0 ? 20 : 1,
+  }));
+
+  return (
+    <GestureDetector gesture={pan}>
+      <Animated.View
+        style={[styles.seatRow, dragging && styles.seatRowDragging, animatedStyle]}
+      >
+        <GripVertical
+          color="rgba(255,255,255,0.34)"
+          size={16}
+          strokeWidth={2.1}
+        />
+        <View style={styles.seatRowIndex}>
+          <Text style={styles.seatRowIndexText}>{index + 1}</Text>
+        </View>
+        <Text style={styles.seatRowLabel} numberOfLines={1}>
+          {label}
+        </Text>
+        {index === 0 ? (
+          <View style={styles.seatRowStarts}>
+            <Text style={styles.seatRowStartsText}>Starts</Text>
+          </View>
+        ) : null}
+      </Animated.View>
+    </GestureDetector>
   );
 }
 
@@ -2384,8 +2741,10 @@ const styles = StyleSheet.create({
   primaryButton: {
     minHeight: 50,
     borderRadius: 16,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 8,
     backgroundColor: '#fff3a3',
     paddingHorizontal: 16,
   },
@@ -2442,6 +2801,159 @@ const styles = StyleSheet.create({
   },
   seatInitialsTurn: {
     color: '#141006',
+  },
+  seatCrown: {
+    position: 'absolute',
+    top: -13,
+    fontSize: 13,
+  },
+  sheetBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.68)',
+    justifyContent: 'flex-end',
+    zIndex: 50,
+  },
+  sheet: {
+    backgroundColor: '#141210',
+    borderTopLeftRadius: 26,
+    borderTopRightRadius: 26,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.14)',
+    paddingHorizontal: Spacing.three,
+    paddingTop: 10,
+    paddingBottom: Spacing.four,
+    gap: Spacing.two,
+    maxHeight: '86%',
+  },
+  sheetGrabber: {
+    alignSelf: 'center',
+    width: 40,
+    height: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.22)',
+    marginBottom: 8,
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: Spacing.two,
+  },
+  sheetHeaderText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  sheetClose: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.07)',
+  },
+  sheetCopy: {
+    color: 'rgba(255,255,255,0.5)',
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  sheetList: {
+    maxHeight: 260,
+  },
+  sheetListContent: {
+    gap: 6,
+    paddingVertical: 2,
+  },
+  sheetLabel: {
+    color: 'rgba(255,255,255,0.45)',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    marginTop: 2,
+  },
+  seatRow: {
+    height: SEAT_ROW_HEIGHT - 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.1)',
+    backgroundColor: 'rgba(0,0,0,0.28)',
+  },
+  seatRowDragging: {
+    borderColor: 'rgba(255,214,120,0.55)',
+    backgroundColor: 'rgba(255,214,120,0.09)',
+  },
+  seatRowIndex: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.08)',
+  },
+  seatRowIndexText: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  seatRowLabel: {
+    flex: 1,
+    minWidth: 0,
+    color: 'rgba(255,255,255,0.88)',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  seatRowStarts: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,214,120,0.14)',
+  },
+  seatRowStartsText: {
+    color: 'rgba(255,226,163,0.9)',
+    fontSize: 10,
+    fontWeight: '800',
+  },
+  directionRow: {
+    flexDirection: 'row',
+    gap: 6,
+    padding: 4,
+    borderRadius: 14,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+  },
+  directionOption: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    height: 38,
+    borderRadius: 10,
+  },
+  directionOptionActive: {
+    backgroundColor: '#fff3a3',
+  },
+  directionLabel: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  directionLabelActive: {
+    color: '#151006',
+  },
+  directionExplainer: {
+    color: 'rgba(255,255,255,0.56)',
+    fontSize: 12,
+    lineHeight: 18,
+    padding: 12,
+    borderRadius: 14,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+  },
+  directionExplainerStrong: {
+    color: 'rgba(255,255,255,0.86)',
+    fontWeight: '800',
   },
   avatar: {
     width: 34,

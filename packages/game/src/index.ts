@@ -69,7 +69,7 @@ export type {
   TableReactionKind,
   WinnerPlacement,
 } from "./game"
-export { playerInitials } from "./players"
+export { playerInitials, turnOrderFromSeating } from "./players"
 export type { HouseRules, Player, RoomSnapshot, RoomStatus } from "./rooms"
 export {
   ROOM_CODE_LENGTH,
