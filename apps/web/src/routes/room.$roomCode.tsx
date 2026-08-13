@@ -1589,7 +1589,7 @@ function GameTable({
                   : "rounded-2xl py-2")
               }
             >
-              <p className="min-w-0 flex-1 truncate text-[13px] font-medium text-white/80">
+              <p className="min-w-0 flex-1 truncate text-[10px] leading-4 font-medium text-white/62">
                 {room.game?.events[room.game.events.length - 1]?.message ?? ""}
               </p>
               <div className="flex shrink-0 items-center gap-1.5">
@@ -2769,7 +2769,7 @@ function MatchEventFeed({
     // The row keeps its height whether or not there is a move to show, so the
     // header never shifts.
     <div
-      className="pointer-events-none hidden h-7 min-w-0 flex-1 items-center justify-center px-4 lg:flex"
+      className="pointer-events-none hidden h-7 min-w-0 flex-1 items-center justify-start pr-4 lg:flex"
       aria-live="polite"
       aria-label="Last move"
     >
@@ -2777,7 +2777,7 @@ function MatchEventFeed({
         <p
           key={latest.id}
           className={
-            "max-w-full truncate rounded-full bg-white/[0.06] px-3 py-0.5 text-center text-[13px] font-medium " +
+            "max-w-full truncate text-[13px] font-medium " +
             (isSelf ? "text-amber-50" : "text-white/88")
           }
           title={latest.message}
