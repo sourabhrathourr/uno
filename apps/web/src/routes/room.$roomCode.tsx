@@ -6266,7 +6266,8 @@ function DeckStack({
           disabled={buttonDisabled}
           onClick={handleClick}
           className={
-            "absolute top-1/2 left-1/2 z-20 -translate-x-1/2 -translate-y-1/2 " +
+            // Sits below the UNO wordmark rather than across it.
+            "absolute top-[68%] left-1/2 z-20 -translate-x-1/2 -translate-y-1/2 " +
             buttonClass +
             " " +
             buttonSize
