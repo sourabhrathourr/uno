@@ -1,7 +1,9 @@
 import type { Card, CardFace } from "./cards"
 import { createNoMercyDeck, shuffleCards } from "./deck"
+import { MAX_COUNTED_TURN_MS } from "./game"
 import type {
   CatchUnoInput,
+  Direction,
   GameContext,
   GameEvent,
   GameState,
@@ -12,14 +14,23 @@ import type {
   StageCardsInput,
   SupportEndReason,
   SendAvatarEmojiReactionInput,
+  MatchRecap,
+  PlayerMatchStats,
   SupportRecap,
+  SupportRequest,
 } from "./game"
 import { AVATAR_REACTION_EMOJIS } from "./reactions"
 import type { CommandResult } from "./realtime"
 
+export type CreateGameOptions = {
+  /** Turn direction the match opens with. Defaults to clockwise. */
+  direction?: Direction
+  voteKickedPlayerIds?: string[]
+}
+
 export function createGame(
   context: GameContext,
-  options: { voteKickedPlayerIds?: string[] } = {}
+  options: CreateGameOptions = {}
 ): GameState {
   const playerOrder = context.players
     .slice()
@@ -59,10 +70,27 @@ export function createGame(
 
   discardPile.push(firstDiscard)
 
+  const startedAt = new Date().toISOString()
   const game: GameState = {
     matchId: `${Date.now()}:${Math.random().toString(36).slice(2, 10)}`,
+    startedAt,
+    finishedAt: null,
+    statsByPlayerId: Object.fromEntries(
+      playerOrder.map((playerId) => [
+        playerId,
+        emptyPlayerMatchStats(
+          playerId,
+          handsByPlayerId[playerId]?.length ?? 0
+        ),
+      ])
+    ),
+    handsSwapped: 0,
+    handsRotated: 0,
+    biggestDrawStack: 0,
+    turnClockPlayerId: null,
+    turnStartedAtMs: null,
     playerOrder,
-    direction: 1,
+    direction: options.direction ?? 1,
     currentColor: colorFor(firstDiscard),
     turnPlayerId:
       playerOrder.find((playerId) => !voteKickedPlayers.has(playerId)) ?? null,
@@ -84,6 +112,7 @@ export function createGame(
     supportLinks: [],
     supportHistory: [],
     supportBlocks: [],
+    supportRequests: [],
     avatarEmojiReactions: [],
     events: [],
   }
@@ -92,8 +121,124 @@ export function createGame(
     type: "game-started",
     message: "The first card is down. No Mercy begins.",
   })
+  game.turnClockPlayerId = game.turnPlayerId
+  game.turnStartedAtMs = Date.now()
 
   return game
+}
+
+function emptyPlayerMatchStats(
+  playerId: string,
+  startingHandSize: number
+): PlayerMatchStats {
+  return {
+    playerId,
+    turnsTaken: 0,
+    cardsPlayed: 0,
+    cardsDrawn: 0,
+    penaltyCardsTaken: 0,
+    biggestPenaltyTaken: 0,
+    drawCardsDealt: 0,
+    skipsPlayed: 0,
+    reversesPlayed: 0,
+    wildsPlayed: 0,
+    unosCalled: 0,
+    unoCatches: 0,
+    timesCaught: 0,
+    peakHandSize: startingHandSize,
+    totalTurnMs: 0,
+    timedTurns: 0,
+    finishPosition: null,
+  }
+}
+
+/**
+ * Closes out the previous player's turn clock whenever the turn moves on.
+ *
+ * Turn ownership changes from a dozen places — skips, stacks, roulette,
+ * eliminations — so rather than instrument each one, every command calls this
+ * afterwards and it reconciles against whoever the clock was last assigned to.
+ */
+export function settleTurnClock(game: GameState): GameState {
+  const now = Date.now()
+  const previousPlayerId = game.turnClockPlayerId ?? null
+
+  if (previousPlayerId && previousPlayerId !== game.turnPlayerId) {
+    const startedAt = game.turnStartedAtMs ?? now
+    // Someone who wandered off should not distort the speed leaderboard.
+    const elapsed = Math.min(Math.max(now - startedAt, 0), MAX_COUNTED_TURN_MS)
+    const stats = statsFor(game, previousPlayerId)
+    stats.totalTurnMs += elapsed
+    stats.timedTurns += 1
+  }
+
+  if (previousPlayerId !== game.turnPlayerId) {
+    game.turnClockPlayerId = game.turnPlayerId
+    game.turnStartedAtMs = game.turnPlayerId ? now : null
+  }
+
+  return game
+}
+
+/**
+ * Stats are best-effort bookkeeping, never a reason to fail a move — a player
+ * who joined mid-match simply gets a fresh row.
+ */
+function statsFor(game: GameState, playerId: string): PlayerMatchStats {
+  game.statsByPlayerId ??= {}
+  const existing = game.statsByPlayerId[playerId]
+  if (existing) return existing
+
+  const created = emptyPlayerMatchStats(
+    playerId,
+    game.handsByPlayerId[playerId]?.length ?? 0
+  )
+  game.statsByPlayerId[playerId] = created
+  return created
+}
+
+function recordPeakHandSize(game: GameState, playerId: string) {
+  const stats = statsFor(game, playerId)
+  const size = game.handsByPlayerId[playerId]?.length ?? 0
+  if (size > stats.peakHandSize) stats.peakHandSize = size
+}
+
+function buildMatchRecap(game: GameState): MatchRecap {
+  const finishOrder = new Map(
+    game.winnerPlacements.map((placement) => [
+      placement.playerId,
+      placement.position,
+    ])
+  )
+  const players = game.playerOrder
+    .map((playerId) => ({
+      ...statsFor(game, playerId),
+      finishPosition: finishOrder.get(playerId) ?? null,
+    }))
+    .sort((a, b) => {
+      // Finishers first in placement order, then everyone else.
+      const aPlace = finishOrder.get(a.playerId) ?? Number.MAX_SAFE_INTEGER
+      const bPlace = finishOrder.get(b.playerId) ?? Number.MAX_SAFE_INTEGER
+      if (aPlace !== bPlace) return aPlace - bPlace
+      return b.cardsPlayed - a.cardsPlayed
+    })
+
+  return {
+    players,
+    totalCardsPlayed: players.reduce(
+      (total, stats) => total + stats.cardsPlayed,
+      0
+    ),
+    totalCardsDrawn: players.reduce(
+      (total, stats) => total + stats.cardsDrawn,
+      0
+    ),
+    biggestDrawStack: game.biggestDrawStack ?? 0,
+    handsSwapped: game.handsSwapped ?? 0,
+    handsRotated: game.handsRotated ?? 0,
+    startedAt: game.startedAt,
+    finishedAt: game.finishedAt,
+  }
 }
 
 export function addWaitingPlayer(
@@ -183,6 +328,7 @@ export function projectPublicGame(
       ...reaction,
     })),
     supportRecap: isGameFinished(game) ? buildSupportRecap(game) : null,
+    matchRecap: isGameFinished(game) ? buildMatchRecap(game) : null,
   }
 }
 
@@ -350,6 +496,7 @@ export function supportPlayer(
 
   const createdAt = new Date().toISOString()
   const link = { supporterPlayerId, supportedPlayerId, createdAt }
+  dropSupportRequestsFrom(game, supporterPlayerId)
   game.supportLinks.push(link)
   game.supportHistory.push({ ...link, endedAt: null, endReason: null })
   pushEvent(game, {
@@ -402,6 +549,166 @@ export function kickSupporter(
   return ok(game)
 }
 
+/**
+ * Second-chance ask after a kick. The supported player decides whether the
+ * person they removed gets back into the squad.
+ */
+export function requestSupport(
+  game: GameState,
+  context: GameContext,
+  supporterPlayerId: string,
+  supportedPlayerId: string
+): CommandResult<GameState> {
+  if (isGameFinished(game))
+    return fail("game-finished", "This match is finished.")
+  if (!game.playerOrder.includes(supporterPlayerId)) {
+    return fail("player-not-found", "You are not part of this match.")
+  }
+  if (!game.playerOrder.includes(supportedPlayerId)) {
+    return fail("player-not-found", "That player is not part of this match.")
+  }
+  if (supporterPlayerId === supportedPlayerId) {
+    return fail("cannot-support-self", "You cannot support yourself.")
+  }
+  if (isPlayerActive(game, supporterPlayerId)) {
+    return fail("player-active", "Only inactive players can become supporters.")
+  }
+  if (!isPlayerActive(game, supportedPlayerId)) {
+    return fail(
+      "supported-player-inactive",
+      "Choose an active player to support."
+    )
+  }
+  if (
+    game.supportLinks.some(
+      (link) => link.supporterPlayerId === supporterPlayerId
+    )
+  ) {
+    return fail(
+      "support-locked",
+      "You are already supporting an active player."
+    )
+  }
+  if (!isSupportBlocked(game, supporterPlayerId, supportedPlayerId)) {
+    return fail(
+      "support-request-not-needed",
+      "You can support that player without asking."
+    )
+  }
+  if (
+    game.supportRequests.some(
+      (request) =>
+        request.supporterPlayerId === supporterPlayerId &&
+        request.supportedPlayerId === supportedPlayerId
+    )
+  ) {
+    return fail("support-request-pending", "That request is already waiting.")
+  }
+
+  // One outstanding ask at a time — switching targets replaces the old one.
+  dropSupportRequestsFrom(game, supporterPlayerId)
+  game.supportRequests.push({
+    supporterPlayerId,
+    supportedPlayerId,
+    createdAt: new Date().toISOString(),
+  })
+  pushEvent(game, {
+    type: "support-requested",
+    playerId: supporterPlayerId,
+    targetPlayerId: supportedPlayerId,
+    message: `${playerName(context, supporterPlayerId)} asked to support ${playerName(
+      context,
+      supportedPlayerId
+    )}.`,
+  })
+  return ok(game)
+}
+
+export function respondToSupportRequest(
+  game: GameState,
+  context: GameContext,
+  supportedPlayerId: string,
+  supporterPlayerId: string,
+  approve: boolean
+): CommandResult<GameState> {
+  const request = game.supportRequests.find(
+    (candidate) =>
+      candidate.supporterPlayerId === supporterPlayerId &&
+      candidate.supportedPlayerId === supportedPlayerId
+  )
+  if (!request) {
+    return fail("support-request-not-found", "That request is no longer open.")
+  }
+  if (!isPlayerActive(game, supportedPlayerId)) {
+    return fail(
+      "player-inactive",
+      "Only an active player can manage their squad."
+    )
+  }
+
+  dropSupportRequestsFrom(game, supporterPlayerId)
+
+  if (!approve) {
+    pushEvent(game, {
+      type: "support-request-declined",
+      playerId: supportedPlayerId,
+      targetPlayerId: supporterPlayerId,
+      message: `${playerName(context, supportedPlayerId)} turned down ${playerName(
+        context,
+        supporterPlayerId
+      )}.`,
+    })
+    return ok(game)
+  }
+
+  game.supportBlocks = game.supportBlocks.filter(
+    (block) =>
+      !(
+        block.supporterPlayerId === supporterPlayerId &&
+        block.supportedPlayerId === supportedPlayerId
+      )
+  )
+
+  return supportPlayer(game, context, supporterPlayerId, supportedPlayerId)
+}
+
+export function incomingSupportRequests(
+  game: GameState,
+  supportedPlayerId: string
+): SupportRequest[] {
+  return game.supportRequests
+    .filter((request) => request.supportedPlayerId === supportedPlayerId)
+    .map((request) => ({ ...request }))
+}
+
+export function outgoingSupportRequest(
+  game: GameState,
+  supporterPlayerId: string
+): SupportRequest | null {
+  const request = game.supportRequests.find(
+    (candidate) => candidate.supporterPlayerId === supporterPlayerId
+  )
+  return request ? { ...request } : null
+}
+
+function isSupportBlocked(
+  game: GameState,
+  supporterPlayerId: string,
+  supportedPlayerId: string
+): boolean {
+  return game.supportBlocks.some(
+    (block) =>
+      block.supporterPlayerId === supporterPlayerId &&
+      block.supportedPlayerId === supportedPlayerId
+  )
+}
+
+function dropSupportRequestsFrom(game: GameState, supporterPlayerId: string) {
+  game.supportRequests = game.supportRequests.filter(
+    (request) => request.supporterPlayerId !== supporterPlayerId
+  )
+}
+
 export function voteKickPlayer(
   game: GameState,
   context: GameContext,
@@ -452,6 +759,12 @@ export function releaseInactiveSupportLinks(
         : `${playerName(context, link.supporterPlayerId)} can choose a new player to support.`,
     })
   }
+
+  // A pending ask dies with the squad it was aimed at.
+  game.supportRequests = game.supportRequests.filter(
+    (request) =>
+      !isGameFinished(game) && isPlayerActive(game, request.supportedPlayerId)
+  )
   return game
 }
 
@@ -577,6 +890,18 @@ export function playCards(
       ? (input.chosenColor as PlayColor)
       : colorFor(topPlayedCard)
 
+  const playStats = statsFor(game, playerId)
+  playStats.turnsTaken += 1
+  playStats.cardsPlayed += finalCards.length
+  for (const played of finalCards) {
+    if (played.color === "wild") playStats.wildsPlayed += 1
+    if (played.face.kind === "skip" || played.face.kind === "skip-everyone") {
+      playStats.skipsPlayed += 1
+    }
+    if (played.face.kind === "reverse") playStats.reversesPlayed += 1
+    playStats.drawCardsDealt += drawCount(played) ?? 0
+  }
+
   pushEvent(game, {
     type: game.drawStack ? "draw-stacked" : "card-played",
     playerId,
@@ -589,6 +914,7 @@ export function playCards(
       ...(game.unoDeclaredPlayerIds ?? []),
       playerId,
     ])
+    statsFor(game, playerId).unosCalled += 1
     pushEvent(game, {
       type: "uno-called",
       playerId,
@@ -716,6 +1042,12 @@ export function takeDrawPenalty(
 
   beginTurnAction(game, playerId)
   const amount = game.drawStack.amount
+  const penaltyStats = statsFor(game, playerId)
+  penaltyStats.penaltyCardsTaken += amount
+  penaltyStats.biggestPenaltyTaken = Math.max(
+    penaltyStats.biggestPenaltyTaken,
+    amount
+  )
   const drawn = drawCards(game, amount)
   addCardsToHand(game, playerId, drawn)
   game.drawStack = null
@@ -829,6 +1161,8 @@ export function catchUno(
     return fail("not-catchable", "That player is not catchable right now.")
   }
 
+  statsFor(game, playerId).unoCatches += 1
+  statsFor(game, input.targetPlayerId).timesCaught += 1
   const drawn = drawCards(game, 2)
   addCardsToHand(game, input.targetPlayerId, drawn)
   game.unoVulnerablePlayerIds = game.unoVulnerablePlayerIds.filter(
@@ -949,6 +1283,10 @@ function applyPlayedCardsEffect(
       minimum,
       targetPlayerId,
     }
+    game.biggestDrawStack = Math.max(
+      game.biggestDrawStack ?? 0,
+      game.drawStack.amount
+    )
     game.turnPlayerId = targetPlayerId
     game.drawnThisTurnPlayerId = null
     return
@@ -1599,6 +1937,10 @@ function addCardsToHand(game: GameState, playerId: string, cards: Card[]) {
   game.handsByPlayerId[playerId] ??= []
   game.handsByPlayerId[playerId]?.push(...cards)
   if (cards.length > 0) clearUnoDeclaration(game, playerId)
+  if (cards.length > 0) {
+    statsFor(game, playerId).cardsDrawn += cards.length
+    recordPeakHandSize(game, playerId)
+  }
 }
 
 function reshuffleDrawPile(game: GameState) {
@@ -1714,6 +2056,7 @@ function recordWinner(game: GameState, context: GameContext, playerId: string) {
 function finishGameIfComplete(game: GameState, context: GameContext) {
   const remaining = activePlayerIds(game)
   if (remaining.length > 1) return
+  game.finishedAt ??= new Date().toISOString()
 
   if (remaining.length === 1) {
     recordWinner(game, context, remaining[0] as string)
@@ -1895,6 +2238,7 @@ function projectStagedPlay(game: GameState): PublicGameSnapshot["stagedPlay"] {
 }
 
 function rotateHands(game: GameState) {
+  game.handsRotated = (game.handsRotated ?? 0) + 1
   const active = activePlayerIds(game)
   if (active.length < 2) return
 
@@ -1912,9 +2256,11 @@ function rotateHands(game: GameState) {
 
   game.unoVulnerablePlayerIds = []
   game.unoDeclaredPlayerIds = []
+  for (const playerId of active) recordPeakHandSize(game, playerId)
 }
 
 function swapHands(game: GameState, a: string, b: string) {
+  game.handsSwapped = (game.handsSwapped ?? 0) + 1
   const aHand = game.handsByPlayerId[a] ?? []
   const bHand = game.handsByPlayerId[b] ?? []
   game.handsByPlayerId[a] = bHand
@@ -1922,6 +2268,8 @@ function swapHands(game: GameState, a: string, b: string) {
   game.unoVulnerablePlayerIds = []
   clearUnoDeclaration(game, a)
   clearUnoDeclaration(game, b)
+  recordPeakHandSize(game, a)
+  recordPeakHandSize(game, b)
 }
 
 function beginTurnAction(game: GameState, playerId?: string) {

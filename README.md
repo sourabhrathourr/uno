@@ -25,6 +25,24 @@ Default local URLs:
 The web app reads the server URL from `VITE_SOCKET_URL`, falling back to
 `http://localhost:4001`.
 
+## Voice chat and TURN
+
+Voice is a peer-to-peer mesh. The server hands clients an ICE server list from
+`GET /voice/ice-servers`, configured with either:
+
+- `RTC_ICE_SERVERS` — a JSON array of `RTCIceServer` objects, or
+- `METERED_TURN_USERNAME` / `METERED_TURN_CREDENTIAL` (plus optional
+  `METERED_TURN_HOST`).
+
+With neither set the server falls back to a public STUN server only. **STUN
+alone is not enough on many home and office Wi-Fi networks**: some pairs of
+players negotiate a direct path and others cannot, which is what produces the
+"I can hear three people but not the other two" symptom. When a leg of the mesh
+keeps failing the client retries with an ICE restart and then rebuilds the
+connection forced through a TURN relay — so a TURN server must be configured
+for that last step to work. Set `VOICE_DEBUG=1` on the server, or append
+`?voiceDebug=1` in the browser, to trace negotiation.
+
 ## GIPHY search
 
 Copy `apps/server/.env.example` to `apps/server/.env`, then set

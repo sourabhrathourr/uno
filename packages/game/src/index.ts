@@ -27,6 +27,8 @@ export {
   drawRouletteCard,
   drawOne,
   endTurn,
+  incomingSupportRequests,
+  outgoingSupportRequest,
   playCards,
   projectPlayerGame,
   projectPublicGame,
@@ -34,7 +36,10 @@ export {
   projectSupportView,
   kickSupporter,
   releaseInactiveSupportLinks,
+  requestSupport,
+  respondToSupportRequest,
   sendAvatarEmojiReaction,
+  settleTurnClock,
   stageCards,
   supportPlayer,
   supportSquadMemberIds,
@@ -42,12 +47,15 @@ export {
   takeDrawPenalty,
   voteKickPlayer,
 } from "./engine"
+export type { CreateGameOptions } from "./engine"
 export type {
   CatchUnoInput,
   Direction,
   DrawStack,
   GameEvent,
   GameState,
+  MatchRecap,
+  PlayerMatchStats,
   GameContext,
   PendingChoice,
   PlayerGameSnapshot,
@@ -67,8 +75,11 @@ export type {
   SendAvatarEmojiReactionInput,
   SupportRecap,
   SupportRecapTitle,
+  SupportRequest,
   WinnerPlacement,
 } from "./game"
+export { MAX_COUNTED_TURN_MS } from "./game"
+export { playerInitials, turnOrderFromSeating } from "./players"
 export { AVATAR_REACTION_EMOJIS } from "./reactions"
 export type { AvatarReactionEmoji } from "./reactions"
 export type {
@@ -98,8 +109,11 @@ export type {
   JoinRoomResponse,
   KickSupporterInput,
   ReadyInput,
+  RequestSupportInput,
+  RespondSupportRequestInput,
   RoomEvent,
   ServerToClientEvents,
+  SetSeatOrderInput,
   SocketData,
   SpectatePlayerInput,
   StartVoteKickInput,

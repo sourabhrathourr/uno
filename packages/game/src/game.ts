@@ -27,6 +27,8 @@ export type GameEventType =
   | "support-started"
   | "support-ended"
   | "support-kicked"
+  | "support-requested"
+  | "support-request-declined"
 
 export type GameEvent = {
   id: string
@@ -63,6 +65,17 @@ export type SupportHistoryEntry = SupportLink & {
 }
 
 export type SupportBlock = {
+  supporterPlayerId: string
+  supportedPlayerId: string
+  createdAt: string
+}
+
+/**
+ * A second-chance ask. The first support pick is unilateral, but once a
+ * supported player has kicked someone, that person can only come back if the
+ * supported player approves this request.
+ */
+export type SupportRequest = {
   supporterPlayerId: string
   supportedPlayerId: string
   createdAt: string
@@ -152,6 +165,8 @@ export type PublicGameSnapshot = {
   supportLinks: SupportLink[]
   avatarEmojiReactions: AvatarEmojiReaction[]
   supportRecap: SupportRecap | null
+  /** Only present once the match is over. */
+  matchRecap: MatchRecap | null
 }
 
 export type PlayerGameSnapshot = {
@@ -165,8 +180,67 @@ export type PlayerGameSnapshot = {
   canTakeDrawPenalty: boolean
 }
 
+/**
+ * Running tally for one player, kept as the match plays out.
+ *
+ * The public snapshot only carries the last handful of events, so anything
+ * match-wide has to be counted as it happens rather than reconstructed at the
+ * end. These are the numbers the end-of-match recap is built from.
+ */
+export type PlayerMatchStats = {
+  playerId: string
+  turnsTaken: number
+  cardsPlayed: number
+  /** Every card that entered the hand from the deck, however it got there. */
+  cardsDrawn: number
+  /** Cards taken specifically as a stacked draw penalty. */
+  penaltyCardsTaken: number
+  biggestPenaltyTaken: number
+  /** Total draw a player pushed onto other people (+2, +4, +10 …). */
+  drawCardsDealt: number
+  skipsPlayed: number
+  reversesPlayed: number
+  wildsPlayed: number
+  unosCalled: number
+  /** Times this player caught someone who forgot to call UNO. */
+  unoCatches: number
+  /** Times this player was caught out. */
+  timesCaught: number
+  peakHandSize: number
+  /** Time on the clock across every turn this player actually took. */
+  totalTurnMs: number
+  timedTurns: number
+  /** 1-based finish position, or null for players who never went out. */
+  finishPosition: number | null
+}
+
+export type MatchRecap = {
+  /** Finish order first, then everyone who never got out. */
+  players: PlayerMatchStats[]
+  totalCardsPlayed: number
+  totalCardsDrawn: number
+  /** The largest draw stack that built up at any point in the match. */
+  biggestDrawStack: number
+  handsSwapped: number
+  handsRotated: number
+  startedAt: string
+  finishedAt: string | null
+}
+
+/** Longest a single turn is allowed to count for, so someone who wanders off
+ * mid-match does not distort the speed leaderboard. */
+export const MAX_COUNTED_TURN_MS = 120_000
+
 export type GameState = {
   matchId: string
+  startedAt: string
+  finishedAt: string | null
+  statsByPlayerId: Record<string, PlayerMatchStats>
+  handsSwapped: number
+  handsRotated: number
+  biggestDrawStack: number
+  turnClockPlayerId: string | null
+  turnStartedAtMs: number | null
   playerOrder: string[]
   direction: Direction
   currentColor: PlayColor
@@ -189,6 +263,7 @@ export type GameState = {
   supportLinks: SupportLink[]
   supportHistory: SupportHistoryEntry[]
   supportBlocks: SupportBlock[]
+  supportRequests: SupportRequest[]
   avatarEmojiReactions: AvatarEmojiReaction[]
   events: GameEvent[]
 }

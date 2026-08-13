@@ -6,9 +6,12 @@ import {
   Circle,
   Clipboard,
   Clock,
+  Crown,
   Eye,
+  GripVertical,
   ImageIcon,
   MessageCircle,
+  PanelRightClose,
   Mic,
   MicOff,
   Play,
@@ -31,6 +34,8 @@ import {
   AVATAR_REACTION_EMOJIS,
   CHAT_EMOJIS,
   CHAT_PRESETS,
+  playerInitials,
+  turnOrderFromSeating,
 } from "@workspace/game"
 import { Button } from "@workspace/ui/components/button"
 import { Checkbox } from "@workspace/ui/components/checkbox"
@@ -50,11 +55,12 @@ import type {
   RoomSnapshot,
   SendAvatarEmojiReactionInput,
   SendChatMessageInput,
+  SetSeatOrderInput,
   StageCardsInput,
   VoteKickChoice,
   VoteKickPoll,
 } from "@workspace/game"
-import type { PointerEvent, ReactNode } from "react"
+import type { PointerEvent as ReactPointerEvent, ReactNode } from "react"
 import type { Options as ConfettiOptions } from "canvas-confetti"
 
 import type { GameSocket } from "@/lib/realtime"
@@ -63,6 +69,7 @@ import type { ChatTray } from "@/components/use-channel-chat"
 import { GifPicker } from "@/components/gif-picker"
 import {
   SupportConfirmDialog,
+  SupportRequestInbox,
   availableSupportCandidates,
 } from "@/components/support-experience"
 import { useChannelChat } from "@/components/use-channel-chat"
@@ -644,6 +651,44 @@ function RoomPage() {
     })
   }
 
+  function setSeatOrder(input: SetSeatOrderInput) {
+    if (!socket) return
+    setError(null)
+    socket.emit("room:setSeatOrder", input, (result) => {
+      if (!result.ok) {
+        applyCommandError(result.error)
+        return
+      }
+
+      playFx("toggleOn", { volume: 0.45 })
+      applyRoomSnapshot(result.data)
+    })
+  }
+
+  function requestSupport(supportedPlayerId: string) {
+    if (!socket) return
+    setError(null)
+    socket.emit("game:requestSupport", { supportedPlayerId }, (result) => {
+      if (!result.ok) return applyCommandError(result.error)
+      playFx("notify", { volume: 0.3 })
+      applyRoomSnapshot(result.data)
+    })
+  }
+
+  function respondSupportRequest(supporterPlayerId: string, approve: boolean) {
+    if (!socket) return
+    setError(null)
+    socket.emit(
+      "game:respondSupportRequest",
+      { supporterPlayerId, approve },
+      (result) => {
+        if (!result.ok) return applyCommandError(result.error)
+        playFx(approve ? "successBling" : "blocked", { volume: 0.42 })
+        applyRoomSnapshot(result.data)
+      }
+    )
+  }
+
   function sendChatMessage(input: SendChatMessageInput) {
     if (!socket) return
     setError(null)
@@ -851,7 +896,6 @@ function RoomPage() {
           player={player}
           playerGame={playerGame?.playerId === player.id ? playerGame : null}
           playerSocial={playerSocial}
-          connected={connected}
           error={error}
           onCopyInvite={copyInvite}
           onPlayCards={playCards}
@@ -863,11 +907,14 @@ function RoomPage() {
           onCatchUno={catchUno}
           onSupportPlayer={supportPlayer}
           onKickSupporter={kickSupporter}
+          onRequestSupport={requestSupport}
+          onRespondSupportRequest={respondSupportRequest}
           onSendAvatarEmojiReaction={sendAvatarEmojiReaction}
           onSendChatMessage={sendChatMessage}
           onStartVoteKick={startVoteKick}
           onCastVoteKick={castVoteKick}
           onRestartGame={restartGame}
+          onSetSeatOrder={setSeatOrder}
           voice={voice}
           socket={socket}
         />
@@ -909,7 +956,6 @@ function GameTable({
   player,
   playerGame,
   playerSocial,
-  connected,
   error,
   onCopyInvite,
   onPlayCards,
@@ -921,11 +967,14 @@ function GameTable({
   onCatchUno,
   onSupportPlayer,
   onKickSupporter,
+  onRequestSupport,
+  onRespondSupportRequest,
   onSendAvatarEmojiReaction,
   onSendChatMessage,
   onStartVoteKick,
   onCastVoteKick,
   onRestartGame,
+  onSetSeatOrder,
   voice,
   socket,
 }: {
@@ -933,7 +982,6 @@ function GameTable({
   player: Player
   playerGame: PlayerGameSnapshot | null
   playerSocial: PlayerSocialSnapshot | null
-  connected: boolean
   error: string | null
   onCopyInvite: () => Promise<void>
   onPlayCards: (input: PlayCardsInput) => void
@@ -945,11 +993,14 @@ function GameTable({
   onCatchUno: (targetPlayerId: string) => void
   onSupportPlayer: (supportedPlayerId: string) => void
   onKickSupporter: (supporterPlayerId: string) => void
+  onRequestSupport: (supportedPlayerId: string) => void
+  onRespondSupportRequest: (supporterPlayerId: string, approve: boolean) => void
   onSendAvatarEmojiReaction: (input: SendAvatarEmojiReactionInput) => void
   onSendChatMessage: (input: SendChatMessageInput) => void
   onStartVoteKick: (targetPlayerId: string) => void
   onCastVoteKick: (voteKickId: string, choice: VoteKickChoice) => void
   onRestartGame: () => void
+  onSetSeatOrder: (input: SetSeatOrderInput) => void
   voice: RoomVoiceController
   socket: GameSocket | null
 }) {
@@ -974,9 +1025,19 @@ function GameTable({
   const [pendingSupportPlayerId, setPendingSupportPlayerId] = useState<
     string | null
   >(null)
+  const [nextMatchPanelOpen, setNextMatchPanelOpen] = useState(false)
+  const [chatCollapsed, setChatCollapsed] = useState(readStoredChatCollapsed)
+  const [directionPulseKey, setDirectionPulseKey] = useState(0)
+  const [directionPulseOn, setDirectionPulseOn] = useState(false)
+
+  function showDirectionPulse() {
+    setDirectionPulseKey((current) => current + 1)
+    setDirectionPulseOn(true)
+  }
 
   function requestSupportPlayer(targetPlayerId: string) {
     if (spectatingPlayerId) return
+    if (playerSocial?.outgoingSupportRequest) return
     setPendingSupportPlayerId(targetPlayerId)
   }
 
@@ -1043,17 +1104,41 @@ function GameTable({
       !state?.winnerPlacement
     )
   })
+  const blockedSupportedPlayerIds =
+    playerSocial?.blockedSupportedPlayerIds ?? []
   const supportCandidates = availableSupportCandidates(
     game?.players ?? [],
-    playerSocial?.blockedSupportedPlayerIds ?? [],
+    blockedSupportedPlayerIds,
     player.id
   )
     .map((candidate) =>
       room.players.find((roomPlayer) => roomPlayer.id === candidate.playerId)
     )
     .filter((candidate): candidate is Player => Boolean(candidate))
+  // Players who kicked this player earlier: still reachable, but only by asking.
+  const supportRequestCandidateIds = (game?.players ?? [])
+    .filter(
+      (candidate) =>
+        candidate.playerId !== player.id &&
+        !candidate.eliminated &&
+        !candidate.winnerPlacement &&
+        blockedSupportedPlayerIds.includes(candidate.playerId)
+    )
+    .map((candidate) => candidate.playerId)
+  const outgoingSupportRequest = playerSocial?.outgoingSupportRequest ?? null
+  const incomingSupportRequests = playerSocial?.incomingSupportRequests ?? []
   const pendingSupportPlayer = room.players.find(
     (candidate) => candidate.id === pendingSupportPlayerId
+  )
+  const pendingSupportNeedsApproval = Boolean(
+    pendingSupportPlayerId &&
+    blockedSupportedPlayerIds.includes(pendingSupportPlayerId)
+  )
+  const incomingSupportRequestCards = incomingSupportRequests.map(
+    (request) => ({
+      supporterPlayerId: request.supporterPlayerId,
+      supporterName: getPlayerName(room, request.supporterPlayerId),
+    })
   )
   const isMyTurn = game?.turnPlayerId === player.id
   const firstWinnerPlacement =
@@ -1065,7 +1150,35 @@ function GameTable({
     (candidate) => candidate.id === celebratingWinnerId
   )
   const gameFinished = Boolean(game && game.turnPlayerId === null)
-  const canRestartGame = gameFinished
+  // The crown passes to whoever took first place last match; they seat the
+  // table and start the next one. Falls back to the host before any match has
+  // been won, or if the crown holder has left.
+  const crownPlayerId =
+    room.crownPlayerId &&
+    room.players.some((candidate) => candidate.id === room.crownPlayerId)
+      ? room.crownPlayerId
+      : null
+  const nextMatchOrganiserId = crownPlayerId ?? room.hostPlayerId
+  const isNextMatchOrganiser = nextMatchOrganiserId === player.id
+  const canRestartGame = gameFinished && isNextMatchOrganiser
+  // Seats an eliminated player may click: free picks plus the ones that now
+  // need permission. A pending request locks the whole ring until answered.
+  const spectatablePlayerIds =
+    isSelfEliminated && !outgoingSupportRequest
+      ? [
+          ...supportCandidates.map((candidate) => candidate.id),
+          ...supportRequestCandidateIds,
+        ]
+      : []
+  // Seat coordinates for the direction pulse, in the same seating order the
+  // engine walks, so the arc traces the real rotation.
+  const orderedSeats = orderPlayersAroundSelf(room.players, player.id)
+  const directionPulseSeats = orderedSeats.map((candidate, index) => {
+    const seat = narrowViewport
+      ? mobileSeatPosition(index, orderedSeats.length)
+      : tableSeatPosition(index, orderedSeats.length, compactSurface)
+    return { playerId: candidate.id, left: seat.left, top: seat.top }
+  })
   const gameStartEventId =
     game?.events.find((event) => event.type === "game-started")?.id ?? null
   const drawStack = game?.drawStack ?? null
@@ -1159,6 +1272,10 @@ function GameTable({
   const visibleError = error ?? voice.error
   const visibleSupportView =
     supportView?.playerId === spectatingPlayerId ? supportView : null
+
+  useEffect(() => {
+    if (!gameFinished || !isNextMatchOrganiser) setNextMatchPanelOpen(false)
+  }, [gameFinished, isNextMatchOrganiser])
 
   useEffect(() => {
     const requestId = ++supportViewRequestRef.current
@@ -1504,11 +1621,12 @@ function GameTable({
       : isMyTurn
         ? "Your turn"
         : `${getPlayerName(room, game?.turnPlayerId)} is playing`
+  // Only the end-of-match call to action earns a second line. The discard
+  // count and the draw-stack rules were noise: the stack amount already sits
+  // on the seat it is aimed at.
   const tableStatusDetail = gameFinished
     ? "Start a new match with the same room and players."
-    : game?.drawStack
-      ? `Draw stack is +${game.drawStack.amount}. Stack +${game.drawStack.minimum} or higher.`
-      : `${game?.discardPileCount ?? 0} cards discarded`
+    : null
 
   if (narrowViewport) {
     return (
@@ -1563,18 +1681,21 @@ function GameTable({
                   : "rounded-2xl py-2")
               }
             >
-              <div className="min-w-0">
-                <p className="text-[9px] font-medium tracking-[0.18em] text-white/42 uppercase">
-                  UNO No Mercy
+              <div className="flex min-w-0 flex-1 items-center gap-1.5">
+                <LastMoveAvatar
+                  room={room}
+                  playerId={
+                    room.game?.events[room.game.events.length - 1]?.playerId
+                  }
+                  size="size-5"
+                />
+                <p className="min-w-0 flex-1 truncate text-[10px] leading-4 font-medium text-white/62">
+                  {room.game?.events[room.game.events.length - 1]?.message ??
+                    ""}
                 </p>
-                <h1 className="truncate text-sm font-semibold tracking-tight sm:text-base">
-                  Room {room.code}
-                </h1>
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
                 <VoiceToggleButton voice={voice} compact />
-                <SoundToggle compact />
-                <StatusDot connected={connected} compact />
                 <CopyInviteButton iconOnly onCopy={onCopyInvite} />
                 <MobileChatSheet
                   messages={room.chatMessages}
@@ -1598,6 +1719,7 @@ function GameTable({
 
             <div
               ref={tableDropRef}
+              data-table-surface="true"
               className="flex min-h-0 flex-1 flex-col gap-1.5"
             >
               <section
@@ -1620,17 +1742,25 @@ function GameTable({
               >
                 <div className="pointer-events-none absolute inset-0 rounded-[1.35rem] bg-black/[0.08] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.32),inset_0_0_0_2px_rgba(255,255,255,0.045),inset_0_24px_80px_rgba(0,0,0,0.32)]" />
 
+                {directionPulseOn && (
+                  <DirectionPulse
+                    key={directionPulseKey}
+                    seats={directionPulseSeats}
+                    direction={game?.direction ?? 1}
+                    onDone={() => setDirectionPulseOn(false)}
+                  />
+                )}
+
                 <MobileSeatingRing
                   room={room}
                   game={game}
                   selfPlayerId={player.id}
+                  crownPlayerId={crownPlayerId}
                   voiceStates={voice.voiceStates}
                   canTakeDrawPenalty={Boolean(playerGame?.canTakeDrawPenalty)}
                   onTakeDrawPenalty={handleTakePenalty}
                   spectatingPlayerId={spectatingPlayerId}
-                  supportCandidatePlayerIds={supportCandidates.map(
-                    (candidate) => candidate.id
-                  )}
+                  supportCandidatePlayerIds={spectatablePlayerIds}
                   onSpectatePlayer={requestSupportPlayer}
                 />
 
@@ -1640,43 +1770,50 @@ function GameTable({
                       {tableStatusTitle}
                     </p>
                     <div className="flex shrink-0 items-center gap-1">
-                      <DirectionPill direction={game?.direction ?? 1} compact />
+                      <DirectionPill
+                        direction={game?.direction ?? 1}
+                        compact
+                        onPreview={showDirectionPulse}
+                      />
                       <ColorPill color={game?.currentColor ?? "red"} />
-                      {canRestartGame && (
-                        <Button
-                          type="button"
-                          size="xs"
-                          onClick={onRestartGame}
-                          className="h-7 rounded-full bg-white px-2 text-[11px] font-semibold text-neutral-950 hover:bg-white/85"
-                        >
-                          <Play className="mr-1 size-3" strokeWidth={2.2} />
-                          New
-                        </Button>
-                      )}
+                      {gameFinished &&
+                        (canRestartGame ? (
+                          <Button
+                            type="button"
+                            size="xs"
+                            onClick={() => setNextMatchPanelOpen(true)}
+                            className="h-7 rounded-full bg-white px-2 text-[11px] font-semibold text-neutral-950 hover:bg-white/85"
+                          >
+                            <Crown className="mr-1 size-3" strokeWidth={2.2} />
+                            Set up
+                          </Button>
+                        ) : (
+                          <span
+                            className="inline-flex h-7 items-center gap-1 rounded-full border border-amber-200/25 bg-amber-300/10 px-2 text-[10px] text-amber-50/80"
+                            title={`${getPlayerName(room, nextMatchOrganiserId)} starts the next match`}
+                          >
+                            <Crown className="size-3" strokeWidth={2.2} />
+                            {getPlayerName(room, nextMatchOrganiserId)}
+                          </span>
+                        ))}
                     </div>
                   </div>
 
-                  {(drawStack || (rouletteChoice && !canDrawRoulette)) && (
+                  {((drawStack && playerGame?.canTakeDrawPenalty) ||
+                    (rouletteChoice && !canDrawRoulette)) && (
                     <div className="mt-2 flex shrink-0 flex-wrap items-center gap-1.5">
-                      {drawStack && (
-                        <div className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-black/48 px-2.5 py-1 text-[11px] text-white/68 shadow-[0_10px_24px_rgba(0,0,0,0.22)] backdrop-blur-md">
-                          <span className="font-semibold text-red-100">
-                            Draw +{drawStack.amount}
-                          </span>
-                          <span className="text-white/42">
-                            stack +{drawStack.minimum}+
-                          </span>
-                          {playerGame?.canTakeDrawPenalty && (
-                            <Button
-                              type="button"
-                              size="xs"
-                              onClick={handleTakePenalty}
-                              className="h-6 rounded-full bg-white px-2 text-[11px] text-neutral-950 hover:bg-white/85"
-                            >
-                              Take
-                            </Button>
-                          )}
-                        </div>
+                      {/* The stack rules read as jargon; the amount already
+                          shows on the seat it is pointed at. All that is kept
+                          here is the way to actually take it. */}
+                      {drawStack && playerGame?.canTakeDrawPenalty && (
+                        <Button
+                          type="button"
+                          size="xs"
+                          onClick={handleTakePenalty}
+                          className="h-7 rounded-full bg-white px-3 text-[11px] font-semibold text-neutral-950 hover:bg-white/85"
+                        >
+                          Take +{drawStack.amount}
+                        </Button>
                       )}
                       {rouletteChoice && !canDrawRoulette && (
                         <div className="inline-flex items-center gap-1.5 rounded-full border border-amber-200/20 bg-amber-300/12 px-2.5 py-1 text-[11px] text-amber-50 shadow-[0_10px_24px_rgba(0,0,0,0.22)] backdrop-blur-md">
@@ -1740,21 +1877,39 @@ function GameTable({
               message={visibleError}
               className="shrink-0 rounded-xl border border-red-400/20 bg-red-500/12 px-3 py-2 text-xs text-red-100 shadow-[0_14px_34px_rgba(0,0,0,0.26)] backdrop-blur-md"
             />
-            {Boolean(playerGame?.catchablePlayerIds.length) && (
+            {(incomingSupportRequestCards.length > 0 ||
+              outgoingSupportRequest ||
+              Boolean(playerGame?.catchablePlayerIds.length)) && (
               <div className="shrink-0 space-y-1">
-                <div className="flex gap-2 overflow-x-auto rounded-xl border border-yellow-300/20 bg-yellow-300/10 p-2 backdrop-blur-md">
-                  {playerGame?.catchablePlayerIds.map((targetPlayerId) => (
-                    <Button
-                      key={targetPlayerId}
-                      type="button"
-                      size="xs"
-                      onClick={() => handleCatchUno(targetPlayerId)}
-                      className="shrink-0 bg-yellow-100 text-yellow-950 hover:bg-yellow-50"
-                    >
-                      Catch {getPlayerName(room, targetPlayerId)}
-                    </Button>
-                  ))}
-                </div>
+                <SupportRequestInbox
+                  requests={incomingSupportRequestCards}
+                  onRespond={onRespondSupportRequest}
+                />
+                {outgoingSupportRequest && (
+                  <p className="rounded-xl border border-amber-200/20 bg-amber-300/10 px-3 py-2 text-xs text-amber-50/85 backdrop-blur-md">
+                    Waiting on{" "}
+                    {getPlayerName(
+                      room,
+                      outgoingSupportRequest.supportedPlayerId
+                    )}{" "}
+                    to approve your request.
+                  </p>
+                )}
+                {playerGame?.catchablePlayerIds.length ? (
+                  <div className="flex gap-2 overflow-x-auto rounded-xl border border-yellow-300/20 bg-yellow-300/10 p-2 backdrop-blur-md">
+                    {playerGame.catchablePlayerIds.map((targetPlayerId) => (
+                      <Button
+                        key={targetPlayerId}
+                        type="button"
+                        size="xs"
+                        onClick={() => handleCatchUno(targetPlayerId)}
+                        className="shrink-0 bg-yellow-100 text-yellow-950 hover:bg-yellow-50"
+                      >
+                        Catch {getPlayerName(room, targetPlayerId)}
+                      </Button>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             )}
 
@@ -1762,32 +1917,35 @@ function GameTable({
               data-self-hand="true"
               className="flex h-[clamp(174px,30dvh,230px)] shrink-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-black/40 p-2 shadow-[0_18px_54px_rgba(0,0,0,0.28)]"
             >
-              <div className="flex shrink-0 items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-white/84">
-                    {isSelfEliminated
-                      ? spectatingPlayerId
-                        ? `${getPlayerName(room, spectatingPlayerId)}'s hand`
-                        : "Your hand"
-                      : "Your hand"}
-                  </p>
-                  <p className="mt-0.5 truncate text-[11px] text-white/42">
-                    {isSelfEliminated
-                      ? spectatingPlayerId
-                        ? "Spectating"
-                        : "Tap an active player to spectate."
-                      : "Tap a card to stage it."}
-                  </p>
+              {/* One row: reactions (or the colour picker when a wild needs
+                  one) on the left, turn actions on the right, vertically
+                  centred against each other. */}
+              <div className="flex shrink-0 items-center justify-between gap-2">
+                <div className="flex min-w-0 flex-1 items-center gap-2">
+                  {needsColor && !isSelfEliminated ? (
+                    <ColorPicker
+                      value={chosenColor}
+                      required={!chosenColor}
+                      onChange={setChosenColor}
+                    />
+                  ) : (
+                    <AvatarEmojiReactionBar
+                      game={game}
+                      onReact={onSendAvatarEmojiReaction}
+                      compact
+                      inline
+                    />
+                  )}
+                  {isSelfEliminated && (
+                    <p className="truncate text-[11px] text-white/42">
+                      {spectatingPlayerId
+                        ? "🙌 Supporting"
+                        : "Tap an active player to spectate."}
+                    </p>
+                  )}
                 </div>
                 {!isSelfEliminated && (
                   <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-                    {needsColor && (
-                      <ColorPicker
-                        value={chosenColor}
-                        required={!chosenColor}
-                        onChange={setChosenColor}
-                      />
-                    )}
                     {canChooseRotate && (
                       <GameOptionCheckbox
                         checked={wantsRotate}
@@ -1835,17 +1993,11 @@ function GameTable({
                   />
                 )}
 
-              <AvatarEmojiReactionBar
-                game={game}
-                onReact={onSendAvatarEmojiReaction}
-                compact
-              />
-
-              {gameFinished && game?.supportRecap && (
-                <SupportRecapPanel
-                  recap={game.supportRecap}
-                  game={game}
+              {gameFinished && game?.matchRecap && (
+                <MatchRecapPanel
+                  recap={game.matchRecap}
                   players={room.players}
+                  selfPlayerId={player.id}
                   compact
                 />
               )}
@@ -1866,6 +2018,7 @@ function GameTable({
               )}
 
               <FannedGameHand
+                hidden={Boolean(gameFinished && game?.matchRecap)}
                 cards={
                   isSelfEliminated
                     ? (visibleSupportView?.hand ?? [])
@@ -1904,11 +2057,31 @@ function GameTable({
         {pendingSupportPlayer && (
           <SupportConfirmDialog
             playerName={pendingSupportPlayer.name}
+            needsApproval={pendingSupportNeedsApproval}
+            asSheet
             onCancel={() => setPendingSupportPlayerId(null)}
             onConfirm={() => {
-              onSupportPlayer(pendingSupportPlayer.id)
+              if (pendingSupportNeedsApproval) {
+                onRequestSupport(pendingSupportPlayer.id)
+              } else {
+                onSupportPlayer(pendingSupportPlayer.id)
+              }
               setPendingSupportPlayerId(null)
             }}
+          />
+        )}
+        {nextMatchPanelOpen && gameFinished && isNextMatchOrganiser && (
+          <NextMatchPanel
+            room={room}
+            selfPlayerId={player.id}
+            crownPlayerId={crownPlayerId}
+            asSheet
+            onSetSeatOrder={onSetSeatOrder}
+            onStart={() => {
+              setNextMatchPanelOpen(false)
+              onRestartGame()
+            }}
+            onClose={() => setNextMatchPanelOpen(false)}
           />
         )}
       </>
@@ -1949,27 +2122,31 @@ function GameTable({
           />
         ))}
         <div className="mx-auto flex h-full min-h-0 w-full max-w-[1500px] flex-col gap-2 px-2 py-2 sm:gap-3 sm:px-4 sm:py-3 lg:px-8">
+          {/* Mid-match the header carries the last move and nothing else the
+              player has to read: the room code lives in the URL and behind
+              Copy invite, and connection state already shows on the seats. */}
           <header className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 pb-2 sm:pb-3">
-            <div>
-              <p className="text-[10px] font-medium tracking-[0.18em] text-white/45 uppercase sm:text-xs">
-                UNO No Mercy
-              </p>
-              <h1 className="mt-0.5 text-lg font-semibold tracking-tight sm:mt-1 sm:text-xl">
-                Room {room.code}
-              </h1>
-            </div>
-            <div className="flex items-center gap-2">
+            <MatchEventFeed room={room} selfPlayerId={player.id} />
+            <div className="ml-auto flex shrink-0 items-center gap-2">
               <VoiceToggleButton voice={voice} />
-              <SoundToggle />
-              <StatusDot connected={connected} />
               <CopyInviteButton onCopy={onCopyInvite} />
             </div>
           </header>
 
-          <section className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] gap-2 overflow-hidden lg:grid-rows-[minmax(0,1fr)_220px] xl:grid-cols-[minmax(0,1fr)_310px] xl:grid-rows-none">
+          {/* Collapsing the chat hands its width back to the table, which is
+              the part that actually needs the room. */}
+          <section
+            className={
+              "grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] gap-2 overflow-hidden xl:grid-rows-none " +
+              (chatCollapsed
+                ? "lg:grid-rows-[minmax(0,1fr)_52px] xl:grid-cols-[minmax(0,1fr)_52px]"
+                : "lg:grid-rows-[minmax(0,1fr)_220px] xl:grid-cols-[minmax(0,1fr)_310px]")
+            }
+          >
             <div className="relative grid min-h-0 grid-rows-[minmax(0,1fr)_clamp(188px,30dvh,300px)] gap-2 overflow-hidden sm:grid-rows-[minmax(0,1fr)_clamp(220px,30dvh,330px)] lg:gap-3">
               <div
                 ref={tableDropRef}
+                data-table-surface="true"
                 style={{
                   backgroundImage:
                     "linear-gradient(135deg, rgba(255,255,255,0.09), rgba(255,255,255,0) 18%, rgba(0,0,0,0.18) 62%), repeating-linear-gradient(92deg, rgba(255,255,255,0.035) 0 10px, rgba(0,0,0,0.05) 10px 22px), linear-gradient(90deg, #5a341d, #7a4829 38%, #4b2917)",
@@ -1984,19 +2161,27 @@ function GameTable({
                 }
               >
                 <div className="pointer-events-none absolute inset-0 rounded-2xl bg-black/[0.08] shadow-[inset_0_0_0_1px_rgba(0,0,0,0.32),inset_0_0_0_2px_rgba(255,255,255,0.045),inset_0_24px_80px_rgba(0,0,0,0.32)] sm:rounded-[1.75rem]" />
+
+                {directionPulseOn && (
+                  <DirectionPulse
+                    key={directionPulseKey}
+                    seats={directionPulseSeats}
+                    direction={game?.direction ?? 1}
+                    onDone={() => setDirectionPulseOn(false)}
+                  />
+                )}
                 <TableSeatRing
                   room={room}
                   game={game}
                   selfPlayerId={player.id}
+                  crownPlayerId={crownPlayerId}
                   canTakeDrawPenalty={Boolean(playerGame?.canTakeDrawPenalty)}
                   onTakeDrawPenalty={handleTakePenalty}
                   compact={compactSurface}
                   voiceStates={voice.voiceStates}
                   isSelfEliminated={isSelfEliminated}
                   spectatingPlayerId={spectatingPlayerId}
-                  supportCandidatePlayerIds={supportCandidates.map(
-                    (candidate) => candidate.id
-                  )}
+                  supportCandidatePlayerIds={spectatablePlayerIds}
                   onSpectatePlayer={requestSupportPlayer}
                 />
                 <div className="relative z-10 flex h-full min-h-0 flex-col">
@@ -2005,28 +2190,43 @@ function GameTable({
                       <p className="text-sm font-semibold text-white">
                         {tableStatusTitle}
                       </p>
-                      <p className="mt-1 text-xs text-white/65">
-                        {tableStatusDetail}
-                      </p>
+                      {tableStatusDetail && (
+                        <p className="mt-1 text-xs text-white/65">
+                          {tableStatusDetail}
+                        </p>
+                      )}
                     </div>
                     <div className="flex flex-wrap items-center justify-end gap-1.5 sm:gap-2">
                       <span className="rounded-full border border-white/10 bg-black/28 px-2.5 py-1.5 text-[11px] font-medium text-white/60 sm:px-3 sm:py-2 sm:text-xs">
                         {room.players.length}/{room.houseRules.maxPlayers}{" "}
                         seated
                       </span>
-                      <DirectionPill direction={game?.direction ?? 1} compact />
+                      <DirectionPill
+                        direction={game?.direction ?? 1}
+                        compact
+                        onPreview={showDirectionPulse}
+                      />
                       <ColorPill color={game?.currentColor ?? "red"} />
-                      {canRestartGame && (
-                        <Button
-                          type="button"
-                          size="sm"
-                          onClick={onRestartGame}
-                          className="rounded-full bg-white px-3 text-neutral-950 hover:bg-white/85"
-                        >
-                          <Play className="mr-1.5 size-3.5" strokeWidth={2.2} />
-                          New match
-                        </Button>
-                      )}
+                      {gameFinished &&
+                        (isNextMatchOrganiser ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={() => setNextMatchPanelOpen(true)}
+                            className="rounded-full bg-white px-3 text-neutral-950 hover:bg-white/85"
+                          >
+                            <Crown
+                              className="mr-1.5 size-3.5"
+                              strokeWidth={2.2}
+                            />
+                            Set up next match
+                          </Button>
+                        ) : (
+                          <span className="rounded-full border border-amber-200/25 bg-amber-300/10 px-3 py-1.5 text-xs text-amber-50/80">
+                            {getPlayerName(room, nextMatchOrganiserId)} is
+                            setting up the next match
+                          </span>
+                        ))}
                       {rouletteChoice && !canDrawRoulette && (
                         <div className="flex items-center gap-2 rounded-full border border-amber-200/20 bg-amber-300/12 px-3 py-1 text-xs text-amber-50 shadow-[0_10px_26px_rgba(0,0,0,0.22)] backdrop-blur-md">
                           <span className="flex items-center gap-1.5">
@@ -2081,6 +2281,22 @@ function GameTable({
               </div>
 
               <div className="pointer-events-none absolute inset-x-2 top-[3.4rem] z-30 flex max-h-[34%] flex-col gap-2 overflow-y-auto sm:inset-x-3 sm:top-[4.25rem]">
+                <SupportRequestInbox
+                  requests={incomingSupportRequestCards}
+                  onRespond={onRespondSupportRequest}
+                />
+
+                {outgoingSupportRequest && (
+                  <p className="pointer-events-auto rounded-md border border-amber-200/20 bg-amber-300/10 px-3 py-2 text-sm text-amber-50/85 backdrop-blur-md">
+                    Waiting on{" "}
+                    {getPlayerName(
+                      room,
+                      outgoingSupportRequest.supportedPlayerId
+                    )}{" "}
+                    to approve your support request.
+                  </p>
+                )}
+
                 <RoomErrorBanner
                   message={visibleError}
                   className="pointer-events-auto rounded-md border border-red-400/20 bg-red-500/12 px-3 py-2 text-sm text-red-100 shadow-[0_18px_44px_rgba(0,0,0,0.26)] backdrop-blur-md xl:hidden"
@@ -2108,31 +2324,30 @@ function GameTable({
                 className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-white/10 bg-black/35 p-2 shadow-[0_18px_60px_rgba(0,0,0,0.25)] sm:rounded-2xl sm:p-3"
               >
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-medium text-white/82">
-                      {isSelfEliminated
-                        ? spectatingPlayerId
-                          ? `${getPlayerName(room, spectatingPlayerId)}'s hand`
-                          : "Your hand"
-                        : "Your hand"}
-                    </p>
-                    <p className="mt-0.5 text-xs text-white/42 sm:mt-1">
-                      {isSelfEliminated
-                        ? spectatingPlayerId
-                          ? "Spectating"
-                          : "Tap an active player to spectate."
-                        : "Drag cards to the table, then end your turn."}
-                    </p>
+                  <div className="flex min-w-0 flex-1 items-center gap-2">
+                    {needsColor && !isSelfEliminated ? (
+                      <ColorPicker
+                        value={chosenColor}
+                        required={!chosenColor}
+                        onChange={setChosenColor}
+                      />
+                    ) : (
+                      <AvatarEmojiReactionBar
+                        game={game}
+                        onReact={onSendAvatarEmojiReaction}
+                        inline
+                      />
+                    )}
+                    {isSelfEliminated && (
+                      <p className="truncate text-xs text-white/42">
+                        {spectatingPlayerId
+                          ? "🙌 Supporting"
+                          : "Tap an active player to spectate."}
+                      </p>
+                    )}
                   </div>
                   {!isSelfEliminated && (
                     <div className="flex flex-wrap items-center gap-2">
-                      {needsColor && (
-                        <ColorPicker
-                          value={chosenColor}
-                          required={!chosenColor}
-                          onChange={setChosenColor}
-                        />
-                      )}
                       {canChooseRotate && (
                         <GameOptionCheckbox
                           checked={wantsRotate}
@@ -2196,20 +2411,16 @@ function GameTable({
                     />
                   )}
 
-                <AvatarEmojiReactionBar
-                  game={game}
-                  onReact={onSendAvatarEmojiReaction}
-                />
-
-                {gameFinished && game?.supportRecap && (
-                  <SupportRecapPanel
-                    recap={game.supportRecap}
-                    game={game}
+                {gameFinished && game?.matchRecap && (
+                  <MatchRecapPanel
+                    recap={game.matchRecap}
                     players={room.players}
+                    selfPlayerId={player.id}
                   />
                 )}
 
                 <FannedGameHand
+                  hidden={Boolean(gameFinished && game?.matchRecap)}
                   cards={
                     isSelfEliminated
                       ? (visibleSupportView?.hand ?? [])
@@ -2256,6 +2467,13 @@ function GameTable({
               )}
               selfPlayerId={player.id}
               error={error}
+              collapsed={chatCollapsed}
+              onToggleCollapsed={() =>
+                setChatCollapsed((current) => {
+                  writeStoredChatCollapsed(!current)
+                  return !current
+                })
+              }
               onSendMessage={onSendChatMessage}
               onStartVoteKick={onStartVoteKick}
               onCastVoteKick={onCastVoteKick}
@@ -2268,14 +2486,426 @@ function GameTable({
       {pendingSupportPlayer && (
         <SupportConfirmDialog
           playerName={pendingSupportPlayer.name}
+          needsApproval={pendingSupportNeedsApproval}
           onCancel={() => setPendingSupportPlayerId(null)}
           onConfirm={() => {
-            onSupportPlayer(pendingSupportPlayer.id)
+            if (pendingSupportNeedsApproval) {
+              onRequestSupport(pendingSupportPlayer.id)
+            } else {
+              onSupportPlayer(pendingSupportPlayer.id)
+            }
             setPendingSupportPlayerId(null)
           }}
         />
       )}
+      {nextMatchPanelOpen && gameFinished && isNextMatchOrganiser && (
+        <NextMatchPanel
+          room={room}
+          selfPlayerId={player.id}
+          crownPlayerId={crownPlayerId}
+          onSetSeatOrder={onSetSeatOrder}
+          onStart={() => {
+            setNextMatchPanelOpen(false)
+            onRestartGame()
+          }}
+          onClose={() => setNextMatchPanelOpen(false)}
+        />
+      )}
     </>
+  )
+}
+
+/**
+ * The winner's table. They redraw the seating, pick which way play runs, and
+ * are the one who starts the next match — the host no longer owns that button
+ * once someone has taken first place.
+ */
+function NextMatchPanel({
+  room,
+  selfPlayerId,
+  crownPlayerId,
+  asSheet = false,
+  onSetSeatOrder,
+  onStart,
+  onClose,
+}: {
+  room: RoomSnapshot
+  selfPlayerId: string
+  crownPlayerId: string | null
+  /** Bottom sheet on a phone, centred dialog on desktop. */
+  asSheet?: boolean
+  onSetSeatOrder: (input: SetSeatOrderInput) => void
+  onStart: () => void
+  onClose: () => void
+}) {
+  const seatedOrder = [...room.players].sort((a, b) => a.seat - b.seat)
+  const serverDirection: 1 | -1 = room.nextMatchDirection === -1 ? -1 : 1
+  // Held locally so a seat drag cannot resend a stale direction and quietly
+  // undo the choice made a moment earlier.
+  const [draftDirection, setDraftDirection] = useState<1 | -1>(serverDirection)
+  const direction = draftDirection
+  useEffect(() => {
+    setDraftDirection(serverDirection)
+  }, [serverDirection])
+  // Pointer-driven rather than HTML5 drag-and-drop, which never fires on
+  // touch and was unreliable inside the portal on desktop.
+  const [drag, setDrag] = useState<{
+    index: number
+    offsetY: number
+    targetIndex: number
+  } | null>(null)
+  const firstSeat = seatedOrder[0]
+  const turnOrder = turnOrderFromSeating(seatedOrder, direction)
+  const rowHeight = SEAT_ROW_HEIGHT_PX
+
+  function applyOrder(nextOrder: Array<Player>, nextDirection: 1 | -1) {
+    setDraftDirection(nextDirection)
+    onSetSeatOrder({
+      playerOrder: nextOrder.map((candidate) => candidate.id),
+      direction: nextDirection,
+    })
+  }
+
+  function moveSeat(fromIndex: number, toIndex: number) {
+    if (
+      fromIndex === toIndex ||
+      toIndex < 0 ||
+      toIndex >= seatedOrder.length ||
+      fromIndex < 0
+    ) {
+      return
+    }
+    const nextOrder = [...seatedOrder]
+    const [moved] = nextOrder.splice(fromIndex, 1)
+    if (!moved) return
+    nextOrder.splice(toIndex, 0, moved)
+    applyOrder(nextOrder, direction)
+  }
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose()
+    }
+    window.addEventListener("keydown", handleKeyDown)
+    return () => window.removeEventListener("keydown", handleKeyDown)
+  }, [onClose])
+
+  return createPortal(
+    <div
+      className={
+        "fixed inset-0 z-[95] bg-black/72 backdrop-blur-sm " +
+        (asSheet
+          ? "flex items-end justify-center"
+          : "grid place-items-center px-4")
+      }
+    >
+      <section
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="next-match-title"
+        className={
+          "w-full border-white/12 bg-[#11100d] p-5 text-white " +
+          (asSheet
+            ? "max-h-[88dvh] max-w-none overflow-y-auto rounded-t-3xl border-t pb-[calc(env(safe-area-inset-bottom)+1.25rem)] shadow-[0_-24px_90px_rgba(0,0,0,0.7)]"
+            : "max-w-md rounded-3xl border shadow-[0_28px_90px_rgba(0,0,0,0.66)]")
+        }
+      >
+        {asSheet && (
+          <span
+            aria-hidden="true"
+            className="mx-auto mb-4 block h-1 w-10 rounded-full bg-white/20"
+          />
+        )}
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold tracking-[0.18em] text-amber-100/70 uppercase">
+              Winner&apos;s call
+            </p>
+            <h2
+              id="next-match-title"
+              className="mt-1 text-xl font-semibold tracking-tight"
+            >
+              Set up the next match
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close next match setup"
+            className="grid size-9 shrink-0 place-items-center rounded-full border border-white/10 bg-white/[0.055] text-white/66 hover:bg-white/[0.09]"
+          >
+            <X className="size-4" strokeWidth={1.9} />
+          </button>
+        </div>
+
+        <p className="mt-2 text-sm leading-6 text-white/52">
+          Drag players to decide who sits next to whom. The seat at the top
+          deals first, and play runs from there.
+        </p>
+
+        <ol
+          className="relative mt-4"
+          style={{ height: seatedOrder.length * rowHeight }}
+        >
+          {seatedOrder.map((candidate, index) => {
+            const isDragging = drag?.index === index
+            // Rows slide out of the way to show where the held row will land.
+            let slotIndex = index
+            if (drag && !isDragging) {
+              if (index > drag.index && index <= drag.targetIndex) {
+                slotIndex = index - 1
+              } else if (index < drag.index && index >= drag.targetIndex) {
+                slotIndex = index + 1
+              }
+            }
+            const translateY = isDragging
+              ? drag.index * rowHeight + drag.offsetY
+              : slotIndex * rowHeight
+
+            return (
+              <li
+                key={candidate.id}
+                style={{
+                  transform: `translateY(${translateY}px)`,
+                  transition: isDragging ? "none" : "transform 180ms ease",
+                  zIndex: isDragging ? 10 : 1,
+                }}
+                className={
+                  "absolute inset-x-0 flex touch-none items-center gap-2 rounded-xl border bg-[#171614] px-2.5 py-2 " +
+                  (isDragging
+                    ? "border-amber-200/60 shadow-[0_14px_30px_rgba(0,0,0,0.5)]"
+                    : "border-white/10")
+                }
+              >
+                <span
+                  aria-hidden="true"
+                  onPointerDown={(event) => {
+                    event.preventDefault()
+                    event.currentTarget.setPointerCapture(event.pointerId)
+                    setDrag({ index, offsetY: 0, targetIndex: index })
+                  }}
+                  onPointerMove={(event) => {
+                    if (drag?.index !== index) return
+                    const offsetY =
+                      event.clientY -
+                      (event.currentTarget.getBoundingClientRect().top +
+                        event.currentTarget.offsetHeight / 2) +
+                      drag.offsetY
+                    const targetIndex = Math.max(
+                      0,
+                      Math.min(
+                        seatedOrder.length - 1,
+                        index + Math.round(offsetY / rowHeight)
+                      )
+                    )
+                    setDrag({ index, offsetY, targetIndex })
+                  }}
+                  onPointerUp={(event) => {
+                    if (
+                      event.currentTarget.hasPointerCapture(event.pointerId)
+                    ) {
+                      event.currentTarget.releasePointerCapture(event.pointerId)
+                    }
+                    if (drag?.index === index) moveSeat(index, drag.targetIndex)
+                    setDrag(null)
+                  }}
+                  onPointerCancel={() => setDrag(null)}
+                  className="-my-2 -ml-1 shrink-0 cursor-grab touch-none py-2 pr-1 pl-1 text-white/40 select-none active:cursor-grabbing"
+                >
+                  <GripVertical className="size-4" strokeWidth={2} />
+                </span>
+                <span className="grid size-6 shrink-0 place-items-center rounded-full bg-white/[0.08] text-[11px] font-semibold text-white/60 tabular-nums">
+                  {index + 1}
+                </span>
+                <span className="min-w-0 flex-1 truncate text-sm font-medium text-white/86">
+                  {candidate.name}
+                  {candidate.id === selfPlayerId ? " · You" : ""}
+                  {candidate.id === crownPlayerId ? " 👑" : ""}
+                </span>
+                {index === 0 && (
+                  <span className="shrink-0 rounded-full border border-amber-200/25 bg-amber-300/10 px-2 py-0.5 text-[10px] font-semibold text-amber-100/80">
+                    Starts
+                  </span>
+                )}
+                <span className="flex shrink-0 flex-col">
+                  <button
+                    type="button"
+                    aria-label={`Move ${candidate.name} earlier`}
+                    disabled={index === 0}
+                    onClick={() => moveSeat(index, index - 1)}
+                    className="grid h-4 w-6 place-items-center rounded text-[10px] text-white/55 hover:bg-white/[0.09] hover:text-white disabled:cursor-not-allowed disabled:opacity-25"
+                  >
+                    ↑
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Move ${candidate.name} later`}
+                    disabled={index === seatedOrder.length - 1}
+                    onClick={() => moveSeat(index, index + 1)}
+                    className="grid h-4 w-6 place-items-center rounded text-[10px] text-white/55 hover:bg-white/[0.09] hover:text-white disabled:cursor-not-allowed disabled:opacity-25"
+                  >
+                    ↓
+                  </button>
+                </span>
+              </li>
+            )
+          })}
+        </ol>
+
+        <div className="mt-4">
+          <p className="text-[11px] font-semibold tracking-wide text-white/45 uppercase">
+            Turn direction
+          </p>
+          <div className="mt-1.5 grid grid-cols-2 gap-1 rounded-xl border border-white/8 bg-black/22 p-1">
+            {([1, -1] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                onClick={() => applyOrder(seatedOrder, option)}
+                aria-pressed={direction === option}
+                className={
+                  "flex h-9 items-center justify-center gap-1.5 rounded-lg text-xs font-semibold transition-colors " +
+                  (direction === option
+                    ? "bg-white text-neutral-950"
+                    : "text-white/55 hover:bg-white/[0.06] hover:text-white/80")
+                }
+              >
+                <RotateCw
+                  className={"size-3.5 " + (option === 1 ? "" : "-scale-x-100")}
+                  strokeWidth={2.1}
+                />
+                {option === 1 ? "Clockwise" : "Counter-clockwise"}
+              </button>
+            ))}
+          </div>
+          {/* Spelling out the resulting rotation — "clockwise" alone tells you
+              nothing about where it begins or who you end up beside. */}
+          <p className="mt-2 rounded-xl border border-white/8 bg-black/22 px-3 py-2 text-[11px] leading-5 text-white/58">
+            <span className="font-semibold text-white/80">
+              {firstSeat?.name ?? "The top seat"}
+            </span>{" "}
+            plays first, then it passes {direction === 1 ? "down" : "up"} this
+            list:{" "}
+            <span className="text-white/78">
+              {turnOrder.map((candidate) => candidate.name).join(" → ")}
+            </span>{" "}
+            → back to {firstSeat?.name ?? "the top"}.
+          </p>
+        </div>
+
+        <Button
+          type="button"
+          onClick={onStart}
+          className="mt-5 h-11 w-full rounded-xl bg-white text-sm font-semibold text-neutral-950 hover:bg-white/86"
+        >
+          <Play className="mr-1.5 size-4" strokeWidth={2.2} />
+          Start next match
+        </Button>
+      </section>
+    </div>,
+    document.body
+  )
+}
+
+const CHAT_COLLAPSED_STORAGE_KEY = "uno:chat-collapsed"
+/** Row pitch in the seating editor, including the gap between rows. */
+const SEAT_ROW_HEIGHT_PX = 46
+
+function readStoredChatCollapsed(): boolean {
+  if (typeof window === "undefined") return false
+  try {
+    return window.localStorage.getItem(CHAT_COLLAPSED_STORAGE_KEY) === "1"
+  } catch {
+    return false
+  }
+}
+
+function writeStoredChatCollapsed(collapsed: boolean) {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.setItem(
+      CHAT_COLLAPSED_STORAGE_KEY,
+      collapsed ? "1" : "0"
+    )
+  } catch {
+    // A blocked storage quota should not stop the panel from collapsing.
+  }
+}
+
+/**
+ * The last move at the table, in the empty space beside the room title. Only
+ * ever one line: a growing list would push the header around as the match
+ * runs, and the table already has its own history in chat.
+ */
+function MatchEventFeed({
+  room,
+  selfPlayerId,
+}: {
+  room: RoomSnapshot
+  selfPlayerId: string
+}) {
+  const events = room.game?.events ?? []
+  const latest = events[events.length - 1] ?? null
+  const isSelf = Boolean(
+    latest &&
+    (latest.playerId === selfPlayerId || latest.targetPlayerId === selfPlayerId)
+  )
+
+  return (
+    // The row keeps its height whether or not there is a move to show, so the
+    // header never shifts.
+    <div
+      className="pointer-events-none hidden h-7 min-w-0 flex-1 items-center justify-start gap-2 pr-4 lg:flex"
+      aria-live="polite"
+      aria-label="Last move"
+    >
+      {latest && (
+        <>
+          <LastMoveAvatar room={room} playerId={latest.playerId} />
+          <p
+            key={latest.id}
+            className={
+              "min-w-0 truncate text-[13px] font-medium " +
+              (isSelf ? "text-amber-50" : "text-white/88")
+            }
+            title={latest.message}
+          >
+            {latest.message}
+          </p>
+        </>
+      )}
+    </div>
+  )
+}
+
+/** Whose move it was reads faster from the face than from the name. */
+function LastMoveAvatar({
+  room,
+  playerId,
+  size = "size-6",
+}: {
+  room: RoomSnapshot
+  playerId?: string
+  size?: string
+}) {
+  const actor = room.players.find((candidate) => candidate.id === playerId)
+  if (!actor) return null
+
+  const avatarUrls = avatarsByPlayerId(room.code, room.players)
+  return (
+    <span
+      className={
+        "grid shrink-0 place-items-center overflow-hidden rounded-full border border-white/12 bg-white/[0.06] " +
+        size
+      }
+    >
+      <PlayerAvatar
+        name={actor.name}
+        src={avatarUrls.get(actor.id) ?? PLAYER_AVATARS[0]!}
+        className="size-full rounded-full object-cover"
+        initialsClassName="text-[9px]"
+      />
+    </span>
   )
 }
 
@@ -2283,26 +2913,37 @@ function AvatarEmojiReactionBar({
   game,
   onReact,
   compact = false,
+  inline = false,
 }: {
   game: RoomSnapshot["game"]
   onReact: (input: SendAvatarEmojiReactionInput) => void
   compact?: boolean
+  /** Sits in a flex row beside the turn actions: no top margin, tighter box. */
+  inline?: boolean
 }) {
   if (!game || game.turnPlayerId === null) return null
   return (
     <div
       className={
-        (compact ? "mt-1" : "mt-2") +
-        " flex shrink-0 items-center gap-1 overflow-x-auto"
+        (inline ? "" : compact ? "mt-0.5 " : "mt-1 ") +
+        "flex min-w-0 shrink items-center gap-1 overflow-x-auto"
       }
     >
-      <div className="flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-black/30 p-1">
+      <div
+        className={
+          "flex shrink-0 items-center gap-1 rounded-full border border-white/10 bg-black/30 " +
+          (inline ? "px-1 py-0.5" : "p-1")
+        }
+      >
         {AVATAR_REACTION_EMOJIS.map((emoji) => (
           <button
             key={emoji}
             type="button"
             onClick={() => onReact({ body: emoji })}
-            className="grid size-7 place-items-center rounded-full text-sm hover:bg-white/10 active:scale-90"
+            className={
+              "grid place-items-center rounded-full text-sm hover:bg-white/10 active:scale-90 " +
+              (inline ? "size-6" : "size-7")
+            }
             aria-label={`React ${emoji}`}
           >
             {emoji}
@@ -2343,91 +2984,458 @@ function SupportDecisionPills({
   )
 }
 
-function SupportRecapPanel({
+/**
+ * What the hand tray becomes once the match is over.
+ *
+ * The same three slides every match, so the numbers mean something across a
+ * night of play rather than being a novelty per round: where everyone
+ * finished, how each player actually spent the match, and the handful of
+ * moments that decided it. Swipeable because a phone cannot show all three at
+ * once, and paging beats squeezing.
+ */
+function MatchRecapPanel({
   recap,
-  game,
   players,
+  selfPlayerId,
   compact = false,
 }: {
-  recap: NonNullable<NonNullable<RoomSnapshot["game"]>["supportRecap"]>
-  game: NonNullable<RoomSnapshot["game"]>
+  recap: NonNullable<NonNullable<RoomSnapshot["game"]>["matchRecap"]>
   players: Array<Player>
+  selfPlayerId: string
   compact?: boolean
 }) {
-  if (recap.journey.length === 0 && recap.titles.length === 0) return null
-  const name = (playerId: string) =>
+  const [slide, setSlide] = useState(0)
+  const swipeStartRef = useRef<{ x: number; y: number } | null>(null)
+
+  const nameFor = (playerId: string) =>
     players.find((candidate) => candidate.id === playerId)?.name ?? "Player"
-  const journeys = Array.from(
-    recap.journey
-      .reduce((groups, entry) => {
-        const entries = groups.get(entry.supporterPlayerId) ?? []
-        entries.push(entry)
-        groups.set(entry.supporterPlayerId, entries)
-        return groups
-      }, new Map<string, typeof recap.journey>())
-      .entries()
+
+  const slides = [
+    "Podium",
+    "Cards handled",
+    "Turning points",
+    "Awards",
+    "Speed",
+  ]
+  const safeSlide = Math.min(slide, slides.length - 1)
+
+  const durationMs = recap.finishedAt
+    ? new Date(recap.finishedAt).getTime() - new Date(recap.startedAt).getTime()
+    : 0
+  const durationLabel =
+    durationMs > 0 ? `${Math.max(1, Math.round(durationMs / 60000))} min` : "—"
+
+  // One shared scale keeps the bars comparable between players.
+  const busiest = Math.max(
+    1,
+    ...recap.players.map((stats) => stats.cardsPlayed + stats.cardsDrawn)
   )
 
-  function outcome(entry: (typeof recap.journey)[number]): string | null {
-    if (entry.endReason === "supporter-kicked") return "kicked from squad"
-    const target = game.players.find(
-      (candidate) => candidate.playerId === entry.supportedPlayerId
+  const timedPlayers = recap.players.filter((stats) => stats.timedTurns > 0)
+  const averageTurnMs = (stats: (typeof recap.players)[number]) =>
+    stats.timedTurns > 0 ? stats.totalTurnMs / stats.timedTurns : 0
+  // Fastest total time on the clock wins the speed board.
+  const speedBoard = [...timedPlayers].sort(
+    (a, b) => a.totalTurnMs - b.totalTurnMs
+  )
+  const ponderer = [...timedPlayers].sort(
+    (a, b) => averageTurnMs(b) - averageTurnMs(a)
+  )[0]
+
+  const mostDrawDealt = [...recap.players].sort(
+    (a, b) => b.drawCardsDealt - a.drawCardsDealt
+  )[0]
+  const mostPunished = [...recap.players].sort(
+    (a, b) => b.penaltyCardsTaken - a.penaltyCardsTaken
+  )[0]
+  const bestCatcher = [...recap.players].sort(
+    (a, b) => b.unoCatches - a.unoCatches
+  )[0]
+  const biggestHand = [...recap.players].sort(
+    (a, b) => b.peakHandSize - a.peakHandSize
+  )[0]
+
+  // Named titles rather than raw numbers — the bit people screenshot. Only
+  // awards that actually happened are shown, so a quiet match stays honest.
+  const topBy = (pick: (stats: (typeof recap.players)[number]) => number) => {
+    const best = [...recap.players].sort((a, b) => pick(b) - pick(a))[0]
+    return best && pick(best) > 0 ? { stats: best, value: pick(best) } : null
+  }
+
+  const awards = (
+    [
+      {
+        key: "engine",
+        emoji: "🚀",
+        title: "Main character",
+        blurb: "played the most",
+        top: topBy((stats) => stats.cardsPlayed),
+      },
+      {
+        key: "hoarder",
+        emoji: "🗄️",
+        title: "Collector",
+        blurb: "drew the most",
+        top: topBy((stats) => stats.cardsDrawn),
+      },
+      {
+        key: "villain",
+        emoji: "😈",
+        title: "Public enemy",
+        blurb: "dealt the most draw",
+        top: topBy((stats) => stats.drawCardsDealt),
+      },
+      {
+        key: "sheriff",
+        emoji: "🚨",
+        title: "Sheriff",
+        blurb: "caught the most UNOs",
+        top: topBy((stats) => stats.unoCatches),
+      },
+      {
+        key: "butterfingers",
+        emoji: "🫠",
+        title: "Butterfingers",
+        blurb: "caught out the most",
+        top: topBy((stats) => stats.timesCaught),
+      },
+      {
+        key: "wildcard",
+        emoji: "🌈",
+        title: "Wildcard",
+        blurb: "most wilds played",
+        top: topBy((stats) => stats.wildsPlayed),
+      },
+      {
+        key: "trafficcop",
+        emoji: "🛑",
+        title: "Traffic cop",
+        blurb: "most skips and reverses",
+        top: topBy((stats) => stats.skipsPlayed + stats.reversesPlayed),
+      },
+      {
+        key: "loudmouth",
+        emoji: "📣",
+        title: "Loudmouth",
+        blurb: "called UNO the most",
+        top: topBy((stats) => stats.unosCalled),
+      },
+    ] as const
+  )
+    .filter((award) => award.top !== null)
+    .map((award) => ({
+      title: award.title,
+      emoji: award.emoji,
+      blurb: award.blurb,
+      playerId: (award.top as NonNullable<typeof award.top>).stats.playerId,
+    }))
+
+  function changeSlide(delta: number) {
+    setSlide((current) =>
+      Math.max(0, Math.min(slides.length - 1, current + delta))
     )
-    if (target?.winnerPlacement) {
-      return `finished #${target.winnerPlacement.position}`
-    }
-    if (target?.eliminated) return "eliminated"
-    if (entry.endReason === "match-finished") return "match ended"
-    return null
   }
 
   return (
     <div
       className={
         (compact ? "mt-1 p-2" : "mt-2 p-3") +
-        " shrink-0 rounded-xl border border-amber-200/15 bg-amber-300/[0.07]"
+        " min-h-0 flex-1 overflow-hidden rounded-xl border border-white/10 bg-black/28"
       }
+      onPointerDown={(event) => {
+        swipeStartRef.current = { x: event.clientX, y: event.clientY }
+      }}
+      onPointerUp={(event) => {
+        const start = swipeStartRef.current
+        swipeStartRef.current = null
+        if (!start) return
+        const dx = event.clientX - start.x
+        if (
+          Math.abs(dx) < 48 ||
+          Math.abs(dx) <= Math.abs(event.clientY - start.y)
+        ) {
+          return
+        }
+        changeSlide(dx < 0 ? 1 : -1)
+      }}
     >
-      <p className="text-[10px] font-semibold tracking-[0.14em] text-amber-50/64 uppercase">
-        Support recap
-      </p>
-      <div className="mt-1 space-y-1 text-[11px] text-white/70">
-        {journeys.map(([supporterPlayerId, entries]) => (
-          <div
-            key={supporterPlayerId}
-            className="flex items-center gap-1 overflow-x-auto rounded-lg border border-white/8 bg-black/18 px-2 py-1.5"
-          >
-            <span className="shrink-0 font-semibold text-white/82">
-              {name(supporterPlayerId)}
-            </span>
-            {entries.map((entry, index) => (
-              <span
-                key={`${entry.supportedPlayerId}:${entry.createdAt}`}
-                className="flex shrink-0 items-center gap-1"
-              >
-                <span className="text-white/32">→</span>
-                <span>{name(entry.supportedPlayerId)}</span>
-                {outcome(entry) && (
-                  <span className="text-white/42">({outcome(entry)})</span>
-                )}
-                {index < entries.length - 1 && (
-                  <span className="text-amber-200/42">then</span>
-                )}
-              </span>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[10px] font-semibold tracking-[0.14em] text-amber-50/64 uppercase">
+          {slides[safeSlide]}
+        </p>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-white/38 tabular-nums">
+            {durationLabel} · {recap.totalCardsPlayed} played
+          </span>
+          <div className="flex items-center gap-1">
+            {slides.map((label, index) => (
+              <button
+                key={label}
+                type="button"
+                aria-label={`Show ${label}`}
+                onClick={() => setSlide(index)}
+                className={
+                  "h-1 rounded-full transition-[width,background-color] " +
+                  (index === safeSlide
+                    ? "w-4 bg-white/75"
+                    : "w-1.5 bg-white/25")
+                }
+              />
             ))}
           </div>
-        ))}
+        </div>
       </div>
-      <div className="mt-1 flex gap-1.5 overflow-x-auto text-[11px]">
-        {recap.titles.map((title) => (
-          <span
-            key={`${title.label}:${title.playerId}`}
-            className="shrink-0 rounded-full bg-white px-2 py-1 font-semibold text-neutral-950"
-          >
-            {title.label}: {name(title.playerId)}
-          </span>
-        ))}
+
+      <div className="uno-scrollbar mt-1.5 max-h-full overflow-y-auto">
+        {safeSlide === 0 && (
+          <ol className="space-y-1">
+            {recap.players.map((stats) => (
+              <li
+                key={stats.playerId}
+                className={
+                  "flex items-center gap-2 rounded-lg px-2 py-1 text-[11px] " +
+                  (stats.playerId === selfPlayerId
+                    ? "bg-white/[0.07] text-white/88"
+                    : "text-white/70")
+                }
+              >
+                <span className="w-5 shrink-0 text-center font-semibold text-white/45 tabular-nums">
+                  {stats.finishPosition ?? "—"}
+                </span>
+                {placementCrownFor(stats.finishPosition) ? (
+                  <PlacementCrown
+                    placement={stats.finishPosition as number}
+                    className="size-4 shrink-0"
+                  />
+                ) : (
+                  <span className="size-4 shrink-0" />
+                )}
+                <span className="min-w-0 flex-1 truncate font-medium">
+                  {nameFor(stats.playerId)}
+                  {stats.playerId === selfPlayerId ? " · You" : ""}
+                </span>
+                <span className="shrink-0 text-white/45 tabular-nums">
+                  {stats.cardsPlayed} played · {stats.cardsDrawn} drawn
+                </span>
+              </li>
+            ))}
+          </ol>
+        )}
+
+        {safeSlide === 1 && (
+          <div className="space-y-1.5">
+            <p className="text-[10px] text-white/38">
+              How each player spent the match — cards they got rid of versus
+              cards the table forced on them.
+            </p>
+            {recap.players.map((stats) => (
+              <div key={stats.playerId} className="text-[11px]">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="min-w-0 truncate font-medium text-white/78">
+                    {nameFor(stats.playerId)}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-2 tabular-nums">
+                    <span className="text-emerald-300/80">
+                      {stats.cardsPlayed} played
+                    </span>
+                    <span className="text-red-300/75">
+                      {stats.cardsDrawn} drawn
+                    </span>
+                  </span>
+                </div>
+                <div className="mt-0.5 flex h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
+                  <span
+                    className="bg-emerald-400/70"
+                    style={{
+                      width: `${(stats.cardsPlayed / busiest) * 100}%`,
+                    }}
+                  />
+                  <span
+                    className="bg-red-400/60"
+                    style={{
+                      width: `${(stats.cardsDrawn / busiest) * 100}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {safeSlide === 2 && (
+          <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+            <RecapStat
+              label="Biggest stack"
+              value={
+                recap.biggestDrawStack > 0 ? `+${recap.biggestDrawStack}` : "—"
+              }
+            />
+            <RecapStat
+              label="Worst beating"
+              value={
+                mostPunished && mostPunished.penaltyCardsTaken > 0
+                  ? `${nameFor(mostPunished.playerId)} · ${mostPunished.penaltyCardsTaken}`
+                  : "Nobody"
+              }
+            />
+            <RecapStat
+              label="Most damage dealt"
+              value={
+                mostDrawDealt && mostDrawDealt.drawCardsDealt > 0
+                  ? `${nameFor(mostDrawDealt.playerId)} · +${mostDrawDealt.drawCardsDealt}`
+                  : "Nobody"
+              }
+            />
+            <RecapStat
+              label="UNO catches"
+              value={
+                bestCatcher && bestCatcher.unoCatches > 0
+                  ? `${nameFor(bestCatcher.playerId)} · ${bestCatcher.unoCatches}`
+                  : "None"
+              }
+            />
+            <RecapStat
+              label="Fattest hand"
+              value={
+                biggestHand
+                  ? `${nameFor(biggestHand.playerId)} · ${biggestHand.peakHandSize}`
+                  : "—"
+              }
+            />
+            <RecapStat
+              label="Chaos"
+              value={`${recap.handsSwapped} swaps · ${recap.handsRotated} cycles`}
+            />
+            <RecapStat
+              label="Slowest hand"
+              value={
+                ponderer
+                  ? `${nameFor(ponderer.playerId)} · ${formatTurnSeconds(averageTurnMs(ponderer))}/turn`
+                  : "—"
+              }
+            />
+          </div>
+        )}
+
+        {safeSlide === 4 && (
+          <div className="space-y-1">
+            {speedBoard.length === 0 ? (
+              <p className="py-3 text-center text-[11px] text-white/40">
+                Nobody took a timed turn.
+              </p>
+            ) : (
+              <>
+                <p className="text-[10px] text-white/38">
+                  Total time on the clock across the match — fastest first.
+                </p>
+                {speedBoard.map((stats, index) => (
+                  <div
+                    key={stats.playerId}
+                    className={
+                      "flex items-center gap-2 rounded-lg px-2 py-1 text-[11px] " +
+                      (stats.playerId === selfPlayerId
+                        ? "bg-white/[0.07] text-white/88"
+                        : "text-white/72")
+                    }
+                  >
+                    <span className="w-5 shrink-0 text-center font-semibold text-white/45 tabular-nums">
+                      {index + 1}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate font-medium">
+                      {nameFor(stats.playerId)}
+                      {stats.playerId === selfPlayerId ? " · You" : ""}
+                    </span>
+                    <span className="shrink-0 text-white/45 tabular-nums">
+                      {formatTurnClock(stats.totalTurnMs)} ·{" "}
+                      {formatTurnSeconds(averageTurnMs(stats))}/turn
+                    </span>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        )}
+
+        {safeSlide === 3 && (
+          <div className="space-y-1">
+            {awards.length === 0 ? (
+              <p className="py-3 text-center text-[11px] text-white/40">
+                Nothing worth a medal this round.
+              </p>
+            ) : (
+              awards.map((award) => (
+                <div
+                  key={award.title}
+                  className="flex items-center gap-2 rounded-lg border border-white/8 bg-black/24 px-2 py-1.5 text-[11px]"
+                >
+                  <span className="shrink-0 text-base leading-none">
+                    {award.emoji}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="font-semibold text-white/84">
+                      {award.title}
+                    </span>
+                    <span className="ml-1.5 text-white/40">{award.blurb}</span>
+                  </span>
+                  <span className="shrink-0 truncate font-medium text-amber-100/85">
+                    {nameFor(award.playerId)}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+        )}
       </div>
+
+      {/* The dots are far too small to hit on a phone, so the slides get real
+          buttons underneath. */}
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={() => changeSlide(-1)}
+          disabled={safeSlide === 0}
+          className="h-8 flex-1 rounded-lg border border-white/10 bg-white/[0.05] text-xs font-medium text-white/72 transition-colors hover:bg-white/[0.09] disabled:cursor-not-allowed disabled:opacity-30"
+        >
+          ‹ Back
+        </button>
+        <span className="shrink-0 text-[10px] text-white/38 tabular-nums">
+          {safeSlide + 1}/{slides.length}
+        </span>
+        <button
+          type="button"
+          onClick={() => changeSlide(1)}
+          disabled={safeSlide === slides.length - 1}
+          className="h-8 flex-1 rounded-lg border border-white/10 bg-white/[0.05] text-xs font-medium text-white/72 transition-colors hover:bg-white/[0.09] disabled:cursor-not-allowed disabled:opacity-30"
+        >
+          Next ›
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/** m:ss for a whole match's worth of thinking. */
+function formatTurnClock(totalMs: number) {
+  const totalSeconds = Math.round(totalMs / 1000)
+  const minutes = Math.floor(totalSeconds / 60)
+  const seconds = totalSeconds % 60
+  return minutes > 0
+    ? `${minutes}m ${String(seconds).padStart(2, "0")}s`
+    : `${seconds}s`
+}
+
+/** Seconds with one decimal, for a per-turn average. */
+function formatTurnSeconds(averageMs: number) {
+  return `${(averageMs / 1000).toFixed(1)}s`
+}
+
+function RecapStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-white/8 bg-black/24 px-2 py-1.5">
+      <p className="text-[9px] tracking-wide text-white/38 uppercase">
+        {label}
+      </p>
+      <p className="mt-0.5 truncate font-medium text-white/82">{value}</p>
     </div>
   )
 }
@@ -2464,6 +3472,8 @@ function TableChatPanel({
   squadMemberIds = [],
   selfPlayerId,
   error,
+  collapsed = false,
+  onToggleCollapsed,
   onSendMessage,
   onStartVoteKick,
   onCastVoteKick,
@@ -2477,6 +3487,8 @@ function TableChatPanel({
   squadMemberIds?: Array<string>
   selfPlayerId: string
   error: string | null
+  collapsed?: boolean
+  onToggleCollapsed?: () => void
   onSendMessage: (input: SendChatMessageInput) => void
   onStartVoteKick?: (targetPlayerId: string) => void
   onCastVoteKick?: (voteKickId: string, choice: VoteKickChoice) => void
@@ -2496,6 +3508,7 @@ function TableChatPanel({
     squadMention,
     text,
     tray,
+    unreadMessageCount,
   } = useChannelChat({
     messages,
     squadMessages,
@@ -2503,9 +3516,35 @@ function TableChatPanel({
     players,
     squadMemberIds,
     selfPlayerId,
-    isReading: true,
+    // Collapsed means nobody is reading, so unread piles up until reopened.
+    isReading: !collapsed,
     onSendMessage,
   })
+
+  if (collapsed) {
+    return (
+      <aside className="hidden min-h-0 items-start justify-center rounded-2xl border border-white/10 bg-white/[0.035] p-1.5 shadow-[0_18px_56px_rgba(0,0,0,0.28)] lg:flex xl:items-start">
+        <button
+          type="button"
+          onClick={onToggleCollapsed}
+          title="Open match chat"
+          aria-label={
+            unreadMessageCount > 0
+              ? `Open match chat, ${unreadMessageCount} unread message${unreadMessageCount === 1 ? "" : "s"}`
+              : "Open match chat"
+          }
+          className="relative grid size-9 place-items-center rounded-full border border-white/10 bg-black/28 text-white/72 transition-[background-color,border-color,color] hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
+        >
+          <MessageCircle className="size-4" strokeWidth={1.9} />
+          {unreadMessageCount > 0 && (
+            <span className="absolute -top-1 -right-1 grid min-w-4 place-items-center rounded-full bg-red-500 px-1 text-[9px] font-semibold text-white tabular-nums shadow-[0_6px_16px_rgba(0,0,0,0.4)]">
+              {Math.min(unreadMessageCount, 99)}
+            </span>
+          )}
+        </button>
+      </aside>
+    )
+  }
 
   return (
     <aside className="hidden min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035] p-2 shadow-[0_18px_56px_rgba(0,0,0,0.28)] lg:flex xl:p-3">
@@ -2521,9 +3560,22 @@ function TableChatPanel({
             </p>
           </div>
         </div>
-        <span className="rounded-full border border-white/10 bg-black/26 px-2 py-1 text-[11px] text-white/52 tabular-nums">
-          {channelMessages.length}
-        </span>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <span className="rounded-full border border-white/10 bg-black/26 px-2 py-1 text-[11px] text-white/52 tabular-nums">
+            {channelMessages.length}
+          </span>
+          {onToggleCollapsed && (
+            <button
+              type="button"
+              onClick={onToggleCollapsed}
+              title="Collapse match chat"
+              aria-label="Collapse match chat"
+              className="grid size-7 place-items-center rounded-full border border-white/10 bg-black/26 text-white/60 hover:border-white/20 hover:bg-white/[0.08] hover:text-white"
+            >
+              <PanelRightClose className="size-3.5" strokeWidth={1.9} />
+            </button>
+          )}
+        </div>
       </div>
 
       <ChatChannelTabs
@@ -2793,6 +3845,7 @@ function MobileSeatingRing({
   room,
   game,
   selfPlayerId,
+  crownPlayerId,
   voiceStates,
   canTakeDrawPenalty,
   onTakeDrawPenalty,
@@ -2803,6 +3856,7 @@ function MobileSeatingRing({
   room: RoomSnapshot
   game: RoomSnapshot["game"]
   selfPlayerId: string
+  crownPlayerId: string | null
   voiceStates: RoomVoiceController["voiceStates"]
   canTakeDrawPenalty: boolean
   onTakeDrawPenalty: () => void
@@ -2841,8 +3895,18 @@ function MobileSeatingRing({
             : null
         const handCount = state?.handCount ?? 0
         const isWinner = winnerPlacement?.position === 1
+        const mobilePlacementCrown = placementCrownFor(
+          winnerPlacement?.position
+        )
         const fadedOpacity =
           eliminated || voteKicked || waiting || !candidate.connected
+        // A packed ring has no room for full names, but an empty nameplate
+        // makes seven identical seats unreadable — initials keep it legible.
+        const seatLabel = isYou
+          ? "You"
+          : dense
+            ? playerInitials(candidate.name)
+            : candidate.name
         const spectators =
           game?.supportLinks
             .filter((link) => link.supportedPlayerId === candidate.id)
@@ -2922,7 +3986,9 @@ function MobileSeatingRing({
           >
             <div
               className={
-                "relative grid place-items-center rounded-lg border bg-white/[0.06] text-white/82 transition-transform duration-300 " +
+                // Round to match the avatar inside it — a square frame around a
+                // circular portrait left visible corners.
+                "relative grid place-items-center rounded-full border bg-white/[0.06] text-white/82 transition-transform duration-300 " +
                 (dense ? "size-8" : "size-9") +
                 " " +
                 ringClass +
@@ -2940,14 +4006,14 @@ function MobileSeatingRing({
                     <X className="size-4 text-red-100" strokeWidth={2.4} />
                   ) : waiting ? (
                     <Clock className="size-4 text-sky-100" strokeWidth={2.2} />
-                  ) : winnerPlacement ? (
+                  ) : winnerPlacement && !isWinner ? (
                     <Trophy className="size-4" strokeWidth={2.1} />
                   ) : (
-                    <img
-                      src={avatarUrls.get(candidate.id) ?? PLAYER_AVATARS[0]}
-                      alt={`${candidate.name} avatar`}
-                      draggable={false}
+                    <PlayerAvatar
+                      name={candidate.name}
+                      src={avatarUrls.get(candidate.id) ?? PLAYER_AVATARS[0]!}
                       className="size-full rounded-[inherit] object-cover"
+                      initialsClassName={dense ? "text-[10px]" : "text-[11px]"}
                     />
                   )
                 }
@@ -2981,6 +4047,17 @@ function MobileSeatingRing({
                   <span className="tabular-nums">{supporterCount}</span>
                 </span>
               )}
+              {/* Left of centre so it clears the placement badge pinned to
+                  the top-right corner. */}
+              {(mobilePlacementCrown || candidate.id === crownPlayerId) && (
+                <PlacementCrown
+                  placement={mobilePlacementCrown ?? 1}
+                  className="absolute -top-4 -left-2 z-20 h-6 w-8 -rotate-12"
+                  title={
+                    mobilePlacementCrown ? undefined : "Won the last match"
+                  }
+                />
+              )}
               <span
                 className={
                   "absolute -right-1 -bottom-1 grid size-4 place-items-center rounded-full border bg-neutral-950/95 transition-[border-color,color] " +
@@ -3008,17 +4085,18 @@ function MobileSeatingRing({
             <p
               className={
                 "mt-0.5 w-full truncate text-center font-medium " +
-                (dense ? "text-[9px]" : "text-[10px]") +
+                (dense ? "text-[9px] tracking-wide" : "text-[10px]") +
                 " " +
                 (active ? "text-amber-50" : "text-white/78")
               }
+              title={candidate.name}
             >
-              {isYou ? "You" : candidate.name}
+              {seatLabel}
             </p>
             {spectators.length > 0 && (
               <div
                 className="mt-0.5 flex max-w-[84px] flex-wrap justify-center gap-0.5"
-                title={`Spectating: ${supporterNames.join(", ")}`}
+                title={`Spectating: ${spectators.map((spectator) => spectator.name).join(", ")}`}
               >
                 {spectators.slice(0, 3).map((spectator) => (
                   <span
@@ -4311,6 +5389,34 @@ function useSecondTick(active: boolean) {
 }
 
 function FirstPlaceCelebration({ playerName }: { playerName: string }) {
+  // Centred on the table itself rather than the viewport — a win belongs over
+  // the board, not floating somewhere above it.
+  const [tableRect, setTableRect] = useState<{
+    left: number
+    top: number
+    width: number
+    height: number
+  } | null>(null)
+
+  useEffect(() => {
+    function measure() {
+      const table = document.querySelector<HTMLElement>(
+        '[data-table-surface="true"]'
+      )
+      if (!table) return setTableRect(null)
+      const rect = table.getBoundingClientRect()
+      setTableRect({
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height,
+      })
+    }
+    measure()
+    window.addEventListener("resize", measure)
+    return () => window.removeEventListener("resize", measure)
+  }, [])
+
   return (
     <div className="pointer-events-none fixed inset-0 z-50 overflow-hidden">
       <SideCannonConfetti />
@@ -4326,7 +5432,19 @@ function FirstPlaceCelebration({ playerName }: { playerName: string }) {
         `}
       </style>
 
-      <div className="absolute inset-0 flex items-center justify-center p-4 sm:items-start sm:pt-[18dvh]">
+      <div
+        className="absolute flex items-center justify-center p-4"
+        style={
+          tableRect
+            ? {
+                left: tableRect.left,
+                top: tableRect.top,
+                width: tableRect.width,
+                height: tableRect.height,
+              }
+            : { inset: 0 }
+        }
+      >
         <div
           className="flex max-w-[calc(100vw-2rem)] min-w-[280px] items-center gap-4 rounded-2xl border border-amber-100/38 bg-neutral-950/86 px-5 py-4 shadow-[0_24px_80px_rgba(0,0,0,0.48),0_0_70px_rgba(251,191,36,0.22)] backdrop-blur-md"
           style={{
@@ -4334,8 +5452,8 @@ function FirstPlaceCelebration({ playerName }: { playerName: string }) {
               "uno-trophy-pop 3.4s cubic-bezier(0.16, 1, 0.3, 1) forwards",
           }}
         >
-          <div className="relative grid size-16 shrink-0 place-items-center rounded-full border border-amber-100/50 bg-amber-300 text-amber-950 shadow-[0_0_34px_rgba(251,191,36,0.36)]">
-            <Trophy className="size-8" strokeWidth={2.2} />
+          <div className="relative grid size-16 shrink-0 place-items-center">
+            <CrownBadge className="size-16" />
             <span className="absolute -bottom-1 rounded-full border border-amber-100/50 bg-neutral-950 px-2 py-0.5 text-[11px] font-bold text-amber-100">
               #1
             </span>
@@ -4450,6 +5568,7 @@ function TableSeatRing({
   room,
   game,
   selfPlayerId,
+  crownPlayerId,
   canTakeDrawPenalty,
   onTakeDrawPenalty,
   compact,
@@ -4462,6 +5581,7 @@ function TableSeatRing({
   room: RoomSnapshot
   game: RoomSnapshot["game"]
   selfPlayerId: string
+  crownPlayerId: string | null
   canTakeDrawPenalty: boolean
   onTakeDrawPenalty: () => void
   compact: boolean
@@ -4536,6 +5656,7 @@ function TableSeatRing({
             winnerPlacement={state?.winnerPlacement ?? null}
             connected={candidate.connected}
             isYou={candidate.id === selfPlayerId}
+            wearsCrown={candidate.id === crownPlayerId}
             isStaging={game?.stagedPlay?.playerId === candidate.id}
             voiceState={voiceStates[candidate.id]}
             drawStack={
@@ -4649,6 +5770,7 @@ function TableAvatarSeat({
   winnerPlacement,
   connected,
   isYou,
+  wearsCrown,
   isStaging,
   voiceState,
   drawStack,
@@ -4679,6 +5801,8 @@ function TableAvatarSeat({
   > | null
   connected: boolean
   isYou: boolean
+  /** Won the previous match: seats the table and starts the next one. */
+  wearsCrown?: boolean
   isStaging: boolean
   voiceState?: RoomVoiceController["voiceStates"][string]
   drawStack: NonNullable<RoomSnapshot["game"]>["drawStack"] | null
@@ -4695,6 +5819,7 @@ function TableAvatarSeat({
     ? `${ordinalLabel(winnerPlacement.position)} place`
     : null
   const isFirstPlace = winnerPlacement?.position === 1
+  const placementCrown = placementCrownFor(winnerPlacement?.position)
   const isUno = declaredUno && !winnerPlacement && !eliminated && !waiting
   const supporterNames = spectators.map((spectator) => spectator.name)
   const hasVoiceOn = Boolean(voiceState?.enabled)
@@ -4755,19 +5880,6 @@ function TableAvatarSeat({
                         : "border-white/12 bg-black/38")
         }
       >
-        {winnerPlacement && (
-          <div
-            className={
-              "absolute -top-2 -right-2 grid size-8 place-items-center rounded-full border shadow-[0_8px_18px_rgba(0,0,0,0.28)] " +
-              (isFirstPlace
-                ? "border-amber-100/70 bg-amber-300 text-amber-950"
-                : "border-white/16 bg-neutral-900 text-white/70")
-            }
-            aria-label={`${placementText} trophy`}
-          >
-            <Trophy className="size-4" strokeWidth={2.2} />
-          </div>
-        )}
         {supporterCount > 0 && (
           <div
             className="absolute -top-2 -left-2 inline-flex items-center gap-1 rounded-full border border-white/12 bg-black/45 px-1.5 py-0.5 text-[10px] font-semibold text-white/65 shadow-[0_8px_18px_rgba(0,0,0,0.2)] backdrop-blur-md"
@@ -4781,43 +5893,53 @@ function TableAvatarSeat({
             <span className="tabular-nums">{supporterCount}</span>
           </div>
         )}
-        <div
-          className={
-            "grid size-9 shrink-0 place-items-center overflow-hidden rounded-full border transition-[background-color,border-color,color,box-shadow] sm:size-12 " +
-            (winnerPlacement
-              ? isFirstPlace
-                ? "border-amber-100/75 bg-amber-100/24 text-amber-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.32),0_0_28px_rgba(252,211,77,0.28)]"
-                : "border-white/18 bg-white/[0.08] text-white/74"
-              : voteKicked
-                ? "border-red-200/70 bg-red-400/18 text-red-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.24),0_0_24px_rgba(248,113,113,0.24)]"
-                : waiting
-                  ? "border-sky-100/45 bg-sky-300/14 text-sky-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_0_20px_rgba(125,211,252,0.18)]"
-                  : active
-                    ? "border-amber-100/65 bg-amber-100/24 text-amber-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_0_24px_rgba(252,211,77,0.24)]"
-                    : isUno
-                      ? "border-yellow-100/70 bg-red-400/[0.18] text-yellow-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.24),0_0_24px_rgba(250,204,21,0.22)]"
-                      : "border-white/12 bg-white/[0.075] text-white/74")
-          }
-        >
-          <ReactionAvatarContent
-            reaction={latestReaction}
-            emojiClassName="text-3xl sm:text-4xl"
-            fallback={
-              waiting ? (
-                <Clock
-                  className="size-5 text-sky-100 sm:size-6"
-                  strokeWidth={2.2}
-                />
-              ) : (
-                <img
-                  src={avatarUrl}
-                  alt={`${player.name} avatar`}
-                  draggable={false}
-                  className="size-full rounded-full object-cover"
-                />
-              )
+        {/* The crown belongs on the head, so it hangs off the avatar rather
+            than floating over the whole card. */}
+        <div className="relative shrink-0">
+          {placementCrown && (
+            <PlacementCrown
+              placement={placementCrown}
+              className="absolute -top-4 -left-1 z-20 h-6 w-8 -rotate-12 sm:-top-5 sm:h-8 sm:w-10"
+            />
+          )}
+          {!placementCrown && wearsCrown && (
+            <PlacementCrown
+              placement={1}
+              className="absolute -top-4 -left-1 z-20 h-6 w-8 -rotate-12 opacity-80 sm:-top-5 sm:h-8 sm:w-10"
+              title="Won the last match"
+            />
+          )}
+          <div
+            className={
+              "grid size-9 place-items-center overflow-hidden rounded-full border transition-[background-color,border-color,color,box-shadow] sm:size-12 " +
+              (winnerPlacement
+                ? isFirstPlace
+                  ? "border-amber-100/75 bg-amber-100/24 text-amber-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.32),0_0_28px_rgba(252,211,77,0.28)]"
+                  : "border-white/18 bg-white/[0.08] text-white/74"
+                : voteKicked
+                  ? "border-red-200/70 bg-red-400/18 text-red-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.24),0_0_24px_rgba(248,113,113,0.24)]"
+                  : waiting
+                    ? "border-sky-100/45 bg-sky-300/14 text-sky-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.18),0_0_20px_rgba(125,211,252,0.18)]"
+                    : active
+                      ? "border-amber-100/65 bg-amber-100/24 text-amber-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.25),0_0_24px_rgba(252,211,77,0.24)]"
+                      : isUno
+                        ? "border-yellow-100/70 bg-red-400/[0.18] text-yellow-50 shadow-[inset_0_1px_0_rgba(255,255,255,0.24),0_0_24px_rgba(250,204,21,0.22)]"
+                        : "border-white/12 bg-white/[0.075] text-white/74")
             }
-          />
+          >
+            <ReactionAvatarContent
+              reaction={latestReaction}
+              emojiClassName="text-3xl sm:text-4xl"
+              fallback={
+                <PlayerAvatar
+                  name={player.name}
+                  src={avatarUrl}
+                  className="size-full rounded-full object-cover"
+                  initialsClassName="text-xs sm:text-sm"
+                />
+              }
+            />
+          </div>
         </div>
         <div className="min-w-0 flex-1">
           <p className="truncate text-xs font-semibold text-white/86">
@@ -5201,19 +6323,19 @@ function DeckStack({
   const cardScale = denseCompact ? 0.88 : 1
   const showRoulette = rouletteMode && Boolean(onDrawRoulette)
 
-  const buttonLabel = showRoulette
-    ? "Draw card"
-    : alreadyDrawn
-      ? "Drawn"
-      : "Draw one"
+  const buttonLabel = alreadyDrawn && !showRoulette ? "Drawn" : "Draw"
   const handleClick = showRoulette ? onDrawRoulette : onDraw
   const buttonDisabled = showRoulette ? false : !canDraw
-  const buttonClass = showRoulette
-    ? "rounded-lg border border-amber-200/55 bg-amber-300/22 font-semibold text-amber-50 shadow-[0_0_0_3px_rgba(252,211,77,0.18)] transition-[background-color,border-color,color,transform] hover:border-amber-200/75 hover:bg-amber-300/32 active:scale-[0.96]"
-    : "rounded-lg border border-white/12 bg-black/35 font-medium text-white/84 transition-[background-color,border-color,color,transform] hover:border-white/22 hover:bg-white/10 hover:text-white active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-45"
+  // Sitting on top of the card art, so it needs its own dark, heavily blurred
+  // ground to stay readable against the red oval and the black border alike.
+  const buttonClass =
+    "rounded-full border backdrop-blur-2xl backdrop-saturate-150 font-semibold tracking-wide shadow-[0_10px_28px_rgba(0,0,0,0.55)] transition-[background-color,border-color,opacity,transform] active:scale-[0.96] " +
+    (showRoulette
+      ? "border-amber-200/60 bg-amber-950/72 text-amber-50 hover:bg-amber-900/78"
+      : "border-white/28 bg-black/62 text-white hover:border-white/40 hover:bg-black/72 disabled:cursor-not-allowed disabled:border-white/20 disabled:bg-black/60 disabled:text-white/80")
   const buttonSize = denseCompact
-    ? "h-7 px-2 text-[11px]"
-    : "h-8 px-2.5 text-xs sm:h-9 sm:px-3 sm:text-sm"
+    ? "h-6 px-2.5 text-[10px]"
+    : "h-7 px-3 text-[11px] sm:h-8 sm:px-4 sm:text-xs"
 
   return (
     <div
@@ -5223,14 +6345,13 @@ function DeckStack({
         (denseCompact ? "gap-1" : "gap-1.5 sm:gap-2")
       }
     >
+      {/* Deck and discard share one box height so their captions line up. */}
       <div
-        className={
-          compact
-            ? denseCompact
-              ? "relative h-[94px] w-[72px]"
-              : "relative h-[112px] w-[82px]"
-            : "relative h-[178px] w-[128px]"
-        }
+        className="relative"
+        style={{
+          height: pileBoxHeight(size, dense),
+          width: compact ? (denseCompact ? 72 : 82) : 128,
+        }}
       >
         {[0, 1, 2, 3].map((layer) => (
           <div
@@ -5250,15 +6371,22 @@ function DeckStack({
         >
           <UnoCard card={cardBackPlaceholder} faceDown size={size} static />
         </div>
+        {/* Sitting on the card rather than under it saves a row of height. */}
+        <button
+          type="button"
+          disabled={buttonDisabled}
+          onClick={handleClick}
+          className={
+            // Sits below the UNO wordmark rather than across it.
+            "absolute top-[68%] left-1/2 z-20 -translate-x-1/2 -translate-y-1/2 " +
+            buttonClass +
+            " " +
+            buttonSize
+          }
+        >
+          {buttonLabel}
+        </button>
       </div>
-      <button
-        type="button"
-        disabled={buttonDisabled}
-        onClick={handleClick}
-        className={buttonClass + " " + buttonSize}
-      >
-        {buttonLabel}
-      </button>
       {showRoulette && rouletteColor ? (
         <p
           className={
@@ -5287,6 +6415,12 @@ function DeckStack({
   )
 }
 
+/** Shared so the deck and the discard pile keep a common baseline. */
+function pileBoxHeight(size: ResponsiveCardSize, dense: boolean) {
+  if (size !== "sm") return 178
+  return dense ? 94 : 112
+}
+
 function DiscardStack({
   card,
   size,
@@ -5308,13 +6442,11 @@ function DiscardStack({
       }
     >
       <div
-        className={
-          compact
-            ? denseCompact
-              ? "relative h-[94px] w-[68px]"
-              : "relative h-[102px] w-[72px]"
-            : "relative h-[170px] w-[120px]"
-        }
+        className="relative"
+        style={{
+          height: pileBoxHeight(size, dense),
+          width: compact ? (denseCompact ? 68 : 72) : 120,
+        }}
       >
         <div className="absolute inset-0 translate-x-2 translate-y-1.5 rounded-xl border border-black/40 bg-black/24 sm:translate-x-3 sm:translate-y-2 sm:rounded-2xl" />
         <div className="absolute inset-0 translate-x-1 translate-y-0.5 rounded-xl border border-black/30 bg-white/8 sm:translate-x-1.5 sm:translate-y-1 sm:rounded-2xl" />
@@ -5328,15 +6460,7 @@ function DiscardStack({
             <UnoCard card={card} size={size} static />
           </div>
         ) : (
-          <div
-            className={
-              compact
-                ? denseCompact
-                  ? "h-[94px] w-[68px] rounded-lg border border-white/10 bg-black/20"
-                  : "h-[102px] w-[72px] rounded-lg border border-white/10 bg-black/20"
-                : "h-[170px] w-[120px] rounded-xl border border-white/10 bg-black/20"
-            }
-          />
+          <div className="absolute inset-0 rounded-xl border border-white/10 bg-black/20" />
         )}
       </div>
       <p
@@ -5382,7 +6506,9 @@ function TableStagedPlay({
           ? 0.58
           : 0.66
   const cardScale = isTray && dense ? trayCardScale : dense ? 0.78 : 1
-  const maxWidth = isTray && dense ? 300 : dense ? 320 : 370
+  // The desktop drop zone reads as cramped at 370px, so it gets more room to
+  // fan into now that the table pane can be sized by the player.
+  const maxWidth = isTray && dense ? 300 : dense ? 320 : 470
   const cardVisualWidth = 72 * cardScale
   const baseGap =
     isTray && dense
@@ -5416,7 +6542,7 @@ function TableStagedPlay({
       : "rounded-2xl p-3"
     : dense
       ? "max-w-[340px] rounded-xl p-2"
-      : "max-w-[390px] rounded-2xl p-3"
+      : "max-w-[500px] rounded-2xl p-3"
   const shadowClass = isTray
     ? "shadow-[0_14px_36px_rgba(0,0,0,0.26),inset_0_1px_0_rgba(255,255,255,0.08)]"
     : "shadow-[inset_0_1px_0_rgba(255,255,255,0.1)]"
@@ -5539,30 +6665,137 @@ function TableStagedPlay({
 function DirectionPill({
   direction,
   compact = false,
+  onPreview,
 }: {
   direction: 1 | -1
   compact?: boolean
+  /** Tap to flash the rotation over the table for a beat. */
+  onPreview?: () => void
 }) {
   const clockwise = direction === 1
-  return (
-    <div className="flex items-center gap-1.5 rounded-full border border-white/10 bg-black/28 px-2 py-1.5 text-[11px] font-medium text-white/70 sm:gap-2 sm:px-3 sm:py-2 sm:text-xs">
+  const label = clockwise ? "Clockwise" : "Counter-clockwise"
+  const content = (
+    <>
       <RotateCw
         className={"size-3.5 " + (clockwise ? "" : "-scale-x-100")}
         aria-hidden="true"
       />
-      {compact
-        ? clockwise
-          ? "CW"
-          : "CCW"
-        : clockwise
-          ? "Clockwise"
-          : "Counter-clockwise"}
+      {compact ? (clockwise ? "CW" : "CCW") : label}
+    </>
+  )
+  const className =
+    "flex items-center gap-1.5 rounded-full border border-white/10 bg-black/28 px-2 py-1.5 text-[11px] font-medium text-white/70 sm:gap-2 sm:px-3 sm:py-2 sm:text-xs"
+
+  if (!onPreview) return <div className={className}>{content}</div>
+
+  return (
+    <button
+      type="button"
+      onClick={onPreview}
+      title={`${label} — tap to show the turn order`}
+      aria-label={`${label}. Show the turn order`}
+      className={
+        className +
+        " transition-[background-color,border-color,color] hover:border-white/22 hover:bg-black/40 hover:text-white active:scale-[0.97]"
+      }
+    >
+      {content}
+    </button>
+  )
+}
+
+/**
+ * A one-shot arc drawn between the seats, in turn order, when a player taps
+ * the direction pill. Local to whoever tapped — it answers "which way is it
+ * going?" without pushing anything to the rest of the table.
+ */
+function DirectionPulse({
+  seats,
+  direction,
+  onDone,
+}: {
+  seats: Array<{ playerId: string; left: number; top: number }>
+  direction: 1 | -1
+  onDone: () => void
+}) {
+  useEffect(() => {
+    const timer = window.setTimeout(onDone, 1600)
+    return () => window.clearTimeout(timer)
+  }, [onDone])
+
+  if (seats.length < 2) return null
+
+  const ordered = turnOrderFromSeating(seats, direction)
+  const arcs = ordered.map((seat, index) => {
+    const next = ordered[
+      (index + 1) % ordered.length
+    ] as (typeof ordered)[number]
+    return { from: seat, to: next, index }
+  })
+
+  return (
+    <div
+      // z-40 puts it over the seats, which matters most at a full table.
+      className="pointer-events-none absolute inset-0 z-40"
+      aria-hidden="true"
+    >
+      <style>
+        {`@keyframes uno-direction-arc {
+            0% { opacity: 0; stroke-dashoffset: 100; }
+            25% { opacity: 0.55; }
+            70% { opacity: 0.55; stroke-dashoffset: 0; }
+            100% { opacity: 0; stroke-dashoffset: 0; }
+          }`}
+      </style>
+      <svg
+        viewBox="0 0 100 100"
+        preserveAspectRatio="none"
+        className="size-full overflow-visible"
+      >
+        {arcs.map(({ from, to, index }) => (
+          <line
+            key={`${from.playerId}:${to.playerId}`}
+            x1={from.left}
+            y1={from.top}
+            x2={to.left}
+            y2={to.top}
+            stroke="rgb(74 222 128)"
+            strokeWidth={0.5}
+            strokeLinecap="round"
+            strokeDasharray="100"
+            vectorEffect="non-scaling-stroke"
+            style={{
+              opacity: 0,
+              animation: `uno-direction-arc 1.5s cubic-bezier(0.2,0,0,1) ${index * 110}ms forwards`,
+            }}
+          />
+        ))}
+        {arcs.map(({ from, to, index }) => {
+          const midLeft = (from.left + to.left) / 2
+          const midTop = (from.top + to.top) / 2
+          const angle =
+            (Math.atan2(to.top - from.top, to.left - from.left) * 180) / Math.PI
+          return (
+            <polygon
+              key={`arrow:${from.playerId}:${to.playerId}`}
+              points="-1.6,-1.4 1.8,0 -1.6,1.4"
+              fill="rgb(74 222 128)"
+              transform={`translate(${midLeft} ${midTop}) rotate(${angle})`}
+              style={{
+                opacity: 0,
+                animation: `uno-direction-arc 1.5s cubic-bezier(0.2,0,0,1) ${index * 110 + 90}ms forwards`,
+              }}
+            />
+          )
+        })}
+      </svg>
     </div>
   )
 }
 
 function FannedGameHand({
   cards,
+  hidden = false,
   playableCardIds,
   selectedCardIds,
   hiddenCardIds,
@@ -5576,6 +6809,8 @@ function FannedGameHand({
   onCancelDrag,
 }: {
   cards: Array<Card>
+  /** The match recap takes the tray over once a match ends. */
+  hidden?: boolean
   playableCardIds: Array<string>
   selectedCardIds: Array<string>
   hiddenCardIds?: Array<string>
@@ -5603,9 +6838,14 @@ function FannedGameHand({
   }
 
   const activeDragRef = useRef<ActiveCardDrag | null>(null)
+  const [fanElement, setFanElement] = useState<HTMLDivElement | null>(null)
+  const { width: fanWidth, height: fanHeight } = useElementSize(fanElement)
+  const spreadFactor = useHandSpreadGesture(fanElement)
   const ignoreNextClickRef = useRef(false)
   const [activeDrag, setActiveDragState] = useState<ActiveCardDrag | null>(null)
   const [magnifyId, setMagnifyId] = useState<string | null>(null)
+  const [page, setPage] = useState(0)
+  const swipeStartRef = useRef<{ x: number; y: number } | null>(null)
   const haptic = useWebHaptics()
 
   function setActiveDrag(nextDrag: ActiveCardDrag | null) {
@@ -5632,6 +6872,8 @@ function FannedGameHand({
     : null
   const compact = cardSize === "sm"
 
+  if (hidden) return null
+
   if (!visibleCards.length) {
     return (
       <div className="mt-2 grid min-h-0 flex-1 place-items-center rounded-lg border border-dashed border-white/10 bg-black/10 text-sm text-white/38">
@@ -5640,36 +6882,91 @@ function FannedGameHand({
     )
   }
 
-  const half = (visibleCards.length - 1) / 2
-  const spread = compact
-    ? visibleCards.length <= 8
-      ? 34
-      : visibleCards.length <= 14
-        ? 26
-        : visibleCards.length <= 20
-          ? 20
-          : 15
-    : visibleCards.length <= 8
-      ? 58
-      : visibleCards.length <= 14
-        ? 42
-        : visibleCards.length <= 20
-          ? 30
-          : 22
+  const cardBaseWidth = compact ? 72 : 120
+  const cardBaseHeight = compact ? 102 : 170
+  const arcDepth = compact ? 20 : 34
+
+  // The tray can be dragged to any height, so the fan is sized from the room
+  // it actually has. Without this the cards kept their full size and spilled
+  // over the table once the split was pulled down.
+  const heightBudget = fanHeight > 0 ? fanHeight - FAN_BASELINE_OFFSET : 0
+  const heightScale =
+    heightBudget > 0
+      ? Math.min(1, (heightBudget - arcDepth) / cardBaseHeight)
+      : 1
+  const usableWidth = Math.max(fanWidth - 24, cardBaseWidth * 0.5)
+
+  // Once a hand is so wide that even the tightest fan fills the tray, spreading
+  // further flips it into pages: a readable handful at a time that you swipe
+  // through, and pinching back in returns to the whole hand.
+  const approxCardWidth = cardBaseWidth * DESKTOP_HAND_CARD_SCALE * heightScale
+  const crowded =
+    visibleCards.length > 1 &&
+    (usableWidth - approxCardWidth) / (visibleCards.length - 1) <
+      approxCardWidth * 0.42
+  const paged = crowded && spreadFactor >= PAGE_SPREAD_FACTOR
+  const cardsPerPage = paged
+    ? Math.max(
+        4,
+        Math.min(
+          visibleCards.length,
+          Math.floor(usableWidth / (approxCardWidth * 0.8))
+        )
+      )
+    : visibleCards.length
+  const pageCount = paged ? Math.ceil(visibleCards.length / cardsPerPage) : 1
+  const safePage = Math.min(page, pageCount - 1)
+  const laidOutCards = paged
+    ? visibleCards.slice(safePage * cardsPerPage, (safePage + 1) * cardsPerPage)
+    : visibleCards
+
+  const half = (laidOutCards.length - 1) / 2
   const rotation =
-    visibleCards.length <= 8
+    laidOutCards.length <= 8
       ? compact
         ? 5
         : 6
-      : visibleCards.length <= 14
+      : laidOutCards.length <= 14
         ? 4
         : 2.35
-  const cardScale =
-    !compact && visibleCards.length > 22
+  const baseCrowdScale =
+    !compact && laidOutCards.length > 22
       ? 0.9
-      : !compact && visibleCards.length > 18
+      : !compact && laidOutCards.length > 18
         ? 0.95
-        : 1
+        : DESKTOP_HAND_CARD_SCALE
+  const cardScale = Math.max(
+    MIN_HAND_CARD_SCALE,
+    baseCrowdScale * Math.max(heightScale, MIN_HAND_CARD_SCALE)
+  )
+
+  // Three bounds, in priority order:
+  //   fit   — the widest spread that still fits the tray, so the fan can never
+  //           run past its container however hard it is pinched.
+  //   loose — cards always keep some overlap; fully separated reads as a row
+  //           of loose cards rather than a held hand.
+  //   tight — never so bunched that the corner index is hidden.
+  const visualCardWidth = cardBaseWidth * cardScale
+  const tightSpread = visualCardWidth * 0.24
+  const looseSpread = visualCardWidth * 0.72
+  const fitSpread =
+    laidOutCards.length > 1
+      ? (usableWidth - visualCardWidth) / (laidOutCards.length - 1)
+      : looseSpread
+  const naturalSpread = Math.min(
+    looseSpread,
+    Math.max(tightSpread, fanWidth > 0 ? fitSpread : looseSpread)
+  )
+  const spread = paged
+    ? Math.max(tightSpread, Math.min(looseSpread, fitSpread))
+    : Math.max(
+        tightSpread,
+        Math.min(
+          naturalSpread * spreadFactor,
+          looseSpread,
+          fanWidth > 0 ? Math.max(fitSpread, tightSpread) : looseSpread
+        )
+      )
 
   function canSelectCard(card: Card) {
     return canStageCardWithSelection(
@@ -5686,7 +6983,7 @@ function FannedGameHand({
   }
 
   function startPointerDrag(
-    event: PointerEvent<HTMLElement>,
+    event: ReactPointerEvent<HTMLElement>,
     card: Card,
     cardRotation: number
   ) {
@@ -5709,13 +7006,17 @@ function FannedGameHand({
     })
   }
 
-  function movePointerDrag(event: PointerEvent<HTMLElement>, card: Card) {
+  function movePointerDrag(event: ReactPointerEvent<HTMLElement>, card: Card) {
     const drag = activeDragRef.current
     if (drag?.cardId !== card.id) return
 
     const dx = event.clientX - drag.startX
     const dy = event.clientY - drag.startY
-    const dragging = drag.dragging || Math.hypot(dx, dy) > 8
+    // In paged mode a sideways drag is a page swipe, so only a clearly
+    // vertical pull picks the card up.
+    const dragging =
+      drag.dragging ||
+      (Math.hypot(dx, dy) > 8 && (!paged || Math.abs(dy) > Math.abs(dx)))
 
     if (dragging) event.preventDefault()
     if (dragging && !drag.dragging) onDragStart(card.id)
@@ -5731,7 +7032,7 @@ function FannedGameHand({
     })
   }
 
-  function endPointerDrag(event: PointerEvent<HTMLElement>, card: Card) {
+  function endPointerDrag(event: ReactPointerEvent<HTMLElement>, card: Card) {
     const drag = activeDragRef.current
     if (drag?.cardId !== card.id) return
 
@@ -5745,6 +7046,11 @@ function FannedGameHand({
     }
 
     setActiveDrag(null)
+  }
+
+  function changePage(delta: number) {
+    setPage((current) => Math.max(0, Math.min(pageCount - 1, current + delta)))
+    haptic.trigger("selection")
   }
 
   function handleCardClick(card: Card) {
@@ -5763,7 +7069,7 @@ function FannedGameHand({
     }, 170)
   }
 
-  function cancelPointerDrag(event: PointerEvent<HTMLElement>) {
+  function cancelPointerDrag(event: ReactPointerEvent<HTMLElement>) {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
@@ -5773,20 +7079,35 @@ function FannedGameHand({
 
   return (
     <div
+      ref={setFanElement}
+      // touch-none so the two-finger spread gesture is not swallowed by the
+      // browser's own pan handling.
       className={
-        "mt-2 min-h-0 flex-1 overflow-visible pb-0 transition-opacity " +
+        "mt-2 min-h-0 flex-1 touch-none overflow-visible pb-0 transition-opacity " +
         (isMyTurn ? "opacity-100" : "opacity-45")
       }
+      onPointerDown={(event) => {
+        if (!paged) return
+        swipeStartRef.current = { x: event.clientX, y: event.clientY }
+      }}
+      onPointerUp={(event) => {
+        const start = swipeStartRef.current
+        swipeStartRef.current = null
+        if (!paged || !start) return
+        const dx = event.clientX - start.x
+        const dy = event.clientY - start.y
+        if (Math.abs(dx) < 48 || Math.abs(dx) <= Math.abs(dy)) return
+        changePage(dx < 0 ? 1 : -1)
+      }}
     >
-      <div
-        className={
-          compact
-            ? "relative mx-auto h-full min-h-[112px] max-w-full"
-            : "relative mx-auto h-full min-h-[178px] max-w-full"
-        }
-      >
-        <div className="absolute inset-x-0 bottom-1 flex justify-center">
-          {visibleCards.map((card, index) => {
+      <div className="relative mx-auto h-full max-w-full">
+        {/* The fan arcs downward from its baseline, so the baseline sits clear
+            of the tray floor — otherwise the outermost cards get clipped. */}
+        <div
+          className="absolute inset-x-0 flex justify-center"
+          style={{ bottom: Math.min(FAN_BASELINE_OFFSET, fanHeight * 0.24) }}
+        >
+          {laidOutCards.map((card, index) => {
             const offset = index - half
             const playable = playableCardIds.includes(card.id)
             const stageable = canSelectCard(card)
@@ -5874,6 +7195,42 @@ function FannedGameHand({
             )
           })}
         </div>
+
+        {paged && pageCount > 1 && (
+          <div className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-2">
+            <button
+              type="button"
+              aria-label="Previous cards"
+              disabled={safePage === 0}
+              onClick={() => changePage(-1)}
+              className="grid size-6 place-items-center rounded-full border border-white/10 bg-black/40 text-white/70 disabled:opacity-25"
+            >
+              ‹
+            </button>
+            <div className="flex items-center gap-1">
+              {Array.from({ length: pageCount }, (_, index) => (
+                <span
+                  key={index}
+                  className={
+                    "h-1 rounded-full transition-[width,background-color] " +
+                    (index === safePage
+                      ? "w-4 bg-white/75"
+                      : "w-1.5 bg-white/25")
+                  }
+                />
+              ))}
+            </div>
+            <button
+              type="button"
+              aria-label="More cards"
+              disabled={safePage >= pageCount - 1}
+              onClick={() => changePage(1)}
+              className="grid size-6 place-items-center rounded-full border border-white/10 bg-black/40 text-white/70 disabled:opacity-25"
+            >
+              ›
+            </button>
+          </div>
+        )}
       </div>
       {activeDrag?.dragging &&
         activeDragCard &&
@@ -6287,6 +7644,104 @@ const PLAYER_AVATARS = [
   "/avatars/wolf-blue.png",
 ]
 
+/**
+ * A rendered crown rather than a line icon — the flat glyph read as a sticker
+ * on top of the seat instead of something the winner had earned.
+ */
+/**
+ * The metaphor carries down the podium: gold for the win, silver for second,
+ * bronze for third. Below that a placement is just a number, so no crown.
+ */
+const PLACEMENT_CROWNS: Record<number, { src: string; label: string }> = {
+  1: { src: "/crown.png", label: "1st place" },
+  2: { src: "/crown-silver.png", label: "2nd place" },
+  3: { src: "/crown-bronze.png", label: "3rd place" },
+}
+
+function placementCrownFor(position: number | null | undefined) {
+  if (!position) return null
+  return position in PLACEMENT_CROWNS ? position : null
+}
+
+function PlacementCrown({
+  placement,
+  className,
+  title,
+}: {
+  placement: number
+  className?: string
+  title?: string
+}) {
+  const crown = PLACEMENT_CROWNS[placement]
+  if (!crown) return null
+
+  return (
+    <img
+      src={crown.src}
+      alt=""
+      aria-hidden="true"
+      draggable={false}
+      title={title ?? crown.label}
+      className={
+        "pointer-events-none object-contain drop-shadow-[0_4px_10px_rgba(0,0,0,0.5)] select-none " +
+        (className ?? "size-7")
+      }
+    />
+  )
+}
+
+function CrownBadge({
+  className,
+  title,
+}: {
+  className?: string
+  title?: string
+}) {
+  return <PlacementCrown placement={1} className={className} title={title} />
+}
+
+function PlayerAvatar({
+  name,
+  src,
+  className,
+  initialsClassName,
+}: {
+  name: string
+  src: string
+  className?: string
+  initialsClassName?: string
+}) {
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    setFailed(false)
+  }, [src])
+
+  if (failed) {
+    return (
+      <span
+        aria-label={`${name} avatar`}
+        className={
+          "grid size-full place-items-center rounded-[inherit] bg-white/[0.09] font-semibold tracking-wide text-white/80 " +
+          (initialsClassName ?? "text-[11px]")
+        }
+      >
+        {playerInitials(name)}
+      </span>
+    )
+  }
+
+  return (
+    <img
+      src={src}
+      alt={`${name} avatar`}
+      draggable={false}
+      onError={() => setFailed(true)}
+      className={className}
+    />
+  )
+}
+
 function hashString(value: string): number {
   let hash = 0
   for (let index = 0; index < value.length; index++) {
@@ -6363,6 +7818,127 @@ function colorValue(color: PlayColor): string {
     case "blue":
       return "oklch(0.58 0.17 252)"
   }
+}
+
+/** How much of its natural size a hand card keeps on a roomy desktop tray. */
+const DESKTOP_HAND_CARD_SCALE = 0.82
+const MIN_HAND_CARD_SCALE = 0.42
+/** Space kept under the fan so the arc never touches the tray floor. */
+const FAN_BASELINE_OFFSET = 44
+const MIN_SPREAD_FACTOR = 0.6
+const MAX_SPREAD_FACTOR = 2.6
+/** Spreading past this on an already-full fan switches it into pages. */
+const PAGE_SPREAD_FACTOR = 1.9
+
+/**
+ * Trackpad pinch on desktop, two-finger pinch on touch: widens or tightens the
+ * gap between held cards. It only scales the gap the layout already computes,
+ * so the fan still cannot grow past the width of its tray.
+ */
+function useHandSpreadGesture(element: HTMLElement | null) {
+  const [spreadFactor, setSpreadFactor] = useState(1)
+  const pinchStartRef = useRef<{ distance: number; factor: number } | null>(
+    null
+  )
+  const pointersRef = useRef(new Map<number, { x: number; y: number }>())
+  const spreadFactorRef = useRef(spreadFactor)
+
+  useEffect(() => {
+    spreadFactorRef.current = spreadFactor
+  }, [spreadFactor])
+
+  useEffect(() => {
+    if (!element) return
+
+    const clamp = (value: number) =>
+      Math.min(MAX_SPREAD_FACTOR, Math.max(MIN_SPREAD_FACTOR, value))
+
+    // Trackpad pinch arrives as a wheel event with ctrlKey set.
+    function handleWheel(event: WheelEvent) {
+      if (!event.ctrlKey) return
+      event.preventDefault()
+      setSpreadFactor((current) => clamp(current * (1 - event.deltaY * 0.01)))
+    }
+
+    function pinchDistance() {
+      const [first, second] = [...pointersRef.current.values()]
+      if (!first || !second) return null
+      return Math.hypot(first.x - second.x, first.y - second.y)
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (event.pointerType !== "touch") return
+      pointersRef.current.set(event.pointerId, {
+        x: event.clientX,
+        y: event.clientY,
+      })
+      const distance = pinchDistance()
+      if (distance) {
+        pinchStartRef.current = { distance, factor: spreadFactorRef.current }
+      }
+    }
+
+    function handlePointerMove(event: PointerEvent) {
+      if (!pointersRef.current.has(event.pointerId)) return
+      pointersRef.current.set(event.pointerId, {
+        x: event.clientX,
+        y: event.clientY,
+      })
+      const start = pinchStartRef.current
+      const distance = pinchDistance()
+      if (!start || !distance || start.distance === 0) return
+      event.preventDefault()
+      setSpreadFactor(clamp(start.factor * (distance / start.distance)))
+    }
+
+    function handlePointerUp(event: PointerEvent) {
+      pointersRef.current.delete(event.pointerId)
+      if (pointersRef.current.size < 2) pinchStartRef.current = null
+    }
+
+    element.addEventListener("wheel", handleWheel, { passive: false })
+    element.addEventListener("pointerdown", handlePointerDown)
+    element.addEventListener("pointermove", handlePointerMove, {
+      passive: false,
+    })
+    window.addEventListener("pointerup", handlePointerUp)
+    window.addEventListener("pointercancel", handlePointerUp)
+
+    return () => {
+      element.removeEventListener("wheel", handleWheel)
+      element.removeEventListener("pointerdown", handlePointerDown)
+      element.removeEventListener("pointermove", handlePointerMove)
+      window.removeEventListener("pointerup", handlePointerUp)
+      window.removeEventListener("pointercancel", handlePointerUp)
+    }
+  }, [element])
+
+  return spreadFactor
+}
+
+function useElementSize(element: HTMLElement | null) {
+  const [size, setSize] = useState({ width: 0, height: 0 })
+
+  useEffect(() => {
+    if (!element || typeof ResizeObserver === "undefined") return
+
+    const rect = element.getBoundingClientRect()
+    setSize({ width: rect.width, height: rect.height })
+    const observer = new ResizeObserver((entries) => {
+      const box = entries[0]?.contentRect
+      if (!box) return
+      setSize((current) =>
+        Math.abs(current.width - box.width) < 1 &&
+        Math.abs(current.height - box.height) < 1
+          ? current
+          : { width: box.width, height: box.height }
+      )
+    })
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [element])
+
+  return size
 }
 
 function useMediaQuery(query: string) {
@@ -7039,11 +8615,11 @@ function DimmedSeatRing({
               }}
             >
               <div className="grid size-9 shrink-0 place-items-center overflow-hidden rounded-full border border-white/12 bg-white/[0.06] text-white/72 sm:size-12">
-                <img
-                  src={avatarUrls.get(candidate.id) ?? PLAYER_AVATARS[0]}
-                  alt={`${candidate.name} avatar`}
-                  draggable={false}
+                <PlayerAvatar
+                  name={candidate.name}
+                  src={avatarUrls.get(candidate.id) ?? PLAYER_AVATARS[0]!}
                   className="size-full rounded-full object-cover"
+                  initialsClassName="text-xs sm:text-sm"
                 />
               </div>
               <div className="min-w-0 flex-1">
@@ -7276,7 +8852,11 @@ function GameStartIntro({
       delay: number
     }> = []
     let nextId = 0
-    for (let round = 0; round < handSize; round += 1) {
+    // A full deal at a full table is 56 tokens, which is what made the intro
+    // stutter. Three passes still read as "everyone is being dealt in", and
+    // keep the whole thing under a second.
+    const visualRounds = Math.min(handSize, DEAL_VISUAL_ROUNDS)
+    for (let round = 0; round < visualRounds; round += 1) {
       orderedPlayers.forEach((_, seatIndex) => {
         const seat = tableSeatPosition(
           seatIndex,
@@ -7287,7 +8867,7 @@ function GameStartIntro({
           id: nextId++,
           left: seat.left,
           top: seat.top,
-          delay: round * 140 + seatIndex * 30,
+          delay: round * 96 + seatIndex * 22,
         })
       })
     }
@@ -7295,17 +8875,14 @@ function GameStartIntro({
 
     if (!playedDealRef.current) {
       playedDealRef.current = true
-      const dealSoundCount = Math.min(handSize * orderedPlayers.length, 7)
+      const dealSoundCount = Math.min(tokens.length, 5)
       for (let index = 0; index < dealSoundCount; index += 1) {
-        window.setTimeout(
-          () => playCardSound("draw", 1),
-          index * Math.max(120, 180 - dealSoundCount * 8)
-        )
+        window.setTimeout(() => playCardSound("draw", 1), index * 110)
       }
     }
 
     const total = tokens.length
-    const longest = total > 0 ? tokens[total - 1].delay + 520 : 600
+    const longest = total > 0 ? tokens[total - 1].delay + 420 : 520
     const timer = window.setTimeout(() => {
       onPhaseChange("done")
       onFinish()
@@ -7394,15 +8971,19 @@ function GameStartIntro({
                   marginLeft: compact ? -28 : -38,
                   marginTop: compact ? -40 : -54,
                   borderRadius: 10,
-                  background:
-                    "linear-gradient(140deg, #1a1a1a, #2a2a2a 40%, #0a0a0a)",
-                  boxShadow:
-                    "0 14px 28px rgba(0,0,0,0.45), inset 0 0 0 1px rgba(255,255,255,0.06)",
+                  // Flat fill and a hairline instead of a large blurred
+                  // shadow: a drop shadow on two dozen moving elements is
+                  // repainted every frame and is what dropped the frame rate.
+                  background: "#1c1c1c",
+                  outline: "1px solid rgba(255,255,255,0.07)",
+                  outlineOffset: "-1px",
                   ["--uno-dx" as string]: `${dx}px`,
                   ["--uno-dy" as string]: `${dy}px`,
-                  animation: `uno-intro-deal 520ms cubic-bezier(0.22, 0.9, 0.18, 1) ${token.delay}ms forwards`,
+                  animation: `uno-intro-deal 420ms cubic-bezier(0.22, 0.9, 0.18, 1) ${token.delay}ms forwards`,
                   opacity: 0,
                   zIndex: 30 + token.id,
+                  willChange: "transform, opacity",
+                  contain: "layout paint",
                 }}
               />
             )
@@ -7494,8 +9075,8 @@ function RouletteFlyToHand({
     if (!layout) return
     if (cards.length === 0) return
 
-    const stagger = 90
-    const flightDuration = 620
+    const stagger = 70
+    const flightDuration = 520
     const totalMs = (cards.length - 1) * stagger + flightDuration + 60
 
     const timer = window.setTimeout(onDone, totalMs)
@@ -7511,7 +9092,7 @@ function RouletteFlyToHand({
     38,
     Math.max(22, layout.source.width / Math.max(cards.length, 1))
   )
-  const stagger = 90
+  const stagger = 70
 
   return (
     <div
@@ -7563,10 +9144,11 @@ function RouletteFlyToHand({
               ["--uno-roulette-to-x" as string]: `${toX}px`,
               ["--uno-roulette-to-y" as string]: `${toY}px`,
               ["--uno-roulette-to-rot" as string]: `${toRot}deg`,
-              animation: `uno-roulette-fly 620ms cubic-bezier(0.32, 0.72, 0.24, 1) ${delay}ms forwards`,
+              animation: `uno-roulette-fly 520ms cubic-bezier(0.32, 0.72, 0.24, 1) ${delay}ms forwards`,
               opacity: 0,
               zIndex: 60 + index,
               willChange: "transform, opacity",
+              contain: "layout paint",
             }}
           >
             <UnoCard card={card} size="sm" static />
@@ -7575,6 +9157,41 @@ function RouletteFlyToHand({
       })}
     </div>
   )
+}
+
+/**
+ * A flat stand-in for a face-down card, used only by the flight animations.
+ *
+ * `UnoCard` renders layered SVG art; mounting a dozen of them mid-deal was
+ * what made dealing and drawing stutter. Nothing of the real card is legible
+ * at flight speed, so these are plain painted divs that the compositor can
+ * move without touching layout or the SVG rasteriser.
+ */
+function FlyingCardBack({ width, height }: { width: number; height: number }) {
+  return (
+    <div
+      style={{
+        width,
+        height,
+        borderRadius: Math.round(width * 0.11),
+        background:
+          "linear-gradient(140deg, #1d1d1d, #2b2b2b 42%, #0b0b0b), radial-gradient(circle at 50% 50%, #d81f26 0 38%, transparent 39%)",
+        backgroundBlendMode: "screen",
+        boxShadow: "inset 0 0 0 1px rgba(255,255,255,0.08)",
+      }}
+    />
+  )
+}
+
+/**
+ * A +10 penalty does not need ten separate cards in the air to read as "a lot"
+ * — six do, and they animate without dropping frames.
+ */
+const DRAW_FLIGHT_STAGGER_MS = 42
+/** Visual passes in the opening deal, regardless of the real hand size. */
+const DEAL_VISUAL_ROUNDS = 3
+function drawFlightCardCount(cardCount: number) {
+  return Math.min(Math.max(cardCount, 1), 6)
 }
 
 function DeckDrawFlight({
@@ -7632,16 +9249,16 @@ function DeckDrawFlight({
 
   useEffect(() => {
     if (!layout) return
-    const visibleCount = Math.min(Math.max(cardCount, 1), 10)
-    const stagger = visibleCount > 6 ? 52 : 68
-    const timer = window.setTimeout(onDone, (visibleCount - 1) * stagger + 660)
+    const visibleCount = drawFlightCardCount(cardCount)
+    const stagger = DRAW_FLIGHT_STAGGER_MS
+    const timer = window.setTimeout(onDone, (visibleCount - 1) * stagger + 520)
     return () => window.clearTimeout(timer)
   }, [layout, cardCount, onDone])
 
   if (!layout) return null
 
-  const visibleCount = Math.min(Math.max(cardCount, 1), 10)
-  const stagger = visibleCount > 6 ? 52 : 68
+  const visibleCount = drawFlightCardCount(cardCount)
+  const stagger = DRAW_FLIGHT_STAGGER_MS
 
   return (
     <div
@@ -7683,15 +9300,16 @@ function DeckDrawFlight({
               ["--uno-draw-to-y" as string]: `${layout.dest.top}px`,
               ["--uno-draw-rot-start" as string]: `${offset * 3}deg`,
               ["--uno-draw-rot-end" as string]: `${offset > 0 ? 14 : -14}deg`,
-              animation: `uno-deck-draw-flight 580ms cubic-bezier(0.3, 0.72, 0.18, 1) ${
+              animation: `uno-deck-draw-flight 440ms cubic-bezier(0.3, 0.72, 0.18, 1) ${
                 index * stagger
               }ms forwards`,
               opacity: 0,
               zIndex: 58 + index,
               willChange: "transform, opacity",
+              contain: "layout paint",
             }}
           >
-            <UnoCard card={cardBackPlaceholder} faceDown size="sm" static />
+            <FlyingCardBack width={58} height={82} />
           </div>
         )
       })}
