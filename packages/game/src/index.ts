@@ -53,6 +53,8 @@ export type {
   DrawStack,
   GameEvent,
   GameState,
+  MatchRecap,
+  PlayerMatchStats,
   GameContext,
   PendingChoice,
   PlayerGameSnapshot,

@@ -1992,11 +1992,11 @@ function GameTable({
                   />
                 )}
 
-              {gameFinished && game?.supportRecap && (
-                <SupportRecapPanel
-                  recap={game.supportRecap}
-                  game={game}
+              {gameFinished && game?.matchRecap && (
+                <MatchRecapPanel
+                  recap={game.matchRecap}
                   players={room.players}
+                  selfPlayerId={player.id}
                   compact
                 />
               )}
@@ -2408,11 +2408,11 @@ function GameTable({
                     />
                   )}
 
-                {gameFinished && game?.supportRecap && (
-                  <SupportRecapPanel
-                    recap={game.supportRecap}
-                    game={game}
+                {gameFinished && game?.matchRecap && (
+                  <MatchRecapPanel
+                    recap={game.matchRecap}
                     players={room.players}
+                    selfPlayerId={player.id}
                   />
                 )}
 
@@ -2970,91 +2970,251 @@ function SupportDecisionPills({
   )
 }
 
-function SupportRecapPanel({
+/**
+ * What the hand tray becomes once the match is over.
+ *
+ * The same three slides every match, so the numbers mean something across a
+ * night of play rather than being a novelty per round: where everyone
+ * finished, how each player actually spent the match, and the handful of
+ * moments that decided it. Swipeable because a phone cannot show all three at
+ * once, and paging beats squeezing.
+ */
+function MatchRecapPanel({
   recap,
-  game,
   players,
+  selfPlayerId,
   compact = false,
 }: {
-  recap: NonNullable<NonNullable<RoomSnapshot["game"]>["supportRecap"]>
-  game: NonNullable<RoomSnapshot["game"]>
+  recap: NonNullable<NonNullable<RoomSnapshot["game"]>["matchRecap"]>
   players: Array<Player>
+  selfPlayerId: string
   compact?: boolean
 }) {
-  if (recap.journey.length === 0 && recap.titles.length === 0) return null
-  const name = (playerId: string) =>
+  const [slide, setSlide] = useState(0)
+  const swipeStartRef = useRef<{ x: number; y: number } | null>(null)
+
+  const nameFor = (playerId: string) =>
     players.find((candidate) => candidate.id === playerId)?.name ?? "Player"
-  const journeys = Array.from(
-    recap.journey
-      .reduce((groups, entry) => {
-        const entries = groups.get(entry.supporterPlayerId) ?? []
-        entries.push(entry)
-        groups.set(entry.supporterPlayerId, entries)
-        return groups
-      }, new Map<string, typeof recap.journey>())
-      .entries()
+
+  const slides = ["Podium", "Players", "Turning points"]
+  const safeSlide = Math.min(slide, slides.length - 1)
+
+  const durationMs = recap.finishedAt
+    ? new Date(recap.finishedAt).getTime() - new Date(recap.startedAt).getTime()
+    : 0
+  const durationLabel =
+    durationMs > 0 ? `${Math.max(1, Math.round(durationMs / 60000))} min` : "—"
+
+  // One shared scale keeps the bars comparable between players.
+  const busiest = Math.max(
+    1,
+    ...recap.players.map((stats) => stats.cardsPlayed + stats.cardsDrawn)
   )
 
-  function outcome(entry: (typeof recap.journey)[number]): string | null {
-    if (entry.endReason === "supporter-kicked") return "kicked from squad"
-    const target = game.players.find(
-      (candidate) => candidate.playerId === entry.supportedPlayerId
+  const mostDrawDealt = [...recap.players].sort(
+    (a, b) => b.drawCardsDealt - a.drawCardsDealt
+  )[0]
+  const mostPunished = [...recap.players].sort(
+    (a, b) => b.penaltyCardsTaken - a.penaltyCardsTaken
+  )[0]
+  const bestCatcher = [...recap.players].sort(
+    (a, b) => b.unoCatches - a.unoCatches
+  )[0]
+  const biggestHand = [...recap.players].sort(
+    (a, b) => b.peakHandSize - a.peakHandSize
+  )[0]
+
+  function changeSlide(delta: number) {
+    setSlide((current) =>
+      Math.max(0, Math.min(slides.length - 1, current + delta))
     )
-    if (target?.winnerPlacement) {
-      return `finished #${target.winnerPlacement.position}`
-    }
-    if (target?.eliminated) return "eliminated"
-    if (entry.endReason === "match-finished") return "match ended"
-    return null
   }
 
   return (
     <div
       className={
         (compact ? "mt-1 p-2" : "mt-2 p-3") +
-        " shrink-0 rounded-xl border border-amber-200/15 bg-amber-300/[0.07]"
+        " min-h-0 flex-1 overflow-hidden rounded-xl border border-white/10 bg-black/28"
       }
+      onPointerDown={(event) => {
+        swipeStartRef.current = { x: event.clientX, y: event.clientY }
+      }}
+      onPointerUp={(event) => {
+        const start = swipeStartRef.current
+        swipeStartRef.current = null
+        if (!start) return
+        const dx = event.clientX - start.x
+        if (
+          Math.abs(dx) < 48 ||
+          Math.abs(dx) <= Math.abs(event.clientY - start.y)
+        ) {
+          return
+        }
+        changeSlide(dx < 0 ? 1 : -1)
+      }}
     >
-      <p className="text-[10px] font-semibold tracking-[0.14em] text-amber-50/64 uppercase">
-        Support recap
-      </p>
-      <div className="mt-1 space-y-1 text-[11px] text-white/70">
-        {journeys.map(([supporterPlayerId, entries]) => (
-          <div
-            key={supporterPlayerId}
-            className="flex items-center gap-1 overflow-x-auto rounded-lg border border-white/8 bg-black/18 px-2 py-1.5"
-          >
-            <span className="shrink-0 font-semibold text-white/82">
-              {name(supporterPlayerId)}
-            </span>
-            {entries.map((entry, index) => (
-              <span
-                key={`${entry.supportedPlayerId}:${entry.createdAt}`}
-                className="flex shrink-0 items-center gap-1"
-              >
-                <span className="text-white/32">→</span>
-                <span>{name(entry.supportedPlayerId)}</span>
-                {outcome(entry) && (
-                  <span className="text-white/42">({outcome(entry)})</span>
-                )}
-                {index < entries.length - 1 && (
-                  <span className="text-amber-200/42">then</span>
-                )}
-              </span>
+      <div className="flex items-center justify-between gap-2">
+        <p className="text-[10px] font-semibold tracking-[0.14em] text-amber-50/64 uppercase">
+          {slides[safeSlide]}
+        </p>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] text-white/38 tabular-nums">
+            {durationLabel} · {recap.totalCardsPlayed} played
+          </span>
+          <div className="flex items-center gap-1">
+            {slides.map((label, index) => (
+              <button
+                key={label}
+                type="button"
+                aria-label={`Show ${label}`}
+                onClick={() => setSlide(index)}
+                className={
+                  "h-1 rounded-full transition-[width,background-color] " +
+                  (index === safeSlide
+                    ? "w-4 bg-white/75"
+                    : "w-1.5 bg-white/25")
+                }
+              />
             ))}
           </div>
-        ))}
+        </div>
       </div>
-      <div className="mt-1 flex gap-1.5 overflow-x-auto text-[11px]">
-        {recap.titles.map((title) => (
-          <span
-            key={`${title.label}:${title.playerId}`}
-            className="shrink-0 rounded-full bg-white px-2 py-1 font-semibold text-neutral-950"
-          >
-            {title.label}: {name(title.playerId)}
-          </span>
-        ))}
+
+      <div className="uno-scrollbar mt-1.5 max-h-full overflow-y-auto">
+        {safeSlide === 0 && (
+          <ol className="space-y-1">
+            {recap.players.map((stats, index) => (
+              <li
+                key={stats.playerId}
+                className={
+                  "flex items-center gap-2 rounded-lg px-2 py-1 text-[11px] " +
+                  (stats.playerId === selfPlayerId
+                    ? "bg-white/[0.07] text-white/88"
+                    : "text-white/70")
+                }
+              >
+                <span className="w-5 shrink-0 text-center font-semibold text-white/45 tabular-nums">
+                  {index + 1}
+                </span>
+                {placementCrownFor(index + 1) ? (
+                  <PlacementCrown
+                    placement={index + 1}
+                    className="size-4 shrink-0"
+                  />
+                ) : (
+                  <span className="size-4 shrink-0" />
+                )}
+                <span className="min-w-0 flex-1 truncate font-medium">
+                  {nameFor(stats.playerId)}
+                  {stats.playerId === selfPlayerId ? " · You" : ""}
+                </span>
+                <span className="shrink-0 text-white/45 tabular-nums">
+                  {stats.cardsPlayed} played · {stats.cardsDrawn} drawn
+                </span>
+              </li>
+            ))}
+          </ol>
+        )}
+
+        {safeSlide === 1 && (
+          <div className="space-y-1.5">
+            {recap.players.map((stats) => {
+              const total = stats.cardsPlayed + stats.cardsDrawn
+              return (
+                <div key={stats.playerId} className="text-[11px]">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="min-w-0 truncate font-medium text-white/78">
+                      {nameFor(stats.playerId)}
+                    </span>
+                    <span className="shrink-0 text-white/40 tabular-nums">
+                      {stats.cardsPlayed}/{stats.cardsDrawn}
+                    </span>
+                  </div>
+                  {/* Played versus drawn: the shape of someone's match. */}
+                  <div className="mt-0.5 flex h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
+                    <span
+                      className="bg-emerald-400/70"
+                      style={{
+                        width: `${(stats.cardsPlayed / busiest) * 100}%`,
+                      }}
+                    />
+                    <span
+                      className="bg-red-400/60"
+                      style={{
+                        width: `${(stats.cardsDrawn / busiest) * 100}%`,
+                      }}
+                    />
+                    <span className="sr-only">
+                      {total} cards handled in total
+                    </span>
+                  </div>
+                </div>
+              )
+            })}
+            <p className="pt-0.5 text-[10px] text-white/34">
+              green played · red drawn
+            </p>
+          </div>
+        )}
+
+        {safeSlide === 2 && (
+          <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+            <RecapStat
+              label="Biggest stack"
+              value={
+                recap.biggestDrawStack > 0 ? `+${recap.biggestDrawStack}` : "—"
+              }
+            />
+            <RecapStat
+              label="Worst beating"
+              value={
+                mostPunished && mostPunished.penaltyCardsTaken > 0
+                  ? `${nameFor(mostPunished.playerId)} · ${mostPunished.penaltyCardsTaken}`
+                  : "Nobody"
+              }
+            />
+            <RecapStat
+              label="Most damage dealt"
+              value={
+                mostDrawDealt && mostDrawDealt.drawCardsDealt > 0
+                  ? `${nameFor(mostDrawDealt.playerId)} · +${mostDrawDealt.drawCardsDealt}`
+                  : "Nobody"
+              }
+            />
+            <RecapStat
+              label="UNO catches"
+              value={
+                bestCatcher && bestCatcher.unoCatches > 0
+                  ? `${nameFor(bestCatcher.playerId)} · ${bestCatcher.unoCatches}`
+                  : "None"
+              }
+            />
+            <RecapStat
+              label="Fattest hand"
+              value={
+                biggestHand
+                  ? `${nameFor(biggestHand.playerId)} · ${biggestHand.peakHandSize}`
+                  : "—"
+              }
+            />
+            <RecapStat
+              label="Chaos"
+              value={`${recap.handsSwapped} swaps · ${recap.handsRotated} cycles`}
+            />
+          </div>
+        )}
       </div>
+    </div>
+  )
+}
+
+function RecapStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border border-white/8 bg-black/24 px-2 py-1.5">
+      <p className="text-[9px] tracking-wide text-white/38 uppercase">
+        {label}
+      </p>
+      <p className="mt-0.5 truncate font-medium text-white/82">{value}</p>
     </div>
   )
 }
