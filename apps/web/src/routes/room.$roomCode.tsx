@@ -1576,6 +1576,7 @@ function GameTable({
           ))}
 
           <div
+            ref={tableSplitRef}
             className={
               "mx-auto flex h-full min-h-0 w-full max-w-[680px] flex-col px-2 " +
               (phoneViewport ? "gap-1.5 py-1.5" : "gap-2 py-2")
@@ -1799,9 +1800,21 @@ function GameTable({
               </div>
             )}
 
+            <TableSplitHandle
+              containerRef={tableSplitRef}
+              onResize={setHandPaneHeight}
+              onReset={() => setHandPaneHeight(null)}
+            />
+
             <section
               data-self-hand="true"
-              className="flex h-[clamp(174px,30dvh,230px)] shrink-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-black/40 p-2 shadow-[0_18px_54px_rgba(0,0,0,0.28)]"
+              style={
+                handPaneHeight === null ? undefined : { height: handPaneHeight }
+              }
+              className={
+                "flex shrink-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-black/40 p-2 shadow-[0_18px_54px_rgba(0,0,0,0.28)] " +
+                (handPaneHeight === null ? "h-[clamp(174px,30dvh,230px)]" : "")
+              }
             >
               <div className="flex shrink-0 items-start justify-between gap-2">
                 <div className="min-w-0">
@@ -1812,13 +1825,15 @@ function GameTable({
                         : "Your hand"
                       : "Your hand"}
                   </p>
-                  <p className="mt-0.5 truncate text-[11px] text-white/42">
-                    {isSelfEliminated
-                      ? spectatingPlayerId
+                  {/* Only the spectating states still need explaining; how to
+                      play your own hand is self-evident after one turn. */}
+                  {isSelfEliminated && (
+                    <p className="mt-0.5 truncate text-[11px] text-white/42">
+                      {spectatingPlayerId
                         ? "🙌 Supporting"
-                        : "Tap an active player to spectate."
-                      : "Tap a card to stage it."}
-                  </p>
+                        : "Tap an active player to spectate."}
+                    </p>
+                  )}
                 </div>
                 {!isSelfEliminated && (
                   <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
@@ -2019,7 +2034,7 @@ function GameTable({
                 // The handle row doubles as the gap between the two panes.
                 "relative grid min-h-0 overflow-hidden " +
                 (handPaneHeight === null
-                  ? "grid-rows-[minmax(0,1fr)_14px_clamp(188px,30dvh,300px)] sm:grid-rows-[minmax(0,1fr)_14px_clamp(220px,30dvh,330px)]"
+                  ? "grid-rows-[minmax(0,1fr)_18px_clamp(188px,30dvh,300px)] sm:grid-rows-[minmax(0,1fr)_18px_clamp(220px,30dvh,330px)]"
                   : "")
               }
             >
@@ -2199,13 +2214,13 @@ function GameTable({
                           : "Your hand"
                         : "Your hand"}
                     </p>
-                    <p className="mt-0.5 text-xs text-white/42 sm:mt-1">
-                      {isSelfEliminated
-                        ? spectatingPlayerId
+                    {isSelfEliminated && (
+                      <p className="mt-0.5 text-xs text-white/42 sm:mt-1">
+                        {spectatingPlayerId
                           ? "🙌 Supporting"
-                          : "Tap an active player to spectate."
-                        : "Drag cards to the table, then end your turn."}
-                    </p>
+                          : "Tap an active player to spectate."}
+                      </p>
+                    )}
                   </div>
                   {!isSelfEliminated && (
                     <div className="flex flex-wrap items-center gap-2">
@@ -2604,7 +2619,7 @@ function NextMatchPanel({
   )
 }
 
-const TABLE_SPLIT_HANDLE_PX = 14
+const TABLE_SPLIT_HANDLE_PX = 18
 const MIN_HAND_PANE_PX = 150
 const MIN_TABLE_PANE_PX = 220
 const HAND_PANE_STORAGE_KEY = "uno:hand-pane-height"
@@ -2732,7 +2747,9 @@ function TableSplitHandle({
       }}
       title="Drag to resize · double-click to reset"
       className={
-        "group flex cursor-row-resize touch-none items-center justify-center outline-none " +
+        // min-h keeps it grabbable in the phone layout's flex column, which
+        // has no fixed grid row to size it.
+        "group flex min-h-[18px] shrink-0 cursor-row-resize touch-none items-center justify-center outline-none " +
         (dragging ? "cursor-grabbing" : "")
       }
     >
@@ -2802,7 +2819,7 @@ function TableEnergyBar({
   return (
     <div
       className={
-        (compact ? "mt-1" : "mt-2") +
+        (compact ? "mt-0.5" : "mt-1") +
         " flex shrink-0 items-center gap-1 overflow-x-auto"
       }
     >
@@ -5402,7 +5419,14 @@ function FannedGameHand({
             : "relative mx-auto h-full min-h-[178px] max-w-full"
         }
       >
-        <div className="absolute inset-x-0 bottom-1 flex justify-center">
+        {/* The fan arcs downward from its baseline, so the baseline sits clear
+            of the tray floor — otherwise the outermost cards get clipped. */}
+        <div
+          className={
+            "absolute inset-x-0 flex justify-center " +
+            (compact ? "bottom-6" : "bottom-10")
+          }
+        >
           {visibleCards.map((card, index) => {
             const offset = index - half
             const playable = playableCardIds.includes(card.id)
