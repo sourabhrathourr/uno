@@ -16,7 +16,8 @@ import type {
   VoiceSignal,
 } from "@workspace/game"
 
-import { RoomManager } from "./room-manager"
+import { GiphyService } from "./giphy"
+import { ROOM_MEMORY_CLEANUP_INTERVAL_MS, RoomManager } from "./room-manager"
 
 type IceServerConfig = {
   urls: string | string[]
@@ -34,11 +35,30 @@ const voiceDebugEnabled =
   process.env.VOICE_DEBUG === "1" || process.env.VOICE_DEBUG === "true"
 const voiceIceServers = getConfiguredIceServers()
 
-const rooms = new RoomManager()
+const gifs = new GiphyService({
+  apiKey: process.env.GIPHY_API_KEY,
+  countryCode: process.env.GIPHY_COUNTRY_CODE ?? "US",
+  maxRequestsPerHour: Number.parseInt(
+    process.env.GIPHY_REQUESTS_PER_HOUR ?? "90",
+    10
+  ),
+  maxRequestsPerRequesterPerHour: Number.parseInt(
+    process.env.GIPHY_REQUESTS_PER_PLAYER_PER_HOUR ?? "30",
+    10
+  ),
+})
 const voiceStatesByRoomCode = new Map<
   string,
   Map<string, { enabled: boolean; muted: boolean; speaking: boolean }>
 >()
+const rooms = new RoomManager({
+  resolveGif: (provider, id) =>
+    provider === "giphy" ? gifs.resolveApprovedGif(id) : null,
+  onRoomUpdated: (code, room) => {
+    void emitRoomState(code, room)
+  },
+  onRoomExpired: clearExpiredRoomRuntimeState,
+})
 
 const httpServer = createServer(async (req, res) => {
   setCorsHeaders(req, res)
@@ -61,6 +81,44 @@ const httpServer = createServer(async (req, res) => {
 
   if (req.method === "GET" && url.pathname === "/voice/ice-servers") {
     sendJson(req, res, 200, { iceServers: voiceIceServers })
+    return
+  }
+
+  if (req.method === "GET" && url.pathname === "/analysis/rooms") {
+    sendJson(req, res, 200, { ok: true, data: rooms.getAnalysisRooms() })
+    return
+  }
+
+  if (req.method === "GET" && url.pathname === "/gifs/search") {
+    const roomCode = firstHeader(req.headers["x-room-code"])
+    const sessionId = firstHeader(req.headers["x-player-session-id"])
+    if (!rooms.hasPlayerSession(roomCode, sessionId)) {
+      sendJson(req, res, 401, {
+        error: {
+          code: "gif-search-unauthorized",
+          message: "Join the room before searching for GIFs.",
+        },
+      })
+      return
+    }
+    const query = url.searchParams.get("q") ?? ""
+    const offset = Number.parseInt(url.searchParams.get("offset") ?? "0", 10)
+    try {
+      const result = await gifs.search({
+        query,
+        offset,
+        requesterId: sessionId,
+      })
+      sendJson(req, res, 200, result)
+    } catch (cause) {
+      console.error("GIF search failed", cause)
+      sendJson(req, res, 502, {
+        error: {
+          code: "gif-search-unavailable",
+          message: "GIF search is temporarily unavailable.",
+        },
+      })
+    }
     return
   }
 
@@ -262,6 +320,22 @@ io.on("connection", (socket) => {
     if (result.ok) void emitRoomState(result.data.code, result.data)
   })
 
+  socket.on("room:startVoteKick", (input, ack) => {
+    const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
+      rooms.startVoteKick(roomCode, playerId, input.targetPlayerId)
+    )
+    ack(result)
+    if (result.ok) void emitRoomState(result.data.code, result.data)
+  })
+
+  socket.on("room:castVoteKick", (input, ack) => {
+    const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
+      rooms.castVoteKick(roomCode, playerId, input.voteKickId, input.choice)
+    )
+    ack(result)
+    if (result.ok) void emitRoomState(result.data.code, result.data)
+  })
+
   socket.on("voice:requestStates", () => {
     const roomCode = socket.data.roomCode
     if (!roomCode) return
@@ -404,9 +478,9 @@ io.on("connection", (socket) => {
     if (result.ok) void emitRoomState(result.data.code, result.data)
   })
 
-  socket.on("game:sendReaction", (input, ack) => {
+  socket.on("game:sendAvatarEmojiReaction", (input, ack) => {
     const result = withJoinedPlayer(socket.data, (roomCode, playerId) =>
-      rooms.sendTableReaction(roomCode, playerId, input)
+      rooms.sendAvatarEmojiReaction(roomCode, playerId, input)
     )
     ack(result)
     if (result.ok) void emitRoomState(result.data.code, result.data)
@@ -423,6 +497,23 @@ io.on("connection", (socket) => {
       return
     }
     ack({ ok: true, data: rooms.getSupportView(roomCode, playerId) })
+  })
+
+  socket.on("game:spectatePlayer", (input, ack) => {
+    const roomCode = socket.data.roomCode
+    const playerId = socket.data.playerId
+    if (!roomCode || !playerId) {
+      ack({
+        ok: false,
+        error: { code: "not-joined", message: "Join a room first." },
+      })
+      return
+    }
+
+    ack({
+      ok: true,
+      data: rooms.getSpectatorView(roomCode, playerId, input.targetPlayerId),
+    })
   })
 
   socket.on("disconnect", () => {
@@ -453,6 +544,11 @@ io.on("connection", (socket) => {
   })
 })
 
+const roomCleanupInterval = setInterval(() => {
+  rooms.pruneExpiredRooms()
+}, ROOM_MEMORY_CLEANUP_INTERVAL_MS)
+roomCleanupInterval.unref()
+
 httpServer.listen(port, () => {
   console.log(`UNO No Mercy server listening on http://localhost:${port}`)
 })
@@ -472,7 +568,23 @@ function setCorsHeaders(req: IncomingMessage, res: ServerResponse) {
   )
   res.setHeader("Vary", "Origin")
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type")
+  res.setHeader(
+    "Access-Control-Allow-Headers",
+    "Content-Type, X-Room-Code, X-Player-Session-Id"
+  )
+}
+
+function firstHeader(value: string | Array<string> | undefined): string {
+  return Array.isArray(value) ? (value[0] ?? "") : (value ?? "")
+}
+
+function clearExpiredRoomRuntimeState(roomCode: string) {
+  voiceStatesByRoomCode.delete(roomCode)
+  io.to(roomCode).emit("room:error", {
+    code: "room-expired",
+    message: "This room expired after 7 days of inactivity.",
+  })
+  io.in(roomCode).socketsLeave(roomCode)
 }
 
 function sendJson(

@@ -6,7 +6,7 @@ type SoundOptions = {
 
 type ReactSoundsModule = {
   playSound: (name: string, options?: SoundOptions) => Promise<void>
-  preloadSounds: (names: string[]) => Promise<void>
+  preloadSounds: (names: Array<string>) => Promise<void>
   setSoundEnabled: (enabled: boolean) => void
 }
 
@@ -128,7 +128,10 @@ export function playWinnerSound(firstPlace = false) {
         { delay: 220, sound: "coinBling", volume: 0.42, playbackRate: 1.08 },
       ]
 
-  window.setTimeout(() => playLocalSound("cardDrop", firstPlace ? 0.34 : 0.24), 30)
+  window.setTimeout(
+    () => playLocalSound("cardDrop", firstPlace ? 0.34 : 0.24),
+    30
+  )
   for (const item of sequence) {
     window.setTimeout(
       () =>
@@ -136,7 +139,7 @@ export function playWinnerSound(firstPlace = false) {
           volume: item.volume,
           playbackRate: item.playbackRate,
         }),
-      item.delay,
+      item.delay
     )
   }
 }
@@ -198,7 +201,7 @@ export function playShuffleSound() {
   for (let index = 0; index < 4; index += 1) {
     window.setTimeout(
       () => playLocalSound("cardTake", 0.32 + Math.random() * 0.18),
-      index * 80,
+      index * 80
     )
   }
 }

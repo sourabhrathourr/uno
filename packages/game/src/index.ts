@@ -1,11 +1,10 @@
 export type { Card, CardColor, CardFace, NumberValue } from "./cards"
-export {
-  CHAT_EMOJIS,
-  CHAT_GIFS,
-  CHAT_PRESETS,
-  TABLE_REACTION_EMOJIS,
-  TABLE_REACTION_PRESETS,
-} from "./chat"
+export type {
+  AnalysisPlayerSummary,
+  AnalysisRoomSummary,
+  AnalysisRoomsResponse,
+} from "./analysis"
+export { CHAT_EMOJIS, CHAT_GIFS, CHAT_PRESETS } from "./chat"
 export type {
   ChatGifPreset,
   ChatChannel,
@@ -13,9 +12,16 @@ export type {
   ChatMessageKind,
   PlayerSocialSnapshot,
   SendChatMessageInput,
+  VoteKickChoice,
+  VoteKickPoll,
+  VoteKickResult,
+  VoteKickStatus,
+  VoteKickVote,
 } from "./chat"
 export { createNoMercyDeck, shuffleCards } from "./deck"
+export type { GifProvider, GifSearchResponse, GifSearchResult } from "./gifs"
 export {
+  addWaitingPlayer,
   catchUno,
   createGame,
   drawRouletteCard,
@@ -26,17 +32,19 @@ export {
   playCards,
   projectPlayerGame,
   projectPublicGame,
+  projectSpectatorView,
   projectSupportView,
   kickSupporter,
   releaseInactiveSupportLinks,
   requestSupport,
   respondToSupportRequest,
-  sendTableReaction,
+  sendAvatarEmojiReaction,
   stageCards,
   supportPlayer,
   supportSquadMemberIds,
   supportSquadPlayerIdFor,
   takeDrawPenalty,
+  voteKickPlayer,
 } from "./engine"
 export type { CreateGameOptions } from "./engine"
 export type {
@@ -60,17 +68,24 @@ export type {
   SupportEndReason,
   SupportHistoryEntry,
   SupportLink,
-  HypeMeter,
-  SendTableReactionInput,
+  AvatarEmojiReaction,
+  SendAvatarEmojiReactionInput,
   SupportRecap,
   SupportRecapTitle,
   SupportRequest,
-  TableReaction,
-  TableReactionKind,
   WinnerPlacement,
 } from "./game"
 export { playerInitials, turnOrderFromSeating } from "./players"
-export type { HouseRules, Player, RoomSnapshot, RoomStatus } from "./rooms"
+export { AVATAR_REACTION_EMOJIS } from "./reactions"
+export type { AvatarReactionEmoji } from "./reactions"
+export type {
+  HouseRules,
+  Player,
+  RoomSnapshot,
+  RoomStatus,
+  RoomVoteKickSnapshot,
+  VoteKickCooldown,
+} from "./rooms"
 export {
   ROOM_CODE_LENGTH,
   ROOM_CODE_PATTERN,
@@ -83,6 +98,7 @@ export type {
   CommandResult,
   CreateRoomRequest,
   CreateRoomResponse,
+  CastVoteKickInput,
   GameError,
   InterServerEvents,
   JoinRoomInput,
@@ -95,6 +111,8 @@ export type {
   ServerToClientEvents,
   SetSeatOrderInput,
   SocketData,
+  SpectatePlayerInput,
+  StartVoteKickInput,
   SupportPlayerInput,
   VoiceSignal,
   VoiceSignalEvent,

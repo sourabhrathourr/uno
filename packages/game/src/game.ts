@@ -1,4 +1,5 @@
 import type { Card, CardColor } from "./cards"
+import type { AvatarReactionEmoji } from "./reactions"
 import type { HouseRules, Player } from "./rooms"
 
 export type PlayColor = Exclude<CardColor, "wild">
@@ -20,7 +21,9 @@ export type GameEventType =
   | "uno-called"
   | "uno-caught"
   | "player-eliminated"
+  | "player-waiting"
   | "game-won"
+  | "player-vote-kicked"
   | "support-started"
   | "support-ended"
   | "support-kicked"
@@ -78,28 +81,19 @@ export type SupportRequest = {
   createdAt: string
 }
 
-export type TableReactionKind = "emoji" | "preset"
-
-export type SendTableReactionInput = {
-  kind: TableReactionKind
-  body: string
+export type SendAvatarEmojiReactionInput = {
+  body: AvatarReactionEmoji
 }
 
-export type TableReaction = SendTableReactionInput & {
+export type AvatarEmojiReaction = SendAvatarEmojiReactionInput & {
   id: string
   playerId: string
   supportedPlayerId: string | null
   createdAt: string
 }
 
-export type HypeMeter = {
-  value: number
-  threshold: number
-  celebrationCount: number
-}
-
 export type SupportRecapTitle = {
-  label: "Early Believer" | "Hype Captain" | "Crowd Favorite"
+  label: "Early Believer" | "Crowd Favorite"
   playerId: string
   description: string
 }
@@ -127,6 +121,8 @@ export type PlayerGamePublic = {
   handCount: number
   declaredUno: boolean
   eliminated: boolean
+  voteKicked: boolean
+  waiting: boolean
   winnerPlacement: WinnerPlacement | null
   connected: boolean
   ready: boolean
@@ -167,8 +163,7 @@ export type PublicGameSnapshot = {
   winnerPlacements: WinnerPlacement[]
   winnerPlayerId: string | null
   supportLinks: SupportLink[]
-  tableReactions: TableReaction[]
-  hypeMeter: HypeMeter
+  avatarEmojiReactions: AvatarEmojiReaction[]
   supportRecap: SupportRecap | null
 }
 
@@ -193,6 +188,8 @@ export type GameState = {
   discardPile: Card[]
   handsByPlayerId: Record<string, Card[]>
   eliminatedPlayerIds: string[]
+  voteKickedPlayerIds: string[]
+  waitingPlayerIds: string[]
   knockedOutCards: Card[]
   drawStack: DrawStack | null
   pendingChoice: PendingChoice | null
@@ -206,9 +203,7 @@ export type GameState = {
   supportHistory: SupportHistoryEntry[]
   supportBlocks: SupportBlock[]
   supportRequests: SupportRequest[]
-  tableReactions: TableReaction[]
-  hypeMeter: HypeMeter
-  reactionCountsByPlayerId: Record<string, number>
+  avatarEmojiReactions: AvatarEmojiReaction[]
   events: GameEvent[]
 }
 

@@ -152,11 +152,28 @@ describe("support experience", () => {
   it("offers only active players who have not blocked this supporter", () => {
     const candidates = availableSupportCandidates(
       [
-        { playerId: "a", eliminated: true, winnerPlacement: null },
-        { playerId: "b", eliminated: false, winnerPlacement: null },
+        {
+          playerId: "a",
+          eliminated: true,
+          waiting: false,
+          winnerPlacement: null,
+        },
+        {
+          playerId: "b",
+          eliminated: false,
+          waiting: false,
+          winnerPlacement: null,
+        },
+        {
+          playerId: "waiting",
+          eliminated: false,
+          waiting: true,
+          winnerPlacement: null,
+        },
         {
           playerId: "c",
           eliminated: false,
+          waiting: false,
           winnerPlacement: {
             playerId: "c",
             position: 1,

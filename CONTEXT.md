@@ -17,11 +17,15 @@ A player who can still take turns in the current match because they have neither
 _Avoid_: Contender, playing player
 
 **Inactive Player**:
-A player who has won or been eliminated and can no longer take turns in the current match. An inactive player may remain neutral or choose an active player to support.
+A player who has no turn rights in the current match because they have won, been eliminated, been vote-kicked, or are waiting for the next match. An inactive player may remain neutral or choose an active player to support.
 _Avoid_: Spectator
 
+**Waiting Player**:
+A seated room participant who joined while a match was actively playing and waits to become active when the next match starts.
+_Avoid_: Spectator, late joiner
+
 **Supporter**:
-An inactive player who has publicly chosen one active player to support. A supporter participates socially without changing match rules or outcomes and cannot end their own support link.
+An inactive player, including a waiting player, who has publicly chosen one active player to support. A supporter participates socially without changing match rules or outcomes and cannot end their own support link.
 _Avoid_: Spectator, watcher
 
 **Supported Player**:
@@ -31,6 +35,14 @@ _Avoid_: Supporter, spectated player, target
 **Support Kick**:
 The supported player's removal of one supporter from their support squad, immediately revoking Support View and Squad Chat access. The kicked player may support someone else but cannot support the player who kicked them again during the same match.
 _Avoid_: Ban, leave squad
+
+**Vote-Kick**:
+A public vote that seated participants use to make another player inactive for the current match, or for the upcoming match when started from the lobby.
+_Avoid_: Ban, hard kick, remove from room
+
+**Vote-Kicked Player**:
+A seated player made inactive by a passed Vote-Kick. A Vote-Kicked Player remains socially present, cannot participate in gameplay or Vote-Kicks until the Vote-Kick effect clears, and is visually marked as vote-kicked.
+_Avoid_: Banned player, removed player, spectator
 
 **Support View**:
 The read-only perspective unlocked after a support link is confirmed, from which a supporter sees their supported player's full hand and live decision state. Information learned in this view may be discussed through the room's social channels.
@@ -48,13 +60,9 @@ _Avoid_: Team chat, supporter chat
 A reference in a chat message to one or more players by identity, displayed with `@` and accompanied by a subtle notification for each recipient. Public Chat may mention anyone in the room, while Squad Chat may mention only current squad members.
 _Avoid_: Tag, label
 
-**Table Reaction**:
-A public, cosmetic emoji or preset phrase that any player may send during a match. A supporter's reaction is visually directed toward their supported player.
-_Avoid_: Chat message, supporter power
-
-**Hype Meter**:
-A table-wide cosmetic celebration meter built through reactions from all players. It never changes cards, turns, penalties, or match outcomes.
-_Avoid_: Power meter, supporter meter
+**Avatar Emoji Reaction**:
+A public, cosmetic emoji that any player may send during a match. It briefly replaces the sender's animal avatar, or the supported player's avatar when sent by a supporter.
+_Avoid_: Chat message, supporter power, taunt
 
 **Support Recap**:
 The end-of-match summary of how supporters moved between supported players, together with cosmetic titles earned from that activity.

@@ -50,7 +50,7 @@ function App() {
       setError(
         cause instanceof Error
           ? cause.message
-          : "Could not reach the game server.",
+          : "Could not reach the game server."
       )
     } finally {
       setCreating(false)
@@ -64,10 +64,10 @@ function App() {
           <p className="text-[11px] font-medium tracking-[0.2em] text-white/45 uppercase sm:text-xs">
             UNO No Mercy
           </p>
-          <h1 className="mt-3 max-w-xl text-balance text-4xl font-semibold leading-[1.04] tracking-tight sm:text-5xl">
+          <h1 className="mt-3 max-w-xl text-4xl leading-[1.04] font-semibold tracking-tight text-balance sm:text-5xl">
             Book a private No Mercy table.
           </h1>
-          <p className="mt-4 max-w-xl text-pretty text-base leading-7 text-white/58">
+          <p className="mt-4 max-w-xl text-base leading-7 text-pretty text-white/58">
             Send the code, pull everyone into one live room, and let the
             stack-offs, color calls, and UNO catches unfold in real time.
           </p>
@@ -80,7 +80,10 @@ function App() {
             void handleCreateRoom()
           }}
         >
-          <label className="text-sm font-medium text-white/82" htmlFor="player-name">
+          <label
+            className="text-sm font-medium text-white/82"
+            htmlFor="player-name"
+          >
             Player name
           </label>
           <p className="mt-1 text-xs leading-5 text-white/42">
@@ -91,7 +94,7 @@ function App() {
               id="player-name"
               value={playerName}
               onChange={(event) => setPlayerName(event.target.value)}
-              className="min-h-11 w-full flex-none rounded-lg border border-white/10 bg-black/42 px-3.5 text-base text-white outline-none transition-[border-color,background-color,box-shadow] duration-200 placeholder:text-white/30 focus:border-white/28 focus:bg-black/58 focus:shadow-[0_0_0_3px_rgba(255,255,255,0.055)] sm:h-10 sm:flex-1 sm:text-sm"
+              className="min-h-11 w-full flex-none rounded-lg border border-white/10 bg-black/42 px-3.5 text-base text-white transition-[border-color,background-color,box-shadow] duration-200 outline-none placeholder:text-white/30 focus:border-white/28 focus:bg-black/58 focus:shadow-[0_0_0_3px_rgba(255,255,255,0.055)] sm:h-10 sm:flex-1 sm:text-sm"
               placeholder="Arc"
               maxLength={24}
               autoComplete="nickname"

@@ -22,7 +22,13 @@ export function CardBack() {
         </defs>
         <g transform={`rotate(${tiltDegrees} 50 70)`}>
           <ellipse cx="50" cy="70" rx="42" ry="68" fill="black" />
-          <ellipse cx="50" cy="70" rx="38" ry="62" fill="url(#back-oval-grad)" />
+          <ellipse
+            cx="50"
+            cy="70"
+            rx="38"
+            ry="62"
+            fill="url(#back-oval-grad)"
+          />
         </g>
         {/* "UNO" upright — sits on top of the tilted red oval. */}
         <text

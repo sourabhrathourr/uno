@@ -3,10 +3,14 @@ import type {
   Direction,
   PlayerGameSnapshot,
   PlayCardsInput,
-  SendTableReactionInput,
+  SendAvatarEmojiReactionInput,
   StageCardsInput,
 } from "./game"
+import type { VoteKickChoice } from "./chat"
 
+export type SpectatePlayerInput = {
+  targetPlayerId: string
+}
 export type SupportPlayerInput = {
   supportedPlayerId: string
 }
@@ -24,6 +28,13 @@ export type SetSeatOrderInput = {
   /** Every seated player id, in the seating order they should take. */
   playerOrder: string[]
   direction: Direction
+}
+export type StartVoteKickInput = {
+  targetPlayerId: string
+}
+export type CastVoteKickInput = {
+  voteKickId: string
+  choice: VoteKickChoice
 }
 import type { PlayerSocialSnapshot, SendChatMessageInput } from "./chat"
 import type { HouseRules, Player, RoomSnapshot } from "./rooms"
@@ -150,6 +161,14 @@ export type ClientToServerEvents = {
     input: SendChatMessageInput,
     ack: (result: CommandResult<RoomSnapshot>) => void
   ) => void
+  "room:startVoteKick": (
+    input: StartVoteKickInput,
+    ack: (result: CommandResult<RoomSnapshot>) => void
+  ) => void
+  "room:castVoteKick": (
+    input: CastVoteKickInput,
+    ack: (result: CommandResult<RoomSnapshot>) => void
+  ) => void
   "voice:requestStates": () => void
   "voice:setState": (input: VoiceStateInput) => void
   "voice:signal": (input: VoiceSignalInput) => void
@@ -189,11 +208,15 @@ export type ClientToServerEvents = {
     input: RespondSupportRequestInput,
     ack: (result: CommandResult<RoomSnapshot>) => void
   ) => void
-  "game:sendReaction": (
-    input: SendTableReactionInput,
+  "game:sendAvatarEmojiReaction": (
+    input: SendAvatarEmojiReactionInput,
     ack: (result: CommandResult<RoomSnapshot>) => void
   ) => void
   "game:getSupportView": (
+    ack: (result: CommandResult<PlayerGameSnapshot | null>) => void
+  ) => void
+  "game:spectatePlayer": (
+    input: SpectatePlayerInput,
     ack: (result: CommandResult<PlayerGameSnapshot | null>) => void
   ) => void
 }

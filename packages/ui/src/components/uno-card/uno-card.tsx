@@ -1,4 +1,3 @@
-import type { CSSProperties, MouseEvent, PointerEvent } from "react"
 import { useState } from "react"
 
 import { cn } from "@workspace/ui/lib/utils"
@@ -9,6 +8,7 @@ import { CardCorner } from "./parts/card-corner"
 import { CardSurface } from "./parts/card-surface"
 import { GlyphCenter, GlyphCorner, ovalModeFor } from "./glyphs"
 import { ease, sizes } from "./tokens"
+import type { CSSProperties, MouseEvent, PointerEvent } from "react"
 import type { Card, CardSize } from "./types"
 
 type Props = {
@@ -99,10 +99,12 @@ export function UnoCard({
       className={cn(
         "group relative inline-block border-0 bg-transparent p-0 outline-none",
         "focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:ring-offset-2 focus-visible:ring-offset-black",
-        !isStatic && !disabled && "active:[transform:translateY(0)_scale(0.96)]",
+        !isStatic &&
+          !disabled &&
+          "active:[transform:translateY(0)_scale(0.96)]",
         disabled && "cursor-not-allowed opacity-55",
         !isInteractive && !disabled && "cursor-default",
-        className,
+        className
       )}
       style={wrapperStyle}
     >
@@ -119,7 +121,11 @@ export function UnoCard({
             <CardCenter mode={ovalMode}>
               <GlyphCenter face={card.face} />
             </CardCenter>
-            <CardCorner position="top-left" inset={dim.cornerInset} fontPx={dim.cornerFontPx}>
+            <CardCorner
+              position="top-left"
+              inset={dim.cornerInset}
+              fontPx={dim.cornerFontPx}
+            >
               <GlyphCorner face={card.face} />
             </CardCorner>
             <CardCorner

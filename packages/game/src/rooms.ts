@@ -39,11 +39,23 @@ export type RoomSnapshot = {
   nextMatchDirection: Direction
   players: Player[]
   chatMessages: ChatMessage[]
+  voteKick: RoomVoteKickSnapshot
   houseRules: HouseRules
   game: PublicGameSnapshot | null
   version: number
   createdAt: string
   updatedAt: string
+}
+
+export type VoteKickCooldown = {
+  targetPlayerId: string
+  expiresAt: string
+}
+
+export type RoomVoteKickSnapshot = {
+  activeVoteKickId: string | null
+  lobbyVoteKickedPlayerIds: string[]
+  cooldowns: VoteKickCooldown[]
 }
 
 export function createDefaultHouseRules(): HouseRules {

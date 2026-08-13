@@ -10,7 +10,7 @@ import type {
 import { mentionablePlayersForChannel } from "@/components/support-experience"
 import { playFx } from "@/lib/sound"
 
-export type ChatTray = "presets" | "emoji" | "gifs" | "mentions"
+export type ChatTray = "presets" | "emoji" | "gifs" | "voteKick"
 
 export function useChannelChat({
   messages,
@@ -45,7 +45,7 @@ export function useChannelChat({
     players,
     channel,
     squadMemberIds
-  )
+  ).filter((player) => player.id !== selfPlayerId)
 
   const markChannelRead = useCallback(
     (activeChannel = channel) => {
@@ -53,8 +53,13 @@ export function useChannelChat({
         activeChannel === "squad" ? squadMessages : messages
       setSeenMessageIds((current) => {
         const next = new Set(current)
-        for (const message of activeMessages) next.add(message.id)
-        return next
+        let changed = false
+        for (const message of activeMessages) {
+          if (next.has(message.id)) continue
+          next.add(message.id)
+          changed = true
+        }
+        return changed ? next : current
       })
     },
     [channel, messages, squadMessages]
@@ -94,13 +99,19 @@ export function useChannelChat({
     )
   }
 
-  function addMention(mentioned: Player) {
-    const prefix = text && !text.endsWith(" ") ? `${text} ` : text
-    setText(`${prefix}@${mentioned.name} `)
+  function applyMention(
+    mentioned: Player,
+    range: { start: number; end: number }
+  ) {
+    const before = text.slice(0, range.start)
+    const after = text.slice(range.end)
+    const next = `${before}@${mentioned.name} ${after}`
+    setText(next)
     setMentionPlayerIds((current) =>
       Array.from(new Set([...current, mentioned.id]))
     )
     setTray(null)
+    return range.start + mentioned.name.length + 2
   }
 
   const publicMention = messages.some(
@@ -119,7 +130,7 @@ export function useChannelChat({
   ).length
 
   return {
-    addMention,
+    applyMention,
     changeText,
     channel,
     channelMessages,

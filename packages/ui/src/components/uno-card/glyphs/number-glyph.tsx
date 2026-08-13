@@ -1,5 +1,5 @@
-import type { NumberValue } from "../types"
 import { GlyphCanvas, glyphTextProps } from "./glyph-shared"
+import type { NumberValue } from "../types"
 
 export function NumberCenter({ value }: { value: NumberValue }) {
   return (

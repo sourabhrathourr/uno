@@ -1,5 +1,4 @@
 import type { Card, CardFace } from "./cards"
-import { TABLE_REACTION_EMOJIS, TABLE_REACTION_PRESETS } from "./chat"
 import { createNoMercyDeck, shuffleCards } from "./deck"
 import type {
   CatchUnoInput,
@@ -13,15 +12,17 @@ import type {
   PublicGameSnapshot,
   StageCardsInput,
   SupportEndReason,
-  SendTableReactionInput,
+  SendAvatarEmojiReactionInput,
   SupportRecap,
   SupportRequest,
 } from "./game"
+import { AVATAR_REACTION_EMOJIS } from "./reactions"
 import type { CommandResult } from "./realtime"
 
 export type CreateGameOptions = {
   /** Turn direction the match opens with. Defaults to clockwise. */
   direction?: Direction
+  voteKickedPlayerIds?: string[]
 }
 
 export function createGame(
@@ -32,11 +33,21 @@ export function createGame(
     .slice()
     .sort((a, b) => a.seat - b.seat)
     .map((player) => player.id)
+  const voteKickedPlayerIds = unique(
+    options.voteKickedPlayerIds?.filter((playerId) =>
+      playerOrder.includes(playerId)
+    ) ?? []
+  )
+  const voteKickedPlayers = new Set(voteKickedPlayerIds)
 
   const deck = shuffleCards(createNoMercyDeck())
   const handsByPlayerId: Record<string, Card[]> = {}
 
   for (const playerId of playerOrder) {
+    if (voteKickedPlayers.has(playerId)) {
+      handsByPlayerId[playerId] = []
+      continue
+    }
     handsByPlayerId[playerId] = deck.splice(
       0,
       context.houseRules.startingHandSize
@@ -61,11 +72,14 @@ export function createGame(
     playerOrder,
     direction: options.direction ?? 1,
     currentColor: colorFor(firstDiscard),
-    turnPlayerId: playerOrder[0] ?? null,
+    turnPlayerId:
+      playerOrder.find((playerId) => !voteKickedPlayers.has(playerId)) ?? null,
     drawPile: deck,
     discardPile,
     handsByPlayerId,
     eliminatedPlayerIds: [],
+    voteKickedPlayerIds,
+    waitingPlayerIds: [],
     knockedOutCards: [],
     drawStack: null,
     pendingChoice: null,
@@ -79,9 +93,7 @@ export function createGame(
     supportHistory: [],
     supportBlocks: [],
     supportRequests: [],
-    tableReactions: [],
-    hypeMeter: { value: 0, threshold: 100, celebrationCount: 0 },
-    reactionCountsByPlayerId: {},
+    avatarEmojiReactions: [],
     events: [],
   }
 
@@ -93,10 +105,47 @@ export function createGame(
   return game
 }
 
+export function addWaitingPlayer(
+  game: GameState,
+  context: GameContext,
+  playerId: string
+): CommandResult<GameState> {
+  if (isGameFinished(game)) {
+    return fail("game-finished", "This match is finished.")
+  }
+  if (!context.players.some((player) => player.id === playerId)) {
+    return fail("player-not-found", "That player is not seated here.")
+  }
+  if (game.playerOrder.includes(playerId)) {
+    game.waitingPlayerIds = unique([...(game.waitingPlayerIds ?? []), playerId])
+    game.handsByPlayerId[playerId] ??= []
+    return ok(game)
+  }
+
+  const existingOrWaiting = new Set([...game.playerOrder, playerId])
+  game.playerOrder = context.players
+    .slice()
+    .sort((a, b) => a.seat - b.seat)
+    .map((player) => player.id)
+    .filter((orderedPlayerId) => existingOrWaiting.has(orderedPlayerId))
+  game.waitingPlayerIds = unique([...(game.waitingPlayerIds ?? []), playerId])
+  game.handsByPlayerId[playerId] = []
+  pushEvent(game, {
+    type: "player-waiting",
+    playerId,
+    message: `${playerName(context, playerId)} is waiting for the next match.`,
+  })
+  return ok(game)
+}
+
 export function projectPublicGame(
   game: GameState,
   context: GameContext
 ): PublicGameSnapshot {
+  const playersById = new Map(
+    context.players.map((player) => [player.id, player])
+  )
+
   return {
     matchId: game.matchId,
     direction: game.direction,
@@ -108,14 +157,17 @@ export function projectPublicGame(
     drawStack: game.drawStack ? { ...game.drawStack } : null,
     pendingChoice: projectPendingChoice(game),
     stagedPlay: projectStagedPlay(game),
-    players: context.players
-      .slice()
-      .sort((a, b) => a.seat - b.seat)
+    players: game.playerOrder
+      .map((playerId) => playersById.get(playerId))
+      .filter((player): player is GameContext["players"][number] =>
+        Boolean(player)
+      )
       .map((player) => {
         const winnerPlacement = winnerPlacementFor(game, player.id)
         const handCount = winnerPlacement
           ? 0
           : (game.handsByPlayerId[player.id]?.length ?? 0)
+        const waiting = (game.waitingPlayerIds ?? []).includes(player.id)
         return {
           playerId: player.id,
           handCount,
@@ -123,6 +175,8 @@ export function projectPublicGame(
             handCount === 1 &&
             (game.unoDeclaredPlayerIds ?? []).includes(player.id),
           eliminated: game.eliminatedPlayerIds.includes(player.id),
+          voteKicked: game.voteKickedPlayerIds.includes(player.id),
+          waiting,
           winnerPlacement: winnerPlacement ? { ...winnerPlacement } : null,
           connected: player.connected,
           ready: player.ready,
@@ -134,8 +188,9 @@ export function projectPublicGame(
     })),
     winnerPlayerId: game.winnerPlayerId,
     supportLinks: game.supportLinks.map((link) => ({ ...link })),
-    tableReactions: game.tableReactions.map((reaction) => ({ ...reaction })),
-    hypeMeter: { ...game.hypeMeter },
+    avatarEmojiReactions: game.avatarEmojiReactions.map((reaction) => ({
+      ...reaction,
+    })),
     supportRecap: isGameFinished(game) ? buildSupportRecap(game) : null,
   }
 }
@@ -210,6 +265,29 @@ export function projectPlayerGame(
       game.turnPlayerId === playerId &&
       game.drawStack?.targetPlayerId === playerId &&
       isPlayerActive(game, playerId),
+  }
+}
+
+export function projectSpectatorView(
+  game: GameState,
+  context: GameContext,
+  spectatorPlayerId: string,
+  targetPlayerId: string
+): PlayerGameSnapshot | null {
+  void context
+  if (isPlayerActive(game, spectatorPlayerId)) return null
+  if (!game.playerOrder.includes(targetPlayerId)) return null
+  if (!isPlayerActive(game, targetPlayerId)) return null
+
+  const hand = game.handsByPlayerId[targetPlayerId] ?? []
+  return {
+    playerId: targetPlayerId,
+    hand: hand.map((card) => ({ ...card })),
+    playableCardIds: [],
+    catchablePlayerIds: [],
+    canDraw: false,
+    canEndTurn: false,
+    canTakeDrawPenalty: false,
   }
 }
 
@@ -494,6 +572,36 @@ function dropSupportRequestsFrom(game: GameState, supporterPlayerId: string) {
   )
 }
 
+export function voteKickPlayer(
+  game: GameState,
+  context: GameContext,
+  targetPlayerId: string
+): CommandResult<GameState> {
+  if (isGameFinished(game)) {
+    return fail("game-finished", "This match is finished.")
+  }
+  if (!game.playerOrder.includes(targetPlayerId)) {
+    return fail("player-not-found", "That player is not part of this match.")
+  }
+  if (!isPlayerActive(game, targetPlayerId)) {
+    return fail("player-inactive", "Choose an active player to vote-kick.")
+  }
+
+  game.voteKickedPlayerIds = unique([
+    ...game.voteKickedPlayerIds,
+    targetPlayerId,
+  ])
+  removePlayerFromActivePlay(game, targetPlayerId)
+  pushEvent(game, {
+    type: "player-vote-kicked",
+    playerId: targetPlayerId,
+    message: `${playerName(context, targetPlayerId)} was vote-kicked from this match.`,
+  })
+  finishGameIfComplete(game, context)
+  normalizeInactiveTurnState(game, targetPlayerId)
+  return ok(game)
+}
+
 export function releaseInactiveSupportLinks(
   game: GameState,
   context: GameContext
@@ -523,11 +631,11 @@ export function releaseInactiveSupportLinks(
   return game
 }
 
-export function sendTableReaction(
+export function sendAvatarEmojiReaction(
   game: GameState,
   context: GameContext,
   playerId: string,
-  input: SendTableReactionInput
+  input: SendAvatarEmojiReactionInput
 ): CommandResult<GameState> {
   void context
   if (isGameFinished(game))
@@ -536,39 +644,27 @@ export function sendTableReaction(
     return fail("player-not-found", "You are not part of this match.")
   }
 
-  const validBody =
-    input.kind === "emoji"
-      ? TABLE_REACTION_EMOJIS.includes(
-          input.body as (typeof TABLE_REACTION_EMOJIS)[number]
-        )
-      : input.kind === "preset"
-        ? TABLE_REACTION_PRESETS.includes(
-            input.body as (typeof TABLE_REACTION_PRESETS)[number]
-          )
-        : false
-  if (!validBody) return fail("invalid-reaction", "Choose a table reaction.")
+  const validBody = AVATAR_REACTION_EMOJIS.includes(input.body)
+  if (!validBody) {
+    return fail(
+      "invalid-avatar-emoji-reaction",
+      "Choose an avatar emoji reaction."
+    )
+  }
 
   const supportedPlayerId =
     game.supportLinks.find((link) => link.supporterPlayerId === playerId)
       ?.supportedPlayerId ?? null
   const createdAt = new Date().toISOString()
-  game.tableReactions.push({
-    id: `${Date.now()}:${game.tableReactions.length}:${Math.random().toString(36).slice(2, 8)}`,
+  game.avatarEmojiReactions.push({
+    id: `${Date.now()}:${game.avatarEmojiReactions.length}:${Math.random().toString(36).slice(2, 8)}`,
     playerId,
     supportedPlayerId,
-    kind: input.kind,
     body: input.body,
     createdAt,
   })
-  if (game.tableReactions.length > 24) {
-    game.tableReactions = game.tableReactions.slice(-24)
-  }
-  game.reactionCountsByPlayerId[playerId] =
-    (game.reactionCountsByPlayerId[playerId] ?? 0) + 1
-  game.hypeMeter.value += 10
-  if (game.hypeMeter.value >= game.hypeMeter.threshold) {
-    game.hypeMeter.value -= game.hypeMeter.threshold
-    game.hypeMeter.celebrationCount += 1
+  if (game.avatarEmojiReactions.length > 24) {
+    game.avatarEmojiReactions = game.avatarEmojiReactions.slice(-24)
   }
   return ok(game)
 }
@@ -963,15 +1059,6 @@ function buildSupportRecap(game: GameState): SupportRecap {
       label: "Early Believer",
       playerId: earlyBeliever.supporterPlayerId,
       description: "Backed the match winner first.",
-    })
-  }
-
-  const hypeCaptain = maxCountEntry(game.reactionCountsByPlayerId)
-  if (hypeCaptain) {
-    titles.push({
-      label: "Hype Captain",
-      playerId: hypeCaptain[0],
-      description: "Brought the most table energy.",
     })
   }
 
@@ -1453,6 +1540,13 @@ function validateDrawStackPlay(
     )
   }
 
+  if (cards.length > 1 && !sameDrawGroup(cards)) {
+    return fail(
+      "multi-card-group-mismatch",
+      "Grouped draw cards must share the same draw type."
+    )
+  }
+
   if (!canStackDrawCards(game, cards)) {
     return fail(
       "draw-stack-too-low",
@@ -1572,7 +1666,9 @@ function canPlaySingleCard(
 }
 
 function canStackDrawCards(game: GameState, cards: Card[]): boolean {
-  if (!game.drawStack || cards.length === 0) return false
+  if (!game.drawStack || cards.length === 0 || !sameDrawGroup(cards)) {
+    return false
+  }
 
   const minimum = game.drawStack.minimum
   const top = topDiscard(game)
@@ -1700,12 +1796,7 @@ function checkMercyEliminations(game: GameState, context: GameContext) {
     if (hand.length <= context.houseRules.mercyHandLimit) continue
 
     game.eliminatedPlayerIds.push(playerId)
-    game.knockedOutCards.push(...hand)
-    game.handsByPlayerId[playerId] = []
-    game.unoVulnerablePlayerIds = game.unoVulnerablePlayerIds.filter(
-      (targetPlayerId) => targetPlayerId !== playerId
-    )
-    clearUnoDeclaration(game, playerId)
+    removePlayerFromActivePlay(game, playerId)
     pushEvent(game, {
       type: "player-eliminated",
       playerId,
@@ -1719,6 +1810,25 @@ function checkMercyEliminations(game: GameState, context: GameContext) {
     return
   }
 
+  normalizeInactiveTurnState(game)
+}
+
+function removePlayerFromActivePlay(game: GameState, playerId: string) {
+  const hand = game.handsByPlayerId[playerId] ?? []
+  if (hand.length > 0) {
+    game.knockedOutCards.push(...hand)
+    game.handsByPlayerId[playerId] = []
+  }
+  game.unoVulnerablePlayerIds = game.unoVulnerablePlayerIds.filter(
+    (targetPlayerId) => targetPlayerId !== playerId
+  )
+  clearUnoDeclaration(game, playerId)
+}
+
+function normalizeInactiveTurnState(
+  game: GameState,
+  fallbackFromPlayerId?: string
+) {
   if (game.drawStack && !isPlayerActive(game, game.drawStack.targetPlayerId)) {
     game.drawStack = null
   }
@@ -1731,7 +1841,11 @@ function checkMercyEliminations(game: GameState, context: GameContext) {
   }
 
   if (game.turnPlayerId && !isPlayerActive(game, game.turnPlayerId)) {
-    game.turnPlayerId = nextPlayerId(game, game.turnPlayerId, 1)
+    game.turnPlayerId = nextPlayerId(
+      game,
+      fallbackFromPlayerId ?? game.turnPlayerId,
+      1
+    )
     game.drawnThisTurnPlayerId = null
     game.stagedPlay = null
   } else if (
@@ -1788,6 +1902,7 @@ function finishGameIfComplete(game: GameState, context: GameContext) {
   game.stagedPlay = null
   game.unoVulnerablePlayerIds = []
   game.unoDeclaredPlayerIds = []
+  game.voteKickedPlayerIds = []
 }
 
 function advanceTurn(game: GameState, fromPlayerId: string, steps: number) {
@@ -1879,7 +1994,10 @@ function activePlayerIds(game: GameState): string[] {
 
 function isPlayerActive(game: GameState, playerId: string): boolean {
   return (
+    game.playerOrder.includes(playerId) &&
     !game.eliminatedPlayerIds.includes(playerId) &&
+    !(game.voteKickedPlayerIds ?? []).includes(playerId) &&
+    !(game.waitingPlayerIds ?? []).includes(playerId) &&
     !winnerPlacementFor(game, playerId)
   )
 }

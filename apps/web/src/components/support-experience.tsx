@@ -14,7 +14,12 @@ export function mentionablePlayersForChannel<T extends { id: string }>(
 
 export function availableSupportCandidates(
   players: Array<
-    Pick<PlayerGamePublic, "playerId" | "eliminated" | "winnerPlacement">
+    Pick<
+      PlayerGamePublic,
+      "playerId" | "eliminated" | "waiting" | "winnerPlacement"
+    > & {
+      voteKicked?: boolean
+    }
   >,
   blockedSupportedPlayerIds: Array<string>,
   supporterPlayerId: string
@@ -23,6 +28,8 @@ export function availableSupportCandidates(
     (player) =>
       player.playerId !== supporterPlayerId &&
       !player.eliminated &&
+      !player.waiting &&
+      !player.voteKicked &&
       !player.winnerPlacement &&
       !blockedSupportedPlayerIds.includes(player.playerId)
   )

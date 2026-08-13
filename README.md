@@ -43,6 +43,22 @@ connection forced through a TURN relay — so a TURN server must be configured
 for that last step to work. Set `VOICE_DEBUG=1` on the server, or append
 `?voiceDebug=1` in the browser, to trace negotiation.
 
+## GIPHY search
+
+Copy `apps/server/.env.example` to `apps/server/.env`, then set
+`GIPHY_API_KEY` to enable featured and searchable GIFs. The server dev and start
+scripts load that file automatically. An optional `GIPHY_COUNTRY_CODE` may be
+set to a two-letter country code and defaults to `US`. Without an API key, chat
+falls back to the built-in curated GIF list. The server caps uncached upstream
+calls at 90 per hour by default; override that with `GIPHY_REQUESTS_PER_HOUR`
+after upgrading the key. Each player session is separately capped at 30
+uncached searches per hour; configure that with
+`GIPHY_REQUESTS_PER_PLAYER_PER_HOUR`.
+
+```bash
+GIPHY_API_KEY=your_key GIPHY_COUNTRY_CODE=IN pnpm dev
+```
+
 ## Adding components
 
 To add components to your app, run the following command at the root of your `web` app:

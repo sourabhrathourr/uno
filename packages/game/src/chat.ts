@@ -1,12 +1,17 @@
 import type { SupportRequest } from "./game"
+import type { GifProvider } from "./gifs"
 
-export type ChatMessageKind = "text" | "emoji" | "gif" | "preset"
+export type ChatMessageKind = "text" | "emoji" | "gif" | "preset" | "vote-kick"
 export type ChatChannel = "public" | "squad"
+export type VoteKickChoice = "yes" | "no"
+export type VoteKickStatus = "open" | "passed" | "failed"
+export type VoteKickResult = "kicked" | "not-kicked"
 
 export type SendChatMessageInput = {
   channel?: ChatChannel
   kind: ChatMessageKind
   body: string
+  gifProvider?: GifProvider
   mentionPlayerIds?: string[]
 }
 
@@ -21,7 +26,31 @@ export type ChatMessage = {
   body: string
   mentionPlayerIds: string[]
   label?: string
+  voteKick?: VoteKickPoll
   createdAt: string
+}
+
+export type VoteKickVote = {
+  playerId: string
+  choice: VoteKickChoice
+  votedAt: string
+}
+
+export type VoteKickPoll = {
+  id: string
+  initiatorPlayerId: string
+  initiatorPlayerName: string
+  targetPlayerId: string
+  targetPlayerName: string
+  status: VoteKickStatus
+  result: VoteKickResult | null
+  eligibleVoterIds: string[]
+  votes: VoteKickVote[]
+  yesCount: number
+  noCount: number
+  createdAt: string
+  closesAt: string
+  resolvedAt: string | null
 }
 
 export type PlayerSocialSnapshot = {
@@ -67,23 +96,6 @@ export const CHAT_PRESETS = [
   "+10 is a lifestyle.",
   "Caught you slipping.",
   "I respect the chaos.",
-] as const
-
-export const TABLE_REACTION_EMOJIS = [
-  "🔥",
-  "😱",
-  "😂",
-  "🙌",
-  "💀",
-  "👀",
-] as const
-
-export const TABLE_REACTION_PRESETS = [
-  "BIG MOVE",
-  "NO WAY",
-  "YOU'RE COOKED",
-  "CLUTCH",
-  "ABSOLUTE CHAOS",
 ] as const
 
 export const CHAT_GIFS = [
