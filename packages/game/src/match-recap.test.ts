@@ -154,6 +154,26 @@ describe("match recap", () => {
     ])
   })
 
+  it("only gives a finish position to players who actually went out", () => {
+    const game = createGame(context)
+    // One winner; the other two were mercy-eliminated and never finished.
+    game.winnerPlacements = [
+      { playerId: "b", position: 1, createdAt: "2026-07-10T00:01:00.000Z" },
+    ]
+    game.eliminatedPlayerIds = ["a", "c"]
+    finish(game)
+
+    const recap = projectPublicGame(game, context).matchRecap
+    const positions = new Map(
+      recap?.players.map((stats) => [stats.playerId, stats.finishPosition])
+    )
+    expect(positions.get("b")).toBe(1)
+    // These two must not inherit 2nd and 3rd from their row order, or the
+    // recap hands out silver and bronze to people who never finished.
+    expect(positions.get("a")).toBeNull()
+    expect(positions.get("c")).toBeNull()
+  })
+
   it("tracks the biggest stack that ever built up", () => {
     const game = createGame(context)
     game.biggestDrawStack = 0

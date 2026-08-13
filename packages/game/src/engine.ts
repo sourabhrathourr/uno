@@ -148,6 +148,7 @@ function emptyPlayerMatchStats(
     peakHandSize: startingHandSize,
     totalTurnMs: 0,
     timedTurns: 0,
+    finishPosition: null,
   }
 }
 
@@ -210,7 +211,10 @@ function buildMatchRecap(game: GameState): MatchRecap {
     ])
   )
   const players = game.playerOrder
-    .map((playerId) => ({ ...statsFor(game, playerId) }))
+    .map((playerId) => ({
+      ...statsFor(game, playerId),
+      finishPosition: finishOrder.get(playerId) ?? null,
+    }))
     .sort((a, b) => {
       // Finishers first in placement order, then everyone else.
       const aPlace = finishOrder.get(a.playerId) ?? Number.MAX_SAFE_INTEGER
@@ -2252,6 +2256,7 @@ function rotateHands(game: GameState) {
 
   game.unoVulnerablePlayerIds = []
   game.unoDeclaredPlayerIds = []
+  for (const playerId of active) recordPeakHandSize(game, playerId)
 }
 
 function swapHands(game: GameState, a: string, b: string) {
@@ -2263,6 +2268,8 @@ function swapHands(game: GameState, a: string, b: string) {
   game.unoVulnerablePlayerIds = []
   clearUnoDeclaration(game, a)
   clearUnoDeclaration(game, b)
+  recordPeakHandSize(game, a)
+  recordPeakHandSize(game, b)
 }
 
 function beginTurnAction(game: GameState, playerId?: string) {

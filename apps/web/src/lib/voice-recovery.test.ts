@@ -70,6 +70,7 @@ describe("voice peer recovery", () => {
     expect(
       isPeerStalled({
         connectionState: "connecting",
+        connectedAt: null,
         createdAt,
         now: createdAt + PEER_CONNECT_TIMEOUT_MS - 1,
       })
@@ -77,6 +78,7 @@ describe("voice peer recovery", () => {
     expect(
       isPeerStalled({
         connectionState: "connecting",
+        connectedAt: null,
         createdAt,
         now: createdAt + PEER_CONNECT_TIMEOUT_MS,
       })
@@ -85,9 +87,31 @@ describe("voice peer recovery", () => {
     expect(
       isPeerStalled({
         connectionState: "connected",
+        connectedAt: createdAt + 500,
         createdAt,
         now: createdAt + PEER_CONNECT_TIMEOUT_MS * 100,
       })
     ).toBe(false)
+  })
+
+  it("leaves a blip on an established peer to the disconnect grace", () => {
+    const createdAt = 1_000
+    // Connected fine, then dropped an hour later. The watchdog must not treat
+    // this as stalled: doing so restarted healthy legs and burned the retries
+    // meant for connections that never came up at all.
+    for (const connectionState of [
+      "disconnected",
+      "connecting",
+      "failed",
+    ] as const) {
+      expect(
+        isPeerStalled({
+          connectionState,
+          connectedAt: createdAt + 800,
+          createdAt,
+          now: createdAt + 60 * 60 * 1000,
+        })
+      ).toBe(false)
+    }
   })
 })

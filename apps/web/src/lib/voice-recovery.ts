@@ -51,18 +51,26 @@ export function hasTurnServers(iceServers: RTCIceServer[] | undefined) {
 }
 
 /**
- * True once a peer has spent long enough short of `connected` that waiting is
- * no longer the right move.
+ * True only for a peer that has *never* connected and has had long enough to.
+ *
+ * A leg that connected and later blipped is not stalled — it is handled by the
+ * disconnect grace timer. Treating those as stalled meant a momentary drop on
+ * a healthy connection triggered an immediate ICE restart, burned the retry
+ * budget, and could escalate a working peer all the way to a relay rebuild.
  */
 export function isPeerStalled({
   connectionState,
+  connectedAt,
   createdAt,
   now,
 }: {
   connectionState: RTCPeerConnectionState
+  /** When this peer first reached `connected`, if it ever did. */
+  connectedAt: number | null
   createdAt: number
   now: number
 }) {
   if (connectionState === "connected") return false
+  if (connectedAt !== null) return false
   return now - createdAt >= PEER_CONNECT_TIMEOUT_MS
 }

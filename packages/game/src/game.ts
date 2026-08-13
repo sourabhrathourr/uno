@@ -210,6 +210,8 @@ export type PlayerMatchStats = {
   /** Time on the clock across every turn this player actually took. */
   totalTurnMs: number
   timedTurns: number
+  /** 1-based finish position, or null for players who never went out. */
+  finishPosition: number | null
 }
 
 export type MatchRecap = {

@@ -1679,7 +1679,11 @@ function NextMatchSheet({
     () => [...room.players].sort((a, b) => a.seat - b.seat),
     [room.players],
   );
-  const direction: 1 | -1 = room.nextMatchDirection === -1 ? -1 : 1;
+  const serverDirection: 1 | -1 = room.nextMatchDirection === -1 ? -1 : 1;
+  // Held locally so a seat drag cannot resend a stale direction and quietly
+  // undo the choice made a moment earlier.
+  const [draftDirection, setDraftDirection] = useState<1 | -1>(serverDirection);
+  const direction = draftDirection;
   const [draft, setDraft] = useState<Player[]>(seated);
   const [draggingId, setDraggingId] = useState<string | null>(null);
 
@@ -1689,6 +1693,10 @@ function NextMatchSheet({
     if (draggingId) return;
     setDraft(seated);
   }, [seated, draggingId]);
+
+  useEffect(() => {
+    setDraftDirection(serverDirection);
+  }, [serverDirection]);
 
   const turnOrder = turnOrderFromSeating(draft, direction);
   const firstSeatName = draft[0]?.name ?? 'The top seat';
@@ -1778,6 +1786,7 @@ function NextMatchSheet({
                 key={option}
                 onPress={() => {
                   void impact('selection');
+                  setDraftDirection(option);
                   onApply(
                     draft.map((candidate) => candidate.id),
                     option,

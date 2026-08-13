@@ -2539,7 +2539,14 @@ function NextMatchPanel({
   onClose: () => void
 }) {
   const seatedOrder = [...room.players].sort((a, b) => a.seat - b.seat)
-  const direction = room.nextMatchDirection === -1 ? -1 : 1
+  const serverDirection: 1 | -1 = room.nextMatchDirection === -1 ? -1 : 1
+  // Held locally so a seat drag cannot resend a stale direction and quietly
+  // undo the choice made a moment earlier.
+  const [draftDirection, setDraftDirection] = useState<1 | -1>(serverDirection)
+  const direction = draftDirection
+  useEffect(() => {
+    setDraftDirection(serverDirection)
+  }, [serverDirection])
   // Pointer-driven rather than HTML5 drag-and-drop, which never fires on
   // touch and was unreliable inside the portal on desktop.
   const [drag, setDrag] = useState<{
@@ -2552,6 +2559,7 @@ function NextMatchPanel({
   const rowHeight = SEAT_ROW_HEIGHT_PX
 
   function applyOrder(nextOrder: Array<Player>, nextDirection: 1 | -1) {
+    setDraftDirection(nextDirection)
     onSetSeatOrder({
       playerOrder: nextOrder.map((candidate) => candidate.id),
       direction: nextDirection,
@@ -3181,7 +3189,7 @@ function MatchRecapPanel({
       <div className="uno-scrollbar mt-1.5 max-h-full overflow-y-auto">
         {safeSlide === 0 && (
           <ol className="space-y-1">
-            {recap.players.map((stats, index) => (
+            {recap.players.map((stats) => (
               <li
                 key={stats.playerId}
                 className={
@@ -3192,11 +3200,11 @@ function MatchRecapPanel({
                 }
               >
                 <span className="w-5 shrink-0 text-center font-semibold text-white/45 tabular-nums">
-                  {index + 1}
+                  {stats.finishPosition ?? "—"}
                 </span>
-                {placementCrownFor(index + 1) ? (
+                {placementCrownFor(stats.finishPosition) ? (
                   <PlacementCrown
-                    placement={index + 1}
+                    placement={stats.finishPosition as number}
                     className="size-4 shrink-0"
                   />
                 ) : (

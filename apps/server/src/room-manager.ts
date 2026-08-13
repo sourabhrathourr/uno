@@ -456,7 +456,7 @@ export class RoomManager {
     playerId: string,
     input: SetSeatOrderInput
   ): CommandResult<RoomSnapshot> {
-    const room = this.rooms.get(normalizeRoomCode(code))
+    const room = this.getManagedRoom(code)
     if (!room) {
       return fail("room-not-found", "That room code does not exist.")
     }
@@ -1531,9 +1531,12 @@ function syncRoomStatus(room: ManagedRoom) {
  * holder while they are still seated, otherwise the host.
  */
 function nextMatchStarterId(room: ManagedRoom): string | null {
-  if (room.crownPlayerId && findPlayer(room, room.crownPlayerId)) {
-    return room.crownPlayerId
-  }
+  // A crown holder who has dropped off would otherwise deadlock the table, so
+  // the right to arrange the next match falls back to the host.
+  const crownHolder = room.crownPlayerId
+    ? findPlayer(room, room.crownPlayerId)
+    : undefined
+  if (crownHolder?.connected) return crownHolder.id
   return room.hostPlayerId
 }
 

@@ -887,6 +887,10 @@ export function useRoomVoice({
       if (meta) meta.restartAttempts = restartAttempts + 1
 
       if (action === "ice-restart") {
+        if (meta) {
+          meta.createdAt = now
+          meta.connectedAt = null
+        }
         void restartNegotiation(remotePlayerId)
         return
       }
@@ -939,6 +943,7 @@ export function useRoomVoice({
       const meta = peerMetaRef.current.get(player.id)
       const stalled = isPeerStalled({
         connectionState: peer.connectionState,
+        connectedAt: meta?.connectedAt ?? null,
         createdAt: meta?.createdAt ?? now,
         now,
       })
