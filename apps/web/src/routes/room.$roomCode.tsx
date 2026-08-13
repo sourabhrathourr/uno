@@ -2018,6 +2018,7 @@ function GameTable({
               )}
 
               <FannedGameHand
+                hidden={Boolean(gameFinished && game?.matchRecap)}
                 cards={
                   isSelfEliminated
                     ? (visibleSupportView?.hand ?? [])
@@ -2419,6 +2420,7 @@ function GameTable({
                 )}
 
                 <FannedGameHand
+                  hidden={Boolean(gameFinished && game?.matchRecap)}
                   cards={
                     isSelfEliminated
                       ? (visibleSupportView?.hand ?? [])
@@ -3000,7 +3002,7 @@ function MatchRecapPanel({
   const nameFor = (playerId: string) =>
     players.find((candidate) => candidate.id === playerId)?.name ?? "Player"
 
-  const slides = ["Podium", "Players", "Turning points"]
+  const slides = ["Podium", "Cards handled", "Turning points", "Awards"]
   const safeSlide = Math.min(slide, slides.length - 1)
 
   const durationMs = recap.finishedAt
@@ -3027,6 +3029,81 @@ function MatchRecapPanel({
   const biggestHand = [...recap.players].sort(
     (a, b) => b.peakHandSize - a.peakHandSize
   )[0]
+
+  // Named titles rather than raw numbers — the bit people screenshot. Only
+  // awards that actually happened are shown, so a quiet match stays honest.
+  const topBy = (pick: (stats: (typeof recap.players)[number]) => number) => {
+    const best = [...recap.players].sort((a, b) => pick(b) - pick(a))[0]
+    return best && pick(best) > 0 ? { stats: best, value: pick(best) } : null
+  }
+
+  const awards = (
+    [
+      {
+        key: "engine",
+        emoji: "🚀",
+        title: "Main character",
+        blurb: "played the most",
+        top: topBy((stats) => stats.cardsPlayed),
+      },
+      {
+        key: "hoarder",
+        emoji: "🗄️",
+        title: "Collector",
+        blurb: "drew the most",
+        top: topBy((stats) => stats.cardsDrawn),
+      },
+      {
+        key: "villain",
+        emoji: "😈",
+        title: "Public enemy",
+        blurb: "dealt the most draw",
+        top: topBy((stats) => stats.drawCardsDealt),
+      },
+      {
+        key: "sheriff",
+        emoji: "🚨",
+        title: "Sheriff",
+        blurb: "caught the most UNOs",
+        top: topBy((stats) => stats.unoCatches),
+      },
+      {
+        key: "butterfingers",
+        emoji: "🫠",
+        title: "Butterfingers",
+        blurb: "caught out the most",
+        top: topBy((stats) => stats.timesCaught),
+      },
+      {
+        key: "wildcard",
+        emoji: "🌈",
+        title: "Wildcard",
+        blurb: "most wilds played",
+        top: topBy((stats) => stats.wildsPlayed),
+      },
+      {
+        key: "trafficcop",
+        emoji: "🛑",
+        title: "Traffic cop",
+        blurb: "most skips and reverses",
+        top: topBy((stats) => stats.skipsPlayed + stats.reversesPlayed),
+      },
+      {
+        key: "loudmouth",
+        emoji: "📣",
+        title: "Loudmouth",
+        blurb: "called UNO the most",
+        top: topBy((stats) => stats.unosCalled),
+      },
+    ] as const
+  )
+    .filter((award) => award.top !== null)
+    .map((award) => ({
+      title: award.title,
+      emoji: award.emoji,
+      blurb: award.blurb,
+      playerId: (award.top as NonNullable<typeof award.top>).stats.playerId,
+    }))
 
   function changeSlide(delta: number) {
     setSlide((current) =>
@@ -3122,42 +3199,41 @@ function MatchRecapPanel({
 
         {safeSlide === 1 && (
           <div className="space-y-1.5">
-            {recap.players.map((stats) => {
-              const total = stats.cardsPlayed + stats.cardsDrawn
-              return (
-                <div key={stats.playerId} className="text-[11px]">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="min-w-0 truncate font-medium text-white/78">
-                      {nameFor(stats.playerId)}
-                    </span>
-                    <span className="shrink-0 text-white/40 tabular-nums">
-                      {stats.cardsPlayed}/{stats.cardsDrawn}
-                    </span>
-                  </div>
-                  {/* Played versus drawn: the shape of someone's match. */}
-                  <div className="mt-0.5 flex h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
-                    <span
-                      className="bg-emerald-400/70"
-                      style={{
-                        width: `${(stats.cardsPlayed / busiest) * 100}%`,
-                      }}
-                    />
-                    <span
-                      className="bg-red-400/60"
-                      style={{
-                        width: `${(stats.cardsDrawn / busiest) * 100}%`,
-                      }}
-                    />
-                    <span className="sr-only">
-                      {total} cards handled in total
-                    </span>
-                  </div>
-                </div>
-              )
-            })}
-            <p className="pt-0.5 text-[10px] text-white/34">
-              green played · red drawn
+            <p className="text-[10px] text-white/38">
+              How each player spent the match — cards they got rid of versus
+              cards the table forced on them.
             </p>
+            {recap.players.map((stats) => (
+              <div key={stats.playerId} className="text-[11px]">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="min-w-0 truncate font-medium text-white/78">
+                    {nameFor(stats.playerId)}
+                  </span>
+                  <span className="flex shrink-0 items-center gap-2 tabular-nums">
+                    <span className="text-emerald-300/80">
+                      {stats.cardsPlayed} played
+                    </span>
+                    <span className="text-red-300/75">
+                      {stats.cardsDrawn} drawn
+                    </span>
+                  </span>
+                </div>
+                <div className="mt-0.5 flex h-1.5 overflow-hidden rounded-full bg-white/[0.06]">
+                  <span
+                    className="bg-emerald-400/70"
+                    style={{
+                      width: `${(stats.cardsPlayed / busiest) * 100}%`,
+                    }}
+                  />
+                  <span
+                    className="bg-red-400/60"
+                    style={{
+                      width: `${(stats.cardsDrawn / busiest) * 100}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            ))}
           </div>
         )}
 
@@ -3205,6 +3281,36 @@ function MatchRecapPanel({
               label="Chaos"
               value={`${recap.handsSwapped} swaps · ${recap.handsRotated} cycles`}
             />
+          </div>
+        )}
+
+        {safeSlide === 3 && (
+          <div className="space-y-1">
+            {awards.length === 0 ? (
+              <p className="py-3 text-center text-[11px] text-white/40">
+                Nothing worth a medal this round.
+              </p>
+            ) : (
+              awards.map((award) => (
+                <div
+                  key={award.title}
+                  className="flex items-center gap-2 rounded-lg border border-white/8 bg-black/24 px-2 py-1.5 text-[11px]"
+                >
+                  <span className="shrink-0 text-base leading-none">
+                    {award.emoji}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="font-semibold text-white/84">
+                      {award.title}
+                    </span>
+                    <span className="ml-1.5 text-white/40">{award.blurb}</span>
+                  </span>
+                  <span className="shrink-0 truncate font-medium text-amber-100/85">
+                    {nameFor(award.playerId)}
+                  </span>
+                </div>
+              ))
+            )}
           </div>
         )}
       </div>
@@ -6577,6 +6683,7 @@ function DirectionPulse({
 
 function FannedGameHand({
   cards,
+  hidden = false,
   playableCardIds,
   selectedCardIds,
   hiddenCardIds,
@@ -6590,6 +6697,8 @@ function FannedGameHand({
   onCancelDrag,
 }: {
   cards: Array<Card>
+  /** The match recap takes the tray over once a match ends. */
+  hidden?: boolean
   playableCardIds: Array<string>
   selectedCardIds: Array<string>
   hiddenCardIds?: Array<string>
@@ -6650,6 +6759,8 @@ function FannedGameHand({
     ? cards.find((card) => card.id === activeDrag.cardId)
     : null
   const compact = cardSize === "sm"
+
+  if (hidden) return null
 
   if (!visibleCards.length) {
     return (
