@@ -797,7 +797,6 @@ function RoomPage() {
           player={player}
           playerGame={playerGame?.playerId === player.id ? playerGame : null}
           playerSocial={playerSocial}
-          connected={connected}
           error={error}
           onCopyInvite={copyInvite}
           onPlayCards={playCards}
@@ -854,7 +853,6 @@ function GameTable({
   player,
   playerGame,
   playerSocial,
-  connected,
   error,
   onCopyInvite,
   onPlayCards,
@@ -879,7 +877,6 @@ function GameTable({
   player: Player
   playerGame: PlayerGameSnapshot | null
   playerSocial: PlayerSocialSnapshot | null
-  connected: boolean
   error: string | null
   onCopyInvite: () => Promise<void>
   onPlayCards: (input: PlayCardsInput) => void
@@ -1592,18 +1589,11 @@ function GameTable({
                   : "rounded-2xl py-2")
               }
             >
-              <div className="min-w-0">
-                <p className="text-[9px] font-medium tracking-[0.18em] text-white/42 uppercase">
-                  UNO No Mercy
-                </p>
-                <h1 className="truncate text-sm font-semibold tracking-tight sm:text-base">
-                  Room {room.code}
-                </h1>
-              </div>
+              <p className="min-w-0 flex-1 truncate text-[13px] font-medium text-white/80">
+                {room.game?.events[room.game.events.length - 1]?.message ?? ""}
+              </p>
               <div className="flex shrink-0 items-center gap-1.5">
                 <VoiceToggleButton voice={voice} compact />
-                <SoundToggle compact />
-                <StatusDot connected={connected} compact />
                 <CopyInviteButton iconOnly onCopy={onCopyInvite} />
                 <MobileChatSheet
                   messages={room.chatMessages}
@@ -2002,20 +1992,13 @@ function GameTable({
           />
         ))}
         <div className="mx-auto flex h-full min-h-0 w-full max-w-[1500px] flex-col gap-2 px-2 py-2 sm:gap-3 sm:px-4 sm:py-3 lg:px-8">
+          {/* Mid-match the header carries the last move and nothing else the
+              player has to read: the room code lives in the URL and behind
+              Copy invite, and connection state already shows on the seats. */}
           <header className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 pb-2 sm:pb-3">
-            <div className="shrink-0">
-              <p className="text-[10px] font-medium tracking-[0.18em] text-white/45 uppercase sm:text-xs">
-                UNO No Mercy
-              </p>
-              <h1 className="mt-0.5 text-lg font-semibold tracking-tight sm:mt-1 sm:text-xl">
-                Room {room.code}
-              </h1>
-            </div>
             <MatchEventFeed room={room} selfPlayerId={player.id} />
-            <div className="flex shrink-0 items-center gap-2">
+            <div className="ml-auto flex shrink-0 items-center gap-2">
               <VoiceToggleButton voice={voice} />
-              <SoundToggle />
-              <StatusDot connected={connected} />
               <CopyInviteButton onCopy={onCopyInvite} />
             </div>
           </header>
