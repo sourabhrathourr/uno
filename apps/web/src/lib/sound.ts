@@ -177,23 +177,32 @@ export function setSfxEnabled(enabled: boolean) {
 
 export type CardSoundKind = "play" | "draw"
 
+/**
+ * Drawing used to fire one clip per card, staggered. Two draws in quick
+ * succession then overlapped half a dozen voices and phased into a mess. A
+ * draw is one action, so it gets one sound — a little louder when it is a big
+ * penalty — and back-to-back draws collapse into a single hit.
+ */
+const MIN_DRAW_SOUND_GAP_MS = 90
+let lastDrawSoundAt = 0
+
 export function playCardSound(kind: CardSoundKind, count = 1) {
   if (typeof window === "undefined") return
   if (kind === "play") {
     playLocalSound("cardDrop", 0.75)
     if (count > 1) {
-      for (let index = 1; index < Math.min(count, 4); index += 1) {
-        window.setTimeout(() => playLocalSound("cardDrop", 0.55), index * 95)
+      for (let index = 1; index < Math.min(count, 3); index += 1) {
+        window.setTimeout(() => playLocalSound("cardDrop", 0.5), index * 95)
       }
     }
     return
   }
-  playLocalSound("cardTake", 0.7)
-  if (count > 1) {
-    for (let index = 1; index < Math.min(count, 6); index += 1) {
-      window.setTimeout(() => playLocalSound("cardTake", 0.55), index * 110)
-    }
-  }
+
+  const now = Date.now()
+  if (now - lastDrawSoundAt < MIN_DRAW_SOUND_GAP_MS) return
+  lastDrawSoundAt = now
+  // Weight rather than repeat: a +10 lands heavier than a single draw.
+  playLocalSound("cardTake", count > 1 ? 0.85 : 0.7)
 }
 
 export function playShuffleSound() {

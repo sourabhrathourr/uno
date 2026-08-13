@@ -37,20 +37,27 @@ describe("match recap", () => {
   })
 
   it("counts what each player did, not just who won", () => {
+    // The hand is dealt from a shuffled deck, so the cards in play are set up
+    // explicitly here. Playing whatever landed first would sometimes deal a
+    // draw stack or a colour roulette, and the draw below would then be
+    // illegal for reasons that have nothing to do with the recap.
     const game = createGame(context)
-    // A plays a card that matches the pile.
-    const card = game.handsByPlayerId.a?.[0]
-    if (!card) throw new Error("Expected a starting hand")
-    game.discardPile = [{ ...card, id: "matching-discard" }]
-    game.currentColor = card.color === "wild" ? "red" : card.color
+    game.handsByPlayerId.a = [
+      numberCard("a-red-5", "red", 5),
+      numberCard("a-blue-1", "blue", 1),
+    ]
+    game.discardPile = [numberCard("top-red-3", "red", 3)]
+    game.currentColor = "red"
+    game.turnPlayerId = "a"
+    game.drawStack = null
+    game.pendingChoice = null
+
     expect(
-      playCards(game, context, "a", {
-        cardIds: [card.id],
-        chosenColor: "red",
-      }).ok
+      playCards(game, context, "a", { cardIds: ["a-red-5"] }).ok
     ).toBe(true)
 
     const turnPlayerId = game.turnPlayerId as string
+    expect(turnPlayerId).not.toBe("a")
     expect(drawOne(game, context, turnPlayerId).ok).toBe(true)
 
     finish(game)
@@ -63,7 +70,7 @@ describe("match recap", () => {
     )
     expect(statsA?.cardsPlayed).toBe(1)
     expect(statsA?.turnsTaken).toBe(1)
-    expect(drawer?.cardsDrawn).toBeGreaterThanOrEqual(1)
+    expect(drawer?.cardsDrawn).toBe(1)
     expect(recap.totalCardsPlayed).toBe(1)
   })
 
@@ -127,6 +134,10 @@ describe("match recap", () => {
     )
   })
 })
+
+function numberCard(id: string, color: "red" | "blue", value: 1 | 3 | 5) {
+  return { id, color, face: { kind: "number", value } } as const
+}
 
 /** Collapses the match so the recap projects. */
 function finish(game: GameState) {

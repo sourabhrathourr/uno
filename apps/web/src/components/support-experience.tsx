@@ -97,8 +97,10 @@ function SupportSheet({
   return (
     <div
       className={
-        "fixed inset-0 z-[90] bg-black/70 px-4 backdrop-blur-sm " +
-        (sheet ? "flex items-end pb-0" : "grid place-items-center")
+        "fixed inset-0 z-[90] bg-black/70 backdrop-blur-sm " +
+        (sheet
+          ? "flex items-end justify-center"
+          : "grid place-items-center px-4")
       }
     >
       <section
@@ -106,10 +108,10 @@ function SupportSheet({
         aria-modal="true"
         aria-labelledby={titleId}
         className={
-          "w-full border border-white/12 bg-[#11100d] p-5 text-white shadow-[0_-24px_90px_rgba(0,0,0,0.7)] " +
+          "w-full border-white/12 bg-[#11100d] p-5 text-white shadow-[0_-24px_90px_rgba(0,0,0,0.7)] " +
           (sheet
-            ? "-mx-4 max-w-none animate-[support-sheet-up_240ms_cubic-bezier(0.2,0,0,1)] rounded-t-3xl pb-[calc(env(safe-area-inset-bottom)+1.25rem)]"
-            : "max-w-sm rounded-3xl shadow-[0_28px_90px_rgba(0,0,0,0.66)]")
+            ? "max-w-none animate-[support-sheet-up_240ms_cubic-bezier(0.2,0,0,1)] rounded-t-3xl border-t pb-[calc(env(safe-area-inset-bottom)+1.25rem)]"
+            : "max-w-sm rounded-3xl border shadow-[0_28px_90px_rgba(0,0,0,0.66)]")
         }
       >
         <style>

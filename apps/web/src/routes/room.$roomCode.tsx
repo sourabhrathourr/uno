@@ -1719,6 +1719,7 @@ function GameTable({
 
             <div
               ref={tableDropRef}
+              data-table-surface="true"
               className="flex min-h-0 flex-1 flex-col gap-1.5"
             >
               <section
@@ -2144,6 +2145,7 @@ function GameTable({
             <div className="relative grid min-h-0 grid-rows-[minmax(0,1fr)_clamp(188px,30dvh,300px)] gap-2 overflow-hidden sm:grid-rows-[minmax(0,1fr)_clamp(220px,30dvh,330px)] lg:gap-3">
               <div
                 ref={tableDropRef}
+                data-table-surface="true"
                 style={{
                   backgroundImage:
                     "linear-gradient(135deg, rgba(255,255,255,0.09), rgba(255,255,255,0) 18%, rgba(0,0,0,0.18) 62%), repeating-linear-gradient(92deg, rgba(255,255,255,0.035) 0 10px, rgba(0,0,0,0.05) 10px 22px), linear-gradient(90deg, #5a341d, #7a4829 38%, #4b2917)",
@@ -2581,8 +2583,10 @@ function NextMatchPanel({
   return createPortal(
     <div
       className={
-        "fixed inset-0 z-[95] bg-black/72 px-4 backdrop-blur-sm " +
-        (asSheet ? "flex items-end" : "grid place-items-center")
+        "fixed inset-0 z-[95] bg-black/72 backdrop-blur-sm " +
+        (asSheet
+          ? "flex items-end justify-center"
+          : "grid place-items-center px-4")
       }
     >
       <section
@@ -2590,10 +2594,10 @@ function NextMatchPanel({
         aria-modal="true"
         aria-labelledby="next-match-title"
         className={
-          "w-full border border-white/12 bg-[#11100d] p-5 text-white " +
+          "w-full border-white/12 bg-[#11100d] p-5 text-white " +
           (asSheet
-            ? "-mx-4 max-h-[88dvh] max-w-none overflow-y-auto rounded-t-3xl pb-[calc(env(safe-area-inset-bottom)+1.25rem)] shadow-[0_-24px_90px_rgba(0,0,0,0.7)]"
-            : "max-w-md rounded-3xl shadow-[0_28px_90px_rgba(0,0,0,0.66)]")
+            ? "max-h-[88dvh] max-w-none overflow-y-auto rounded-t-3xl border-t pb-[calc(env(safe-area-inset-bottom)+1.25rem)] shadow-[0_-24px_90px_rgba(0,0,0,0.7)]"
+            : "max-w-md rounded-3xl border shadow-[0_28px_90px_rgba(0,0,0,0.66)]")
         }
       >
         {asSheet && (
@@ -5168,6 +5172,34 @@ function useSecondTick(active: boolean) {
 }
 
 function FirstPlaceCelebration({ playerName }: { playerName: string }) {
+  // Centred on the table itself rather than the viewport — a win belongs over
+  // the board, not floating somewhere above it.
+  const [tableRect, setTableRect] = useState<{
+    left: number
+    top: number
+    width: number
+    height: number
+  } | null>(null)
+
+  useEffect(() => {
+    function measure() {
+      const table = document.querySelector<HTMLElement>(
+        '[data-table-surface="true"]'
+      )
+      if (!table) return setTableRect(null)
+      const rect = table.getBoundingClientRect()
+      setTableRect({
+        left: rect.left,
+        top: rect.top,
+        width: rect.width,
+        height: rect.height,
+      })
+    }
+    measure()
+    window.addEventListener("resize", measure)
+    return () => window.removeEventListener("resize", measure)
+  }, [])
+
   return (
     <div className="pointer-events-none fixed inset-0 z-50 overflow-hidden">
       <SideCannonConfetti />
@@ -5183,7 +5215,19 @@ function FirstPlaceCelebration({ playerName }: { playerName: string }) {
         `}
       </style>
 
-      <div className="absolute inset-0 flex items-center justify-center p-4 sm:items-start sm:pt-[18dvh]">
+      <div
+        className="absolute flex items-center justify-center p-4"
+        style={
+          tableRect
+            ? {
+                left: tableRect.left,
+                top: tableRect.top,
+                width: tableRect.width,
+                height: tableRect.height,
+              }
+            : { inset: 0 }
+        }
+      >
         <div
           className="flex max-w-[calc(100vw-2rem)] min-w-[280px] items-center gap-4 rounded-2xl border border-amber-100/38 bg-neutral-950/86 px-5 py-4 shadow-[0_24px_80px_rgba(0,0,0,0.48),0_0_70px_rgba(251,191,36,0.22)] backdrop-blur-md"
           style={{
