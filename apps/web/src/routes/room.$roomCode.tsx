@@ -67,6 +67,7 @@ import type { GameSocket } from "@/lib/realtime"
 import type { RoomVoiceController } from "@/lib/use-room-voice"
 import type { ChatTray } from "@/components/use-channel-chat"
 import { GifPicker } from "@/components/gif-picker"
+import { HowToPlayGuide } from "@/components/how-to-play-dialog"
 import {
   SupportConfirmDialog,
   SupportRequestInbox,
@@ -1714,6 +1715,7 @@ function GameTable({
                   onKickSupporter={onKickSupporter}
                   room={room}
                 />
+                <HowToPlayGuide compact />
               </div>
             </header>
 
@@ -2130,6 +2132,7 @@ function GameTable({
             <div className="ml-auto flex shrink-0 items-center gap-2">
               <VoiceToggleButton voice={voice} />
               <CopyInviteButton onCopy={onCopyInvite} />
+              <HowToPlayGuide />
             </div>
           </header>
 
@@ -8359,6 +8362,7 @@ function LobbyWaitingRoom({
               />
             </div>
             <CopyInviteButton iconOnly onCopy={onCopyInvite} />
+            <HowToPlayGuide />
           </div>
         </header>
 
