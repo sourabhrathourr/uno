@@ -1207,6 +1207,7 @@ function GameTable({
   const discardActionCard =
     selectedCards[0]?.face.kind === "discard-color" ? selectedCards[0] : null
   const discardExtraCards = discardActionCard ? selectedCards.slice(1) : []
+  const submittedCards = discardActionCard ? [discardActionCard] : selectedCards
   const needsSwap = canChooseSwap && wantsSwap
   const selectedCardsCanPlay = canPlayStagedCards(
     selectedCards,
@@ -1217,7 +1218,7 @@ function GameTable({
     (playerGame?.hand.length ?? 0) - selectedCards.length
   const finishesWithForbiddenPower =
     remainingAfterPlay === 0 &&
-    selectedCards.some((card) => isForbiddenFinalCard(card))
+    submittedCards.some((card) => isForbiddenFinalCard(card))
   const canDeclareUno =
     Boolean(isMyTurn) &&
     selectedCards.length > 0 &&
@@ -1919,25 +1920,17 @@ function GameTable({
               data-self-hand="true"
               className="flex h-[clamp(174px,30dvh,230px)] shrink-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-black/40 p-2 shadow-[0_18px_54px_rgba(0,0,0,0.28)]"
             >
-              {/* One row: reactions (or the colour picker when a wild needs
-                  one) on the left, turn actions on the right, vertically
-                  centred against each other. */}
+              {/* One row: reactions on the left, turn actions on the right. */}
               <div className="flex shrink-0 items-center justify-between gap-2">
                 <div className="flex min-w-0 flex-1 items-center gap-2">
-                  {needsColor && !isSelfEliminated ? (
-                    <ColorPicker
-                      value={chosenColor}
-                      required={!chosenColor}
-                      onChange={setChosenColor}
-                    />
-                  ) : (
+                  {!needsColor && !isSelfEliminated ? (
                     <AvatarEmojiReactionBar
                       game={game}
                       onReact={onSendAvatarEmojiReaction}
                       compact
                       inline
                     />
-                  )}
+                  ) : null}
                   {isSelfEliminated && (
                     <p className="truncate text-[11px] text-white/42">
                       {spectatingPlayerId
@@ -1966,6 +1959,13 @@ function GameTable({
                       >
                         Swap
                       </GameOptionCheckbox>
+                    )}
+                    {needsColor && (
+                      <ColorPicker
+                        value={chosenColor}
+                        required={!chosenColor}
+                        onChange={setChosenColor}
+                      />
                     )}
                     <GameOptionCheckbox
                       checked={declaredUno && canDeclareUno}
@@ -2328,19 +2328,13 @@ function GameTable({
               >
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="flex min-w-0 flex-1 items-center gap-2">
-                    {needsColor && !isSelfEliminated ? (
-                      <ColorPicker
-                        value={chosenColor}
-                        required={!chosenColor}
-                        onChange={setChosenColor}
-                      />
-                    ) : (
+                    {!isSelfEliminated ? (
                       <AvatarEmojiReactionBar
                         game={game}
                         onReact={onSendAvatarEmojiReaction}
                         inline
                       />
-                    )}
+                    ) : null}
                     {isSelfEliminated && (
                       <p className="truncate text-xs text-white/42">
                         {spectatingPlayerId
@@ -2385,6 +2379,13 @@ function GameTable({
                             </option>
                           ))}
                         </select>
+                      )}
+                      {needsColor && (
+                        <ColorPicker
+                          value={chosenColor}
+                          required={!chosenColor}
+                          onChange={setChosenColor}
+                        />
                       )}
                       <GameOptionCheckbox
                         checked={declaredUno && canDeclareUno}
@@ -3143,7 +3144,7 @@ function MatchRecapPanel({
     <div
       className={
         (compact ? "mt-1 p-2" : "mt-2 p-3") +
-        " min-h-0 flex-1 overflow-hidden rounded-xl border border-white/10 bg-black/28"
+        " uno-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-xl border border-white/10 bg-black/28"
       }
       onPointerDown={(event) => {
         swipeStartRef.current = { x: event.clientX, y: event.clientY }
@@ -3189,7 +3190,7 @@ function MatchRecapPanel({
         </div>
       </div>
 
-      <div className="uno-scrollbar mt-1.5 max-h-full overflow-y-auto">
+      <div className="mt-1.5">
         {safeSlide === 0 && (
           <ol className="space-y-1">
             {recap.players.map((stats) => (
@@ -7562,14 +7563,14 @@ function ColorPicker({
       role="group"
       aria-label="Choose a color"
       className={
-        "flex h-9 items-center gap-1 rounded-lg border px-1.5 transition-[background-color,border-color,box-shadow] " +
+        "flex h-9 shrink-0 items-center gap-1 rounded-lg border px-1.5 transition-[background-color,border-color,box-shadow] " +
         (required
           ? "border-yellow-200/80 bg-yellow-300/12 shadow-[0_0_0_3px_rgba(250,204,21,0.14),0_0_26px_rgba(250,204,21,0.18)]"
           : "border-white/10 bg-white/[0.055]")
       }
     >
       {required && (
-        <span className="hidden pr-1 pl-0.5 text-[11px] font-semibold tracking-[0.08em] text-yellow-100 uppercase sm:inline">
+        <span className="pr-1 pl-0.5 text-[11px] font-semibold tracking-[0.08em] text-yellow-100 uppercase">
           Pick
         </span>
       )}

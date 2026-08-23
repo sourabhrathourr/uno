@@ -4,6 +4,7 @@ import {
   catchUno,
   createGame,
   kickSupporter,
+  playCards,
   projectPublicGame,
   projectSupportView,
   releaseInactiveSupportLinks,
@@ -211,6 +212,36 @@ describe("live support decision state", () => {
       declaredUno: true,
       rotateHands: true,
       swapWithPlayerId: "b",
+    })
+  })
+
+  it("names the player who cycles hands with a 0", () => {
+    const game = createGame(context)
+    const zero = {
+      id: "red-zero",
+      color: "red" as const,
+      face: { kind: "number" as const, value: 0 as const },
+    }
+    game.turnPlayerId = "a"
+    game.currentColor = "red"
+    game.discardPile = [
+      { id: "red-five", color: "red", face: { kind: "number", value: 5 } },
+    ]
+    game.handsByPlayerId.a = [
+      zero,
+      { id: "spare-a", color: "blue", face: { kind: "number", value: 1 } },
+    ]
+
+    const result = playCards(game, context, "a", {
+      cardIds: [zero.id],
+      rotateHands: true,
+    })
+
+    expect(result.ok).toBe(true)
+    expect(game.events.at(-1)).toMatchObject({
+      type: "hands-rotated",
+      playerId: "a",
+      message: "A rotated every hand in turn order.",
     })
   })
 })
