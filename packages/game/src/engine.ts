@@ -1099,9 +1099,30 @@ export function drawRouletteCard(
     message: `${playerName(context, playerId)} revealed ${cardLabel(next)}.`,
   })
 
+  if (rouletteDrawCrossesMercyLimit(game, context, playerId, pendingChoice)) {
+    addCardsToHand(game, playerId, pendingChoice.drawnCards)
+    game.pendingChoice = null
+    game.drawnThisTurnPlayerId = null
+    checkMercyEliminations(game, context)
+    return ok(game)
+  }
+
   if (next.color !== pendingChoice.color) return ok(game)
 
   return completeRouletteDraw(game, context, playerId, pendingChoice)
+}
+
+function rouletteDrawCrossesMercyLimit(
+  game: GameState,
+  context: GameContext,
+  playerId: string,
+  pendingChoice: NonNullable<GameState["pendingChoice"]>
+): boolean {
+  const handSize = game.handsByPlayerId[playerId]?.length ?? 0
+  return (
+    handSize + pendingChoice.drawnCards.length >
+    context.houseRules.mercyHandLimit
+  )
 }
 
 function completeRouletteDraw(
@@ -1363,7 +1384,10 @@ function applyPlayedCardsEffect(
         pushEvent(game, {
           type: "hands-rotated",
           playerId,
-          message: "Every hand rotated in turn order.",
+          message: `${playerName(
+            context,
+            playerId
+          )} rotated every hand in turn order.`,
         })
       }
       if (

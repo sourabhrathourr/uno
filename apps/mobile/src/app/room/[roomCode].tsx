@@ -149,9 +149,12 @@ export default function RoomScreen() {
   );
   const remainingAfterPlay = (playerGame?.hand.length ?? 0) - stagedCards.length;
   const needsColor = stagedCards.some((card) => card.color === 'wild');
+  const discardActionCard =
+    stagedCards[0]?.face.kind === 'discard-color' ? stagedCards[0] : null;
+  const submittedCards = discardActionCard ? [discardActionCard] : stagedCards;
   const finishesWithForbiddenPower =
     remainingAfterPlay === 0 &&
-    stagedCards.some((card) => isForbiddenFinalCard(card));
+    submittedCards.some((card) => isForbiddenFinalCard(card));
   const canSubmitStagedCards =
     Boolean(isMyTurn) &&
     stagedCards.length > 0 &&
@@ -605,8 +608,6 @@ export default function RoomScreen() {
     playFx('successBling', { volume: 0.55 });
     playCardSound('play', stagedCardIds.length);
 
-    const discardActionCard =
-      stagedCards[0]?.face.kind === 'discard-color' ? stagedCards[0] : null;
     const discardExtraCardIds = discardActionCard
       ? stagedCards.slice(1).map((card) => card.id)
       : [];
