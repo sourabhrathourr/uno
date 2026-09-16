@@ -35,6 +35,7 @@ import {
   CHAT_EMOJIS,
   CHAT_PRESETS,
   playerInitials,
+  shouldPlayTurnAlert,
   turnOrderFromSeating,
 } from "@workspace/game"
 import { Button } from "@workspace/ui/components/button"
@@ -87,6 +88,7 @@ import {
   playCardSound,
   playFx,
   playShuffleSound,
+  playTurnAlert,
   playWinnerSound,
 } from "@/lib/sound"
 import { useSoundSystem } from "@/lib/use-sound-system"
@@ -422,7 +424,17 @@ function RoomPage() {
       return
     }
 
-    lastTurnPlayerIdRef.current = room.game.turnPlayerId
+    const turnPlayerId = room.game.turnPlayerId
+    if (
+      shouldPlayTurnAlert({
+        previousTurnPlayerId: lastTurnPlayerIdRef.current,
+        turnPlayerId,
+        localPlayerId: player?.id,
+      })
+    ) {
+      playTurnAlert()
+    }
+    lastTurnPlayerIdRef.current = turnPlayerId
 
     const events = room.game.events
 

@@ -36,9 +36,13 @@ const SOUNDS = {
   success: require('@/assets/sounds/notification/success.mp3'),
   cardDrop: require('@/assets/sounds/card-drop.mp3'),
   cardTake: require('@/assets/sounds/card-take.mp3'),
+  turnReady: require('@/assets/sounds/turn-ready.mp3'),
 } as const;
 
-export type LibrarySound = Exclude<keyof typeof SOUNDS, 'cardDrop' | 'cardTake'>;
+export type LibrarySound = Exclude<
+  keyof typeof SOUNDS,
+  'cardDrop' | 'cardTake' | 'turnReady'
+>;
 export type CardSoundKind = 'play' | 'draw';
 
 const players = new Map<keyof typeof SOUNDS, AudioPlayer>();
@@ -108,6 +112,11 @@ export function playCardSound(kind: CardSoundKind, count = 1): void {
   for (let index = 1; index < Math.min(count, 6); index += 1) {
     setTimeout(() => playSound('cardTake', { volume: 0.55 }), index * 110);
   }
+}
+
+/** A brief, gentle cue used only when control returns to this player. */
+export function playTurnAlert(): void {
+  playSound('turnReady', { volume: 0.42 });
 }
 
 export function playShuffleSound(): void {

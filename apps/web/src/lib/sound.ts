@@ -13,6 +13,7 @@ type ReactSoundsModule = {
 const LOCAL_SOUNDS = {
   cardDrop: "/card-drop.mp3",
   cardTake: "/card-take.mp3",
+  turnReady: "/turn-ready.mp3",
 } as const
 
 const SOUND_ENABLED_KEY = "uno:sfx-enabled"
@@ -286,6 +287,11 @@ export function playCardSound(kind: CardSoundKind, count = 1) {
   lastDrawSoundAt = now
   // Weight rather than repeat: a +10 lands heavier than a single draw.
   playLocalSound("cardTake", count > 1 ? 0.85 : 0.7)
+}
+
+/** A brief, gentle cue used only when control returns to this player. */
+export function playTurnAlert() {
+  playLocalSound("turnReady", 0.42)
 }
 
 export function playShuffleSound() {
