@@ -80,6 +80,7 @@ export type {
 } from "./game"
 export { MAX_COUNTED_TURN_MS } from "./game"
 export { playerInitials, turnOrderFromSeating } from "./players"
+export { shouldPlayTurnAlert } from "./turn-notification"
 export { AVATAR_REACTION_EMOJIS } from "./reactions"
 export type { AvatarReactionEmoji } from "./reactions"
 export type {

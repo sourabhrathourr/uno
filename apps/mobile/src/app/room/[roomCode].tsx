@@ -10,6 +10,7 @@ import {
   isRoomCode,
   normalizeRoomCode,
   playerInitials,
+  shouldPlayTurnAlert,
   turnOrderFromSeating,
 } from '@workspace/game';
 import * as Haptics from 'expo-haptics';
@@ -72,6 +73,7 @@ import {
   playCardSound,
   playFx,
   playShuffleSound,
+  playTurnAlert,
   playWinnerSound,
   useSoundSystem,
 } from '@/lib/sound';
@@ -120,6 +122,7 @@ export default function RoomScreen() {
   const joinAttemptRef = useRef(0);
   const seenInitialGameSnapshotRef = useRef(false);
   const lastEventIdRef = useRef<string | null>(null);
+  const lastTurnPlayerIdRef = useRef<string | null>(null);
 
   const currentPlayer = room?.players.find(
     (candidate) => candidate.id === player?.id,
@@ -394,8 +397,21 @@ export default function RoomScreen() {
     if (!game) {
       seenInitialGameSnapshotRef.current = false;
       lastEventIdRef.current = null;
+      lastTurnPlayerIdRef.current = null;
       return;
     }
+
+    const turnPlayerId = game.turnPlayerId;
+    if (
+      shouldPlayTurnAlert({
+        previousTurnPlayerId: lastTurnPlayerIdRef.current,
+        turnPlayerId,
+        localPlayerId: player?.id,
+      })
+    ) {
+      playTurnAlert();
+    }
+    lastTurnPlayerIdRef.current = turnPlayerId;
 
     const events = game.events;
     if (!seenInitialGameSnapshotRef.current) {
