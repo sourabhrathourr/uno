@@ -2182,10 +2182,7 @@ function isDiscardFirstStage(cards: Card[], playableCardIds: string[]) {
 
   return cards
     .slice(1)
-    .every(
-      (card) =>
-        card.face.kind !== 'discard-color' && card.color === discardCard.color,
-    );
+    .every((card) => card.color === discardCard.color);
 }
 
 function canStackDrawCards(

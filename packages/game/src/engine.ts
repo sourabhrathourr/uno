@@ -1721,23 +1721,13 @@ function validateDiscardStage(
     return fail("discard-card-first", "Play the discard card first.")
   }
 
-  if (discardCards.length > 1) {
-    return fail(
-      "multiple-discard-cards",
-      "You can only play one discard card at a time."
-    )
-  }
-
   if (!canPlaySingleCard(game, playerId, firstCard)) {
     return fail("not-playable", "That discard card does not match the pile.")
   }
 
   const invalidExtra = cards
     .slice(1)
-    .find(
-      (card) =>
-        card.face.kind === "discard-color" || card.color !== firstCard.color
-    )
+    .find((card) => card.color !== firstCard.color)
   if (invalidExtra) {
     return fail(
       "invalid-discard-card",
