@@ -67,6 +67,7 @@ import type { Options as ConfettiOptions } from "canvas-confetti"
 import type { GameSocket } from "@/lib/realtime"
 import type { RoomVoiceController } from "@/lib/use-room-voice"
 import type { ChatTray } from "@/components/use-channel-chat"
+import { PartyExperience } from "@/components/party-experience"
 import { GifPicker } from "@/components/gif-picker"
 import { HowToPlayGuide } from "@/components/how-to-play-dialog"
 import { VoiceFilterPicker } from "@/components/voice-filter-picker"
@@ -1180,7 +1181,7 @@ function GameTable({
       supporterName: getPlayerName(room, request.supporterPlayerId),
     })
   )
-  const isMyTurn = game?.turnPlayerId === player.id
+  const isMyTurn = game?.turnPlayerId === player.id && !game?.lastGift
   const firstWinnerPlacement =
     game?.winnerPlacements.find((placement) => placement.position === 1) ?? null
   const firstWinner = room.players.find(
@@ -1204,7 +1205,7 @@ function GameTable({
   // Seats an eliminated player may click: free picks plus the ones that now
   // need permission. A pending request locks the whole ring until answered.
   const spectatablePlayerIds =
-    isSelfEliminated && !outgoingSupportRequest
+    isSelfEliminated && !game?.lastGift && !outgoingSupportRequest
       ? [
           ...supportCandidates.map((candidate) => candidate.id),
           ...supportRequestCandidateIds,
@@ -1809,6 +1810,17 @@ function GameTable({
                       {tableStatusTitle}
                     </p>
                     <div className="flex shrink-0 items-center gap-1">
+                      <PartyExperience
+                        asSheet
+                        room={room}
+                        playerId={player.id}
+                        playerGame={playerGame}
+                        socket={socket}
+                        onOpen={() => {
+                          setSelectedCardIds([])
+                          setPendingPlayedCardIds([])
+                        }}
+                      />
                       <DirectionPill
                         direction={game?.direction ?? 1}
                         compact
@@ -2239,6 +2251,16 @@ function GameTable({
                         {room.players.length}/{room.houseRules.maxPlayers}{" "}
                         seated
                       </span>
+                      <PartyExperience
+                        room={room}
+                        playerId={player.id}
+                        playerGame={playerGame}
+                        socket={socket}
+                        onOpen={() => {
+                          setSelectedCardIds([])
+                          setPendingPlayedCardIds([])
+                        }}
+                      />
                       <DirectionPill
                         direction={game?.direction ?? 1}
                         compact

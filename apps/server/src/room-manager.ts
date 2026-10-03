@@ -1,6 +1,16 @@
 import { randomBytes, randomUUID } from "node:crypto"
 
 import {
+  offerBlindTrade,
+  respondBlindTrade,
+  cancelBlindTrade,
+  resolveLastGift,
+  settlePartyChoices,
+  type OfferBlindTradeInput,
+  type RespondBlindTradeInput,
+  type CancelBlindTradeInput,
+  type ResolveLastGiftInput,
+  type GameContext,
   ROOM_CODE_LENGTH,
   addWaitingPlayer,
   CHAT_EMOJIS,
@@ -97,6 +107,10 @@ export const ROOM_MEMORY_CLEANUP_INTERVAL_MS = 60 * 60 * 1000
 
 export class RoomManager {
   private readonly rooms = new Map<string, ManagedRoom>()
+  private readonly partyTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >()
   private readonly resolveGif?: RoomManagerOptions["resolveGif"]
   private readonly onRoomUpdated?: RoomManagerOptions["onRoomUpdated"]
   private readonly onRoomExpired?: RoomManagerOptions["onRoomExpired"]
@@ -874,6 +888,53 @@ export class RoomManager {
     })
   }
 
+  offerBlindTrade(code: string, playerId: string, input: OfferBlindTradeInput) {
+    return this.applyPartyCommand(code, (game, context) =>
+      offerBlindTrade(game, context, playerId, input)
+    )
+  }
+
+  respondBlindTrade(
+    code: string,
+    playerId: string,
+    input: RespondBlindTradeInput
+  ) {
+    return this.applyPartyCommand(code, (game, context) =>
+      respondBlindTrade(game, context, playerId, input)
+    )
+  }
+
+  cancelBlindTrade(
+    code: string,
+    playerId: string,
+    input: CancelBlindTradeInput
+  ) {
+    return this.applyPartyCommand(code, (game, context) =>
+      cancelBlindTrade(game, context, playerId, input)
+    )
+  }
+
+  resolveLastGift(code: string, playerId: string, input: ResolveLastGiftInput) {
+    return this.applyPartyCommand(code, (game, context) =>
+      resolveLastGift(game, context, playerId, input)
+    )
+  }
+
+  private applyPartyCommand(
+    code: string,
+    command: (game: GameState, context: GameContext) => CommandResult<GameState>
+  ): CommandResult<RoomSnapshot> {
+    return this.applyGameCommand(code, (room) => {
+      if (!room.gameState)
+        return fail("game-not-started", "Start the match first.")
+      const result = command(room.gameState, gameContext(room))
+      if (!result.ok) return result
+      syncRoomStatus(room)
+      touch(room)
+      return ok(snapshot(room))
+    })
+  }
+
   getPlayerGame(code: string, playerId: string): PlayerGameSnapshot | null {
     const room = this.getManagedRoom(code)
     if (!room?.gameState) return null
@@ -1103,6 +1164,11 @@ export class RoomManager {
     if (player) {
       player.connected = false
       player.lastSeenAt = new Date().toISOString()
+      if (room.gameState) {
+        settlePartyChoices(room.gameState, gameContext(room))
+        syncRoomStatus(room)
+        this.schedulePartyChoices(room)
+      }
       touch(room, player.lastSeenAt)
     }
 
@@ -1137,7 +1203,9 @@ export class RoomManager {
           poll.targetPlayerId
         )
         if (!result.ok) return result
+        settlePartyChoices(room.gameState, gameContext(room))
         syncRoomStatus(room)
+        this.schedulePartyChoices(room)
       }
     } else {
       room.voteKickCooldownExpiresAtByTargetId.set(
@@ -1179,7 +1247,45 @@ export class RoomManager {
     if (room.status !== "playing") {
       return fail("game-not-playing", "This room is not currently playing.")
     }
-    return command(room)
+    if (
+      room.gameState &&
+      settlePartyChoices(room.gameState, gameContext(room))
+    ) {
+      syncRoomStatus(room)
+      touch(room)
+      this.onRoomUpdated?.(room.code, snapshot(room))
+    }
+    const result = command(room)
+    this.schedulePartyChoices(room)
+    return result
+  }
+
+  private schedulePartyChoices(room: ManagedRoom) {
+    const timer = this.partyTimers.get(room.code)
+    if (timer) clearTimeout(timer)
+    this.partyTimers.delete(room.code)
+    const game = room.gameState
+    if (!game) return
+    const deadlines = [
+      game.tradeOffer?.expiresAt,
+      game.lastGifts[0]?.expiresAt,
+    ].filter((value): value is number => typeof value === "number")
+    if (!deadlines.length) return
+    const nextTimer = setTimeout(
+      () => {
+        this.partyTimers.delete(room.code)
+        if (!this.rooms.has(room.code) || room.gameState !== game) return
+        if (settlePartyChoices(game, gameContext(room))) {
+          syncRoomStatus(room)
+          touch(room)
+          this.onRoomUpdated?.(room.code, snapshot(room))
+        }
+        this.schedulePartyChoices(room)
+      },
+      Math.max(1, Math.min(...deadlines) - Date.now())
+    )
+    nextTimer.unref()
+    this.partyTimers.set(room.code, nextTimer)
   }
 
   private getManagedRoom(code: string): ManagedRoom | undefined {
@@ -1188,6 +1294,9 @@ export class RoomManager {
   }
 
   private deleteRoom(code: string, room: ManagedRoom): void {
+    const partyTimer = this.partyTimers.get(code)
+    if (partyTimer) clearTimeout(partyTimer)
+    this.partyTimers.delete(code)
     for (const timer of room.voteKickTimersById.values()) {
       clearTimeout(timer)
     }

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest"
 
-import { createNoMercyDeck, type RoomSnapshot } from "@workspace/game"
+import {
+  createNoMercyDeck,
+  type GameState,
+  type RoomSnapshot,
+} from "@workspace/game"
 
 import { RoomManager } from "./room-manager"
 
@@ -77,7 +81,9 @@ describe("full-table stress", () => {
       }
 
       expect(crownHolders).toHaveLength(MATCHES)
-    }
+    },
+    // Each seed plays twelve complete matches and checks all 168 cards per step.
+    30_000
   )
 })
 
@@ -170,7 +176,42 @@ function advanceTurn(
 ) {
   const game = room.game
   if (!game?.turnPlayerId) throw new Error("Expected a turn player")
+  if (game.lastGift) {
+    const gift = manager.getPlayerGame(room.code, game.lastGift.playerId)
+    const target = gift?.giftTargetPlayerIds[0]
+    const card = gift?.lastGiftCards[0]
+    expect(
+      manager.resolveLastGift(room.code, game.lastGift.playerId, {
+        giftId: game.lastGift.id,
+        ...(random() < 0.7 && target && card
+          ? { targetPlayerId: target, cardId: card.id }
+          : {}),
+      }).ok
+    ).toBe(true)
+    return
+  }
   const turnPlayerId = game.turnPlayerId
+  const trader = manager.getPlayerGame(room.code, turnPlayerId)
+  if (trader?.canOfferTrade && random() < 0.15) {
+    const target = pick(trader.tradeTargetPlayerIds, random)
+    const card = pick(trader.hand, random)
+    const offered = manager.offerBlindTrade(room.code, turnPlayerId, {
+      targetPlayerId: target,
+      cardId: card.id,
+    })
+    expect(offered.ok).toBe(true)
+    if (!offered.ok || !offered.data.game?.tradeOffer)
+      throw new Error("Expected a trade")
+    const receiver = manager.getPlayerGame(room.code, target)!
+    expect(
+      manager.respondBlindTrade(room.code, target, {
+        offerId: offered.data.game.tradeOffer.id,
+        accept: true,
+        cardId: pick(receiver.hand, random).id,
+      }).ok
+    ).toBe(true)
+    return
+  }
 
   if (game.pendingChoice?.type === "roulette-draw") {
     manager.drawRouletteCard(room.code, game.pendingChoice.playerId)
@@ -221,6 +262,20 @@ function assertRoomInvariants(manager: RoomManager, room: RoomSnapshot) {
   const game = room.game
   if (!game) return
 
+  const state = (
+    manager as unknown as { rooms: Map<string, { gameState: GameState }> }
+  ).rooms.get(room.code)!.gameState
+  const allCards = [
+    ...state.drawPile,
+    ...state.discardPile,
+    ...state.knockedOutCards,
+    ...Object.values(state.handsByPlayerId).flat(),
+    ...state.lastGifts.flatMap((gift) => gift.cards),
+    ...(state.pendingChoice?.drawnCards ?? []),
+  ]
+  expect(allCards).toHaveLength(DECK_SIZE)
+  expect(new Set(allCards.map((card) => card.id)).size).toBe(DECK_SIZE)
+
   // Every card is somewhere, exactly once. A leak here would silently drain
   // the deck over a long match.
   const seenCardIds = new Set<string>()
@@ -232,6 +287,11 @@ function assertRoomInvariants(manager: RoomManager, room: RoomSnapshot) {
       expect(seenCardIds.has(card.id)).toBe(false)
       seenCardIds.add(card.id)
     }
+  }
+  if (game.lastGift) {
+    counted +=
+      manager.getPlayerGame(room.code, game.lastGift.playerId)?.lastGiftCards
+        .length ?? 0
   }
   // Cards taken off eliminated players sit aside until the next reshuffle.
   expect(counted).toBeLessThanOrEqual(DECK_SIZE)

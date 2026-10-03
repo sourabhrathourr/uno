@@ -29,6 +29,12 @@ export type GameEventType =
   | "support-kicked"
   | "support-requested"
   | "support-request-declined"
+  | "trade-offered"
+  | "trade-completed"
+  | "trade-cancelled"
+  | "last-gift-ready"
+  | "last-gift-given"
+  | "last-gift-skipped"
 
 export type GameEvent = {
   id: string
@@ -116,6 +122,40 @@ export type PendingChoice = {
   drawnCards: Card[]
 }
 
+export type BlindTradeOffer = {
+  id: string
+  playerId: string
+  targetPlayerId: string
+  expiresAt: number
+}
+
+export type LastGiftChoice = {
+  id: string
+  playerId: string
+  expiresAt: number | null
+}
+
+export type OfferBlindTradeInput = { cardId: string; targetPlayerId: string }
+export type RespondBlindTradeInput = {
+  offerId: string
+  accept: boolean
+  cardId?: string
+}
+export type CancelBlindTradeInput = { offerId: string }
+export type ResolveLastGiftInput = {
+  giftId: string
+  cardId?: string
+  targetPlayerId?: string
+}
+
+export type PartyReceipt = {
+  id: string
+  kind: "trade" | "gift"
+  card: Card
+  fromPlayerId: string
+  createdAt: number
+}
+
 export type PlayerGamePublic = {
   playerId: string
   handCount: number
@@ -167,6 +207,10 @@ export type PublicGameSnapshot = {
   supportRecap: SupportRecap | null
   /** Only present once the match is over. */
   matchRecap: MatchRecap | null
+  tradeOffer: BlindTradeOffer | null
+  tradeUsedPlayerIds: string[]
+  lastGift: LastGiftChoice | null
+  lastGiftQueueCount: number
 }
 
 export type PlayerGameSnapshot = {
@@ -178,6 +222,12 @@ export type PlayerGameSnapshot = {
   canDraw: boolean
   canEndTurn: boolean
   canTakeDrawPenalty: boolean
+  canOfferTrade: boolean
+  tradeTargetPlayerIds: string[]
+  offeredTradeCardId: string | null
+  lastGiftCards: Card[]
+  giftTargetPlayerIds: string[]
+  partyReceipt: PartyReceipt | null
 }
 
 /**
@@ -258,6 +308,11 @@ export type GameState = {
   unoDeclaredPlayerIds: string[]
   drawnThisTurnPlayerId: string | null
   stagedPlay: StagedPlayState | null
+  tradeOffer: (BlindTradeOffer & { cardId: string }) | null
+  tradeUsedPlayerIds: string[]
+  tradeOfferedThisTurn: boolean
+  lastGifts: (LastGiftChoice & { cards: Card[] })[]
+  partyReceiptsByPlayerId: Record<string, PartyReceipt>
   winnerPlacements: WinnerPlacement[]
   winnerPlayerId: string | null
   supportLinks: SupportLink[]
