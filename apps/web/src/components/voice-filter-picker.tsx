@@ -17,6 +17,7 @@ import {
   TestTube2,
   X,
 } from "lucide-react"
+import { Button } from "@workspace/ui/components/button"
 import { VOICE_FILTERS, getVoiceFilter } from "../lib/voice-filter-presets"
 import { useVoiceFilterPreview } from "../lib/use-voice-filter-preview"
 import type { VoiceFilterId } from "../lib/voice-filter-presets"
@@ -49,24 +50,25 @@ export function VoiceFilterPicker(props: PickerProps) {
   const changed = active.id !== "normal"
   return (
     <>
-      <button
+      <Button
         type="button"
+        variant="ghost"
         aria-label={`Voice filters: ${active.name}`}
         aria-haspopup="dialog"
         title={`Voice filters: ${active.name}`}
         onClick={() => setOpen(true)}
         className={
-          "relative inline-flex size-11 shrink-0 items-center justify-center rounded-full border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300 " +
+          "relative inline-flex size-11 shrink-0 items-center justify-center rounded-full border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/70 " +
           (changed
-            ? "border-violet-300/35 bg-violet-400/15 text-violet-200 hover:bg-violet-400/25"
-            : "border-white/10 bg-white/[0.045] text-white/70 hover:bg-white/10")
+            ? "border-white/25 bg-white/[0.12] text-white hover:bg-white/[0.18]"
+            : "border-white/10 bg-white/[0.045] text-white/74 hover:border-white/18 hover:bg-white/[0.075] hover:text-white/88")
         }
       >
         <Icon className="size-[18px]" strokeWidth={2} />
         {changed && (
-          <span className="absolute right-1.5 bottom-1.5 size-1.5 rounded-full bg-violet-300" />
+          <span className="absolute right-1.5 bottom-1.5 size-1.5 rounded-full bg-white/80" />
         )}
-      </button>
+      </Button>
       {open &&
         createPortal(
           <VoiceFilterSheet {...props} onClose={() => setOpen(false)} />,
@@ -125,35 +127,36 @@ function VoiceFilterSheet({
         )
           onClose()
       }}
-      className="fixed inset-x-0 top-auto bottom-0 m-0 max-h-[min(85dvh,720px)] w-full max-w-none overflow-hidden rounded-t-3xl border border-white/15 bg-[#15121e] p-0 text-white shadow-[0_24px_100px_#0009] backdrop:bg-black/65 sm:inset-auto sm:top-1/2 sm:left-1/2 sm:w-[min(680px,calc(100vw-48px))] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-3xl"
+      className="fixed inset-x-0 top-auto bottom-0 m-0 max-h-[92dvh] w-full max-w-none overflow-hidden rounded-t-2xl border border-white/10 bg-background p-0 text-white shadow-[0_-28px_80px_rgba(0,0,0,0.55)] backdrop:bg-black/55 backdrop:backdrop-blur-[2px] sm:inset-auto sm:top-1/2 sm:left-1/2 sm:w-[min(560px,calc(100vw-32px))] sm:-translate-x-1/2 sm:-translate-y-1/2 sm:rounded-2xl sm:shadow-[0_28px_80px_rgba(0,0,0,0.55)]"
     >
-      <div className="flex max-h-[min(85dvh,720px)] flex-col">
+      <div className="flex max-h-[92dvh] flex-col">
         <div
           aria-hidden="true"
-          className="mx-auto mt-2.5 h-1 w-9 shrink-0 rounded-full bg-white/20 sm:hidden"
+          className="mx-auto mt-3 h-1.5 w-10 shrink-0 rounded-full bg-white/20 sm:hidden"
         />
-        <header className="flex shrink-0 items-start justify-between gap-3 px-5 pt-4 pb-4 sm:px-6 sm:pt-6">
-          <div>
-            <p className="mb-1 text-[10px] font-semibold tracking-[0.16em] text-violet-300 uppercase">
-              Sound different. Play dirty.
-            </p>
-            <h2 id={titleId} className="text-xl font-semibold tracking-tight">
+        <header className="flex shrink-0 items-start justify-between gap-3 border-b border-white/10 px-4 py-4 sm:px-6">
+          <div className="min-w-0 flex-1">
+            <h2
+              id={titleId}
+              className="text-base font-semibold tracking-tight sm:text-lg"
+            >
               Voice filters
             </h2>
             <p id={helpId} className="mt-1 text-xs leading-5 text-white/55">
-              Pick a voice. Everyone hears it when your mic is on.
+              Choose how you sound at the table.
             </p>
           </div>
-          <button
+          <Button
             type="button"
+            variant="ghost"
             aria-label="Close voice filters"
             onClick={onClose}
-            className="-mt-1 -mr-2 grid size-11 shrink-0 place-items-center rounded-full text-white/55 hover:bg-white/10 hover:text-white focus-visible:outline-2 focus-visible:outline-violet-300"
+            className="size-11 shrink-0 rounded-lg text-white/60 hover:bg-white/[0.06] hover:text-white focus-visible:outline-2 focus-visible:outline-white/70"
           >
             <X className="size-5" />
-          </button>
+          </Button>
         </header>
-        <div className="min-h-0 overflow-y-auto overscroll-contain px-5 pb-5 sm:px-6">
+        <div className="uno-scrollbar min-h-0 overflow-y-auto overscroll-contain px-4 py-4 sm:px-6">
           <div
             className="grid grid-cols-2 gap-2 min-[360px]:grid-cols-3 sm:grid-cols-5"
             role="group"
@@ -163,38 +166,39 @@ function VoiceFilterSheet({
               const TileIcon = FILTER_ICONS[preset.id]
               const selected = filter === preset.id
               return (
-                <button
+                <Button
                   key={preset.id}
                   type="button"
+                  variant="ghost"
                   aria-pressed={selected}
                   aria-label={`${preset.name}: ${preset.detail}`}
                   disabled={Boolean(filterError) && preset.id !== "normal"}
                   onClick={() => select(preset.id)}
                   className={
-                    "relative flex min-h-[88px] flex-col items-center justify-center gap-2 rounded-2xl border px-2 py-3 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300 disabled:opacity-40 " +
+                    "relative flex h-auto min-h-[76px] min-w-0 flex-col items-center justify-center gap-2 rounded-lg border px-2 py-3 transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/70 disabled:opacity-40 " +
                     (selected
-                      ? "border-violet-300/70 bg-violet-400/15 text-violet-100"
-                      : "border-white/8 bg-white/[0.035] text-white/65 hover:border-white/20 hover:bg-white/[0.07]")
+                      ? "border-white bg-white text-neutral-950 hover:bg-white/86 hover:text-neutral-950"
+                      : "border-white/10 bg-white/[0.04] text-white/65 hover:border-white/20 hover:bg-white/[0.08] hover:text-white")
                   }
                 >
                   {selected && (
                     <Check
-                      className="absolute top-2 right-2 size-3 text-violet-300"
+                      className="absolute top-2 right-2 size-3 text-neutral-950"
                       strokeWidth={3}
                     />
                   )}
-                  <TileIcon className="size-6" strokeWidth={1.7} />
+                  <TileIcon className="size-5" strokeWidth={1.9} />
                   <span className="text-xs font-semibold">{preset.name}</span>
-                </button>
+                </Button>
               )
             })}
           </div>
-          <div className="mt-4 flex items-center gap-3 rounded-2xl border border-violet-300/15 bg-violet-400/[0.06] px-3.5 py-3">
-            <Icon className="size-5 shrink-0 text-violet-300" />
+          <div className="mt-4 flex items-center gap-3 px-1">
+            <Icon className="size-5 shrink-0 text-white/65" />
             <div className="min-w-0 flex-1">
-              <p className="text-sm font-semibold">
+              <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm font-medium">
                 {active.name}
-                <span className="ml-2 text-xs font-normal text-white/50">
+                <span className="text-xs font-normal text-white/50">
                   {active.detail}
                 </span>
               </p>
@@ -211,7 +215,7 @@ function VoiceFilterSheet({
               }
             />
           </div>
-          <div className="mt-4 rounded-2xl border border-white/8 bg-black/15 p-3.5">
+          <div className="mt-4 rounded-lg border border-white/10 bg-white/[0.03] p-3">
             <div className="flex items-center gap-2 text-xs font-semibold text-white/80">
               <TestTube2 className="size-4 text-white/45" />
               Private voice test
@@ -228,15 +232,16 @@ function VoiceFilterSheet({
                     : "Record 3 seconds. Only you hear the playback."}
             </p>
             <div className="mt-3 flex gap-2">
-              <button
+              <Button
                 type="button"
+                variant="ghost"
                 disabled={micOn || connecting}
                 onClick={() => {
                   if (busy || preview.status === "playing") preview.cancel()
                   else if (hasSample) void preview.play()
                   else void preview.record()
                 }}
-                className="flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl border border-white/15 bg-white/[0.055] px-3 text-xs font-semibold text-white/85 hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-violet-300 disabled:opacity-35"
+                className="flex min-h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/[0.05] px-3 text-sm font-medium text-white/70 hover:bg-white/[0.08] hover:text-white focus-visible:outline-2 focus-visible:outline-white/70 disabled:opacity-35"
               >
                 {busy || preview.status === "playing" ? (
                   <Square className="size-3.5" />
@@ -250,22 +255,23 @@ function VoiceFilterSheet({
                     : hasSample
                       ? "Play test"
                       : "Record a test"}
-              </button>
+              </Button>
               {hasSample && (
-                <button
+                <Button
                   type="button"
+                  variant="ghost"
                   disabled={micOn || connecting}
                   onClick={() => void preview.record()}
-                  className="min-h-11 rounded-xl px-3 text-xs text-white/55 hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-violet-300 disabled:opacity-35"
+                  className="min-h-11 rounded-lg px-3 text-xs text-white/65 hover:bg-white/[0.06] hover:text-white focus-visible:outline-2 focus-visible:outline-white/70 disabled:opacity-35"
                 >
                   Record again
-                </button>
+                </Button>
               )}
             </div>
             <p
               role="status"
               aria-live="polite"
-              className="mt-2 text-xs text-violet-200"
+              className="mt-2 text-xs text-white/65"
             >
               {preview.status === "recording"
                 ? "Recording…"
@@ -290,16 +296,17 @@ function VoiceFilterSheet({
             </p>
           )}
         </div>
-        <footer className="flex shrink-0 gap-2 border-t border-white/8 bg-[#15121e] px-5 pt-3 pb-[max(16px,env(safe-area-inset-bottom))] sm:px-6 sm:pb-5">
-          <button
+        <footer className="flex shrink-0 gap-2 border-t border-white/10 bg-background px-4 pt-4 pb-[max(16px,env(safe-area-inset-bottom))] sm:px-6 sm:pb-4">
+          <Button
             type="button"
+            variant="ghost"
             disabled={connecting || busy}
             onClick={() => {
               preview.cancel()
               onToggleMic()
               if (!micOn) onClose()
             }}
-            className="inline-flex min-h-11 flex-1 items-center justify-center gap-2 rounded-xl bg-violet-300 px-4 text-sm font-semibold text-[#20132e] hover:bg-violet-200 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-200 disabled:opacity-40"
+            className="inline-flex min-h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-lg bg-white px-3 text-sm font-semibold whitespace-normal text-neutral-950 hover:bg-white/86 hover:text-neutral-950 disabled:opacity-40"
           >
             <Mic className="size-4" />
             {connecting
@@ -309,14 +316,15 @@ function VoiceFilterSheet({
                 : active.id === "normal"
                   ? "Turn mic on"
                   : `Go live as ${active.name}`}
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant="ghost"
             onClick={onClose}
-            className="min-h-11 rounded-xl border border-white/15 px-4 text-sm font-medium text-white/70 hover:bg-white/5 focus-visible:outline-2 focus-visible:outline-violet-300"
+            className="min-h-11 rounded-lg border border-white/10 bg-white/[0.05] px-4 text-sm font-medium text-white/70 hover:bg-white/[0.08] hover:text-white focus-visible:outline-2 focus-visible:outline-white/70"
           >
             Done
-          </button>
+          </Button>
         </footer>
       </div>
     </dialog>
