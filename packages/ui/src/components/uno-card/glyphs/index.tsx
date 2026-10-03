@@ -1,5 +1,10 @@
 import { NumberCenter, NumberCorner } from "./number-glyph"
-import { SkipCenter, SkipCorner, SkipEveryoneCenter } from "./skip-glyph"
+import {
+  SkipCenter,
+  SkipCorner,
+  SkipEveryoneCenter,
+  SkipEveryoneCorner,
+} from "./skip-glyph"
 import { ReverseCenter, ReverseCorner } from "./reverse-glyph"
 import { DrawCenter, DrawCorner } from "./draw-glyph"
 import {
@@ -55,7 +60,7 @@ export function GlyphCorner({ face }: { face: CardFace }) {
     case "skip":
       return <SkipCorner />
     case "skip-everyone":
-      return <SkipCorner />
+      return <SkipEveryoneCorner />
     case "reverse":
       return <ReverseCorner />
     case "draw":

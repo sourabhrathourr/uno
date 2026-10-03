@@ -18,6 +18,7 @@ import {
   SkipCenter,
   SkipCorner,
   SkipEveryoneCenter,
+  SkipEveryoneCorner,
 } from '@/components/uno-card-mobile/glyphs/skip-glyph';
 import {
   WildCardsCenter,
@@ -80,7 +81,7 @@ export function GlyphCorner({
     case 'skip':
       return <SkipCorner fontPx={fontPx} />;
     case 'skip-everyone':
-      return <SkipCorner fontPx={fontPx} />;
+      return <SkipEveryoneCorner fontPx={fontPx} />;
     case 'reverse':
       return <ReverseCorner fontPx={fontPx} />;
     case 'draw':

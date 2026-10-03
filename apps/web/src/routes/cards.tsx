@@ -19,6 +19,12 @@ const colors: Array<Exclude<CardColor, "wild">> = [
 ]
 const numberValues = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] as const
 
+const reverseTen: Card = {
+  id: "lab:wild:rd10",
+  color: "wild",
+  face: { kind: "wild-reverse-draw", count: 10 },
+}
+
 function id(parts: Array<string>) {
   return parts.join(":")
 }
@@ -45,6 +51,7 @@ function makeActionRow(): Array<Card> {
       { kind: "reverse" },
       { kind: "draw", count: 2 },
       { kind: "draw", count: 4 },
+      { kind: "skip-everyone" },
     ]
     faces.forEach((face, i) => {
       out.push({ id: id([c, "a", String(i)]), color: c, face })
@@ -73,6 +80,7 @@ function makeWildRow(): Array<Card> {
       color: "wild",
       face: { kind: "wild-reverse-draw", count: 4 },
     },
+    reverseTen,
   ]
 }
 
@@ -93,8 +101,8 @@ function CardsLab() {
         color: "white",
       }}
     >
-      <div className="mx-auto flex max-w-[1400px] flex-col gap-12 px-8 py-14">
-        <header className="flex items-end justify-between gap-6">
+      <div className="mx-auto flex max-w-[1400px] flex-col gap-12 px-4 py-8 sm:px-8 sm:py-14">
+        <header className="flex flex-wrap items-end justify-between gap-6">
           <div>
             <p className="text-xs font-medium tracking-[0.2em] text-white/55 uppercase">
               UNO No Mercy · Components
@@ -122,6 +130,57 @@ function CardsLab() {
           />
         </header>
 
+        <section className="flex flex-col gap-6 rounded-2xl border border-white/10 bg-white/[0.025] p-4 sm:p-8">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-medium tracking-[0.16em] text-white/45 uppercase">
+                New card · In the deck
+              </p>
+              <h2 className="mt-2 text-2xl font-semibold tracking-tight">
+                Wild Reverse +10
+              </h2>
+              <p className="mt-2 max-w-md text-sm text-white/60">
+                Reverse the turn order. Send a draw of 10 the other way.
+              </p>
+            </div>
+            <p className="rounded-full border border-white/10 px-3 py-1.5 text-xs text-white/60">
+              2 copies per deck
+            </p>
+          </div>
+          <div className="flex flex-col items-start gap-10 lg:flex-row lg:items-center lg:gap-16">
+            <div className="flex shrink-0 flex-col items-center gap-4 self-center lg:self-auto">
+              <UnoCard card={reverseTen} size="xl" faceDown={faceDown} />
+              <p className="text-xs text-white/45">Reverse +10</p>
+            </div>
+            <div className="flex w-full min-w-0 flex-col gap-8 lg:flex-1">
+              <div>
+                <p className="mb-4 text-xs font-medium text-white/55">
+                  Beside the existing wild cards
+                </p>
+                <div className="flex flex-wrap items-end gap-6">
+                  {[
+                    { card: wilds[3], label: "+10" },
+                    { card: wilds[4], label: "Reverse +4" },
+                    { card: reverseTen, label: "Reverse +10" },
+                  ].map(({ card, label }) => (
+                    <div
+                      key={card.id}
+                      className="flex flex-col items-center gap-3"
+                    >
+                      <UnoCard card={card} size={size} faceDown={faceDown} />
+                      <p className="text-xs text-white/45">{label}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <p className="max-w-sm text-sm leading-relaxed text-white/55">
+                Ten colored cards sit between two reverse arrows. A clear +10 in
+                each corner keeps the draw count visible in your hand.
+              </p>
+            </div>
+          </div>
+        </section>
+
         <Section
           label="Numbers"
           hint="0–9 across all four colors. The chunky underline distinguishes 6 / 9 when held inverted."
@@ -135,7 +194,7 @@ function CardsLab() {
 
         <Section
           label="Action cards"
-          hint="Skip, Reverse, Draw 2, Draw 4. Same color, different verbs."
+          hint="Skip, Reverse, Draw 2, Draw 4, Skip All. Same color, different verbs."
         >
           <Grid>
             {actions.map((c) => (
@@ -189,7 +248,7 @@ function Toolbar({
   onFaceDown: (b: boolean) => void
 }) {
   return (
-    <div className="flex items-center gap-3 rounded-full border border-white/10 bg-white/[0.04] p-1.5 text-sm backdrop-blur">
+    <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.04] p-1.5 text-sm backdrop-blur sm:flex-nowrap sm:rounded-full">
       <SegGroup label="Size" value={size} onChange={onSize}>
         {(["sm", "md", "lg", "xl"] as const).map((s) => (
           <SegBtn key={s} value={s} current={size} onClick={onSize}>
@@ -275,18 +334,18 @@ function Section({
 }) {
   return (
     <section className="flex flex-col gap-5">
-      <div className="flex items-baseline justify-between gap-6">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-baseline sm:justify-between sm:gap-6">
         <h2 className="text-base font-medium tracking-tight text-white">
           {label}
         </h2>
         <p
-          className="max-w-lg text-right text-xs text-white/45"
+          className="max-w-lg text-xs text-white/45 sm:text-right"
           style={{ textWrap: "pretty" }}
         >
           {hint}
         </p>
       </div>
-      <div className="rounded-2xl border border-white/[0.06] bg-white/[0.015] p-6">
+      <div className="rounded-2xl border border-white/[0.06] bg-white/[0.015] p-4 sm:p-6">
         {children}
       </div>
     </section>
@@ -304,46 +363,48 @@ function Hand() {
     { id: "h2", color: "blue", face: { kind: "draw", count: 2 } },
     { id: "h3", color: "green", face: { kind: "skip" } },
     { id: "h4", color: "yellow", face: { kind: "reverse" } },
-    { id: "h5", color: "wild", face: { kind: "wild-draw", count: 6 } },
+    { ...reverseTen, id: "h5" },
     { id: "h6", color: "blue", face: { kind: "number", value: 0 } },
     { id: "h7", color: "wild", face: { kind: "wild" } },
   ]
   const half = (cards.length - 1) / 2
   return (
-    <div className="relative mx-auto h-[360px] w-full max-w-[820px]">
-      <div className="absolute inset-x-0 bottom-0 flex justify-center">
-        {cards.map((c, i) => {
-          const offset = i - half
-          const isSelected = selectedId === c.id
-          // Selected card straightens, lifts higher, scales up, and z-indexes above siblings.
-          const rot = isSelected ? 0 : offset * 6
-          const x = offset * 64
-          const y = isSelected ? -90 : Math.abs(offset) * 6
-          const scale = isSelected ? 1.06 : 1
-          return (
-            <div
-              key={c.id}
-              className="absolute bottom-0"
-              style={{
-                transform: `translateX(${x}px) translateY(${y}px) rotate(${rot}deg) scale(${scale})`,
-                transitionProperty: "transform",
-                transitionDuration: "480ms",
-                transitionTimingFunction: "cubic-bezier(0.22, 0.9, 0.18, 1)",
-                zIndex: isSelected ? 50 : 10 + i,
-                willChange: "transform",
-              }}
-            >
-              <UnoCard
-                card={c}
-                size="lg"
-                raised={isSelected}
-                onClick={() =>
-                  setSelectedId((prev) => (prev === c.id ? null : c.id))
-                }
-              />
-            </div>
-          )
-        })}
+    <div className="uno-scrollbar overflow-x-auto">
+      <div className="relative mx-auto h-[360px] w-full max-w-[820px] min-w-[720px]">
+        <div className="absolute inset-x-0 bottom-0 flex justify-center">
+          {cards.map((c, i) => {
+            const offset = i - half
+            const isSelected = selectedId === c.id
+            // Selected card straightens, lifts higher, scales up, and z-indexes above siblings.
+            const rot = isSelected ? 0 : offset * 6
+            const x = offset * 64
+            const y = isSelected ? -90 : Math.abs(offset) * 6
+            const scale = isSelected ? 1.06 : 1
+            return (
+              <div
+                key={c.id}
+                className="absolute bottom-0"
+                style={{
+                  transform: `translateX(${x}px) translateY(${y}px) rotate(${rot}deg) scale(${scale})`,
+                  transitionProperty: "transform",
+                  transitionDuration: "480ms",
+                  transitionTimingFunction: "cubic-bezier(0.22, 0.9, 0.18, 1)",
+                  zIndex: isSelected ? 50 : 10 + i,
+                  willChange: "transform",
+                }}
+              >
+                <UnoCard
+                  card={c}
+                  size="lg"
+                  raised={isSelected}
+                  onClick={() =>
+                    setSelectedId((prev) => (prev === c.id ? null : c.id))
+                  }
+                />
+              </div>
+            )
+          })}
+        </div>
       </div>
     </div>
   )

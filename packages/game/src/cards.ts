@@ -11,7 +11,7 @@ export type CardFace =
   | { kind: "discard-color" }
   | { kind: "wild" }
   | { kind: "wild-draw"; count: 4 | 6 | 10 }
-  | { kind: "wild-reverse-draw"; count: 4 }
+  | { kind: "wild-reverse-draw"; count: 4 | 10 }
   | { kind: "wild-color-roulette" }
 
 export type Card = {

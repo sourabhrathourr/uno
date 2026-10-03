@@ -46,6 +46,7 @@ function makeActionRow(): Card[] {
       { kind: 'reverse' },
       { kind: 'draw', count: 2 },
       { kind: 'draw', count: 4 },
+      { kind: 'skip-everyone' },
     ];
     faces.forEach((face, i) => {
       out.push({ id: id([c, 'a', String(i)]), color: c, face });
@@ -72,6 +73,11 @@ function makeWildRow(): Card[] {
       id: 'wild:rd4',
       color: 'wild',
       face: { kind: 'wild-reverse-draw', count: 4 },
+    },
+    {
+      id: 'wild:rd10',
+      color: 'wild',
+      face: { kind: 'wild-reverse-draw', count: 10 },
     },
     {
       id: 'wild:roulette',
@@ -142,7 +148,7 @@ export default function CardsLabScreen() {
 
           <Section
             label="Action cards"
-            hint="Skip, Reverse, Draw 2, Draw 4. Same color, different verbs."
+            hint="Skip, Reverse, Draw 2, Draw 4, Skip All. Same color, different verbs."
           >
             <Grid>
               {actions.map((c) => (
