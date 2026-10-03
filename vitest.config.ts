@@ -1,9 +1,18 @@
 import { defineConfig } from "vitest/config"
+import { fileURLToPath } from "node:url"
+
+const alias = {
+  "@": fileURLToPath(new URL("./apps/web/src", import.meta.url)),
+  "@workspace/game": fileURLToPath(
+    new URL("./packages/game/src/index.ts", import.meta.url)
+  ),
+}
 
 export default defineConfig({
   test: {
     projects: [
       {
+        resolve: { alias },
         test: {
           name: "game",
           environment: "node",
@@ -11,6 +20,7 @@ export default defineConfig({
         },
       },
       {
+        resolve: { alias },
         test: {
           name: "server",
           environment: "node",
@@ -18,6 +28,7 @@ export default defineConfig({
         },
       },
       {
+        resolve: { alias },
         test: {
           name: "web",
           environment: "jsdom",

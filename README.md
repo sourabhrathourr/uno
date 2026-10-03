@@ -43,6 +43,23 @@ connection forced through a TURN relay — so a TURN server must be configured
 for that last step to work. Set `VOICE_DEBUG=1` on the server, or append
 `?voiceDebug=1` in the browser, to trace negotiation.
 
+Voice belongs to one tab per player. A second tab shows an error and can retry
+after the first tab closes. The client waits for the room join acknowledgement
+before claiming voice or negotiating peers. Offers, answers, and candidates
+carry session/exchange IDs so an old attempt cannot replace a new one.
+
+Mic failures are isolated from peer failures. Ended capture can be reopened
+with the mic button, and late permission results are stopped after leaving.
+The watchdog checks audio packet progress during reported speech. Playback
+errors show a named retry button. Audio elements stay mounted between lobby
+and game views. TURN settings are selected by relay support, failed loads can
+retry, and relay-only recovery remains relay-only on later rebuilds.
+
+Deploy the server before the web app when rolling out this voice protocol.
+The new server accepts older clients; the new web app requires `voice:join`.
+Tests use mocked WebRTC devices plus real local Socket.IO connections. They
+do not validate production Metered credentials or real browser audio output.
+
 ## GIPHY search
 
 Copy `apps/server/.env.example` to `apps/server/.env`, then set
