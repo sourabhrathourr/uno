@@ -77,7 +77,7 @@ export type ReadyInput = {
   ready: boolean
 }
 
-export type VoiceSignal =
+export type VoiceSignal = { exchangeId?: string } & (
   | {
       type: "offer"
       sdp: string
@@ -93,23 +93,28 @@ export type VoiceSignal =
   | {
       type: "leave"
     }
+)
 
 export type VoiceSignalInput = {
+  targetSessionId?: string
   targetPlayerId: string
   signal: VoiceSignal
 }
 
 export type VoiceSignalEvent = VoiceSignalInput & {
+  fromSessionId?: string
   fromPlayerId: string
 }
 
 export type VoiceStateInput = {
+  voiceSessionId?: string
   enabled: boolean
   muted: boolean
   speaking: boolean
 }
 
 export type VoiceStateEvent = VoiceStateInput & {
+  voiceSessionId?: string
   playerId: string
 }
 
@@ -169,6 +174,11 @@ export type ClientToServerEvents = {
     input: CastVoteKickInput,
     ack: (result: CommandResult<RoomSnapshot>) => void
   ) => void
+  "voice:join": (
+    ack: (
+      result: CommandResult<{ sessionId: string; states: VoiceStateEvent[] }>
+    ) => void
+  ) => void
   "voice:requestStates": () => void
   "voice:setState": (input: VoiceStateInput) => void
   "voice:signal": (input: VoiceSignalInput) => void
@@ -226,6 +236,7 @@ export type ServerToClientEvents = {
   "game:playerState": (snapshot: PlayerGameSnapshot) => void
   "room:playerSocial": (snapshot: PlayerSocialSnapshot) => void
   "room:event": (event: RoomEvent) => void
+  "voice:unavailable": (error: GameError) => void
   "voice:state": (event: VoiceStateEvent) => void
   "voice:signal": (event: VoiceSignalEvent) => void
   "room:error": (error: GameError) => void

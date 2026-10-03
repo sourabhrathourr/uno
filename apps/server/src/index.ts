@@ -4,7 +4,7 @@ import {
   type ServerResponse,
 } from "node:http"
 
-import { Server, type Socket } from "socket.io"
+import { Server } from "socket.io"
 
 import type {
   ClientToServerEvents,
@@ -13,8 +13,9 @@ import type {
   RoomSnapshot,
   ServerToClientEvents,
   SocketData,
-  VoiceSignal,
 } from "@workspace/game"
+
+import { RoomVoice } from "./room-voice"
 
 import { GiphyService } from "./giphy"
 import { ROOM_MEMORY_CLEANUP_INTERVAL_MS, RoomManager } from "./room-manager"
@@ -31,8 +32,6 @@ const allowedOrigins = (process.env.CORS_ORIGIN ?? "http://localhost:3000")
   .split(",")
   .map((origin) => origin.trim())
   .filter(Boolean)
-const voiceDebugEnabled =
-  process.env.VOICE_DEBUG === "1" || process.env.VOICE_DEBUG === "true"
 const voiceIceServers = getConfiguredIceServers()
 
 const gifs = new GiphyService({
@@ -47,10 +46,6 @@ const gifs = new GiphyService({
     10
   ),
 })
-const voiceStatesByRoomCode = new Map<
-  string,
-  Map<string, { enabled: boolean; muted: boolean; speaking: boolean }>
->()
 const rooms = new RoomManager({
   resolveGif: (provider, id) =>
     provider === "giphy" ? gifs.resolveApprovedGif(id) : null,
@@ -165,7 +160,10 @@ const io = new Server<
   },
 })
 
+const voice = new RoomVoice(io)
+
 io.on("connection", (socket) => {
+  voice.attach(socket)
   socket.on("room:join", (input, ack) => {
     const result = rooms.joinRoom(input)
     if (!result.ok) {
@@ -182,12 +180,12 @@ io.on("connection", (socket) => {
         previousPlayerId !== result.data.player.id)
 
     if (changedSeat) {
+      voice.release(socket)
       const previousSnapshot = rooms.unregisterConnection(
         previousRoomCode,
         previousPlayerId,
         socket.id
       )
-      socket.leave(voiceChannel(previousRoomCode, previousPlayerId))
       if (previousRoomCode !== result.data.room.code)
         socket.leave(previousRoomCode)
       if (previousSnapshot)
@@ -198,8 +196,6 @@ io.on("connection", (socket) => {
     socket.data.playerId = result.data.player.id
     socket.data.sessionId = input.sessionId
     socket.join(result.data.room.code)
-    // Private lane per seat so voice signalling is addressed, not broadcast.
-    socket.join(voiceChannel(result.data.room.code, result.data.player.id))
 
     const snapshot = rooms.registerConnection(
       result.data.room.code,
@@ -210,7 +206,7 @@ io.on("connection", (socket) => {
     const room = snapshot ?? result.data.room
     const playerGame = rooms.getPlayerGame(room.code, result.data.player.id)
     const playerSocial = rooms.getPlayerSocial(room.code, result.data.player.id)
-    emitVoiceStates(socket, room.code)
+    voice.sendStates(socket)
     ack({
       ok: true,
       data: {
@@ -334,55 +330,6 @@ io.on("connection", (socket) => {
     )
     ack(result)
     if (result.ok) void emitRoomState(result.data.code, result.data)
-  })
-
-  socket.on("voice:requestStates", () => {
-    const roomCode = socket.data.roomCode
-    if (!roomCode) return
-    logVoiceDebug("states requested", {
-      roomCode,
-      socketId: socket.id,
-      playerId: socket.data.playerId,
-    })
-    emitVoiceStates(socket, roomCode)
-  })
-
-  socket.on("voice:setState", (input) => {
-    const roomCode = socket.data.roomCode
-    const playerId = socket.data.playerId
-    if (!roomCode || !playerId) return
-
-    const enabled = Boolean(input.enabled)
-    const muted = Boolean(input.muted)
-    const speaking = Boolean(enabled && !muted && input.speaking)
-    writeVoiceState(roomCode, playerId, { enabled, muted, speaking })
-    logVoiceDebug("state broadcast", {
-      roomCode,
-      playerId,
-      enabled,
-      muted,
-      speaking,
-    })
-    io.to(roomCode).emit("voice:state", { playerId, enabled, muted, speaking })
-  })
-
-  socket.on("voice:signal", (input) => {
-    const roomCode = socket.data.roomCode
-    const playerId = socket.data.playerId
-    if (!roomCode || !playerId) return
-    if (!input.targetPlayerId || input.targetPlayerId === playerId) return
-
-    logVoiceDebug("signal relayed", {
-      roomCode,
-      fromPlayerId: playerId,
-      targetPlayerId: input.targetPlayerId,
-      signal: describeVoiceSignal(input.signal),
-    })
-    io.to(voiceChannel(roomCode, input.targetPlayerId)).emit("voice:signal", {
-      fromPlayerId: playerId,
-      targetPlayerId: input.targetPlayerId,
-      signal: input.signal,
-    })
   })
 
   socket.on("game:playCards", (input, ack) => {
@@ -523,22 +470,6 @@ io.on("connection", (socket) => {
 
     const snapshot = rooms.unregisterConnection(roomCode, playerId, socket.id)
     if (snapshot) {
-      const playerSnapshot = snapshot.players.find(
-        (candidate) => candidate.id === playerId
-      )
-      if (!playerSnapshot?.connected) {
-        writeVoiceState(roomCode, playerId, {
-          enabled: false,
-          muted: true,
-          speaking: false,
-        })
-        io.to(roomCode).emit("voice:state", {
-          playerId,
-          enabled: false,
-          muted: true,
-          speaking: false,
-        })
-      }
       void emitRoomState(roomCode, snapshot)
     }
   })
@@ -552,10 +483,6 @@ roomCleanupInterval.unref()
 httpServer.listen(port, () => {
   console.log(`UNO No Mercy server listening on http://localhost:${port}`)
 })
-
-function voiceChannel(roomCode: string, playerId: string) {
-  return `voice:${roomCode}:${playerId}`
-}
 
 function setCorsHeaders(req: IncomingMessage, res: ServerResponse) {
   const origin = req.headers.origin
@@ -579,7 +506,7 @@ function firstHeader(value: string | Array<string> | undefined): string {
 }
 
 function clearExpiredRoomRuntimeState(roomCode: string) {
-  voiceStatesByRoomCode.delete(roomCode)
+  voice.clearRoom(roomCode)
   io.to(roomCode).emit("room:error", {
     code: "room-expired",
     message: "This room expired after 7 days of inactivity.",
@@ -639,78 +566,6 @@ async function emitRoomState(roomCode: string, room?: RoomSnapshot) {
     if (playerGame) client.emit("game:playerState", playerGame)
     const playerSocial = rooms.getPlayerSocial(roomCode, playerId)
     if (playerSocial) client.emit("room:playerSocial", playerSocial)
-  }
-}
-
-function emitVoiceStates(
-  socket: Socket<
-    ClientToServerEvents,
-    ServerToClientEvents,
-    InterServerEvents,
-    SocketData
-  >,
-  roomCode: string
-) {
-  const roomVoiceStates = voiceStatesByRoomCode.get(roomCode)
-  if (!roomVoiceStates) return
-
-  for (const [playerId, state] of roomVoiceStates) {
-    socket.emit("voice:state", { playerId, ...state })
-  }
-}
-
-function writeVoiceState(
-  roomCode: string,
-  playerId: string,
-  state: { enabled: boolean; muted: boolean; speaking: boolean }
-) {
-  const roomVoiceStates = voiceStatesByRoomCode.get(roomCode) ?? new Map()
-
-  if (!state.enabled) {
-    roomVoiceStates.delete(playerId)
-  } else {
-    roomVoiceStates.set(playerId, state)
-  }
-
-  if (roomVoiceStates.size === 0) {
-    voiceStatesByRoomCode.delete(roomCode)
-  } else {
-    voiceStatesByRoomCode.set(roomCode, roomVoiceStates)
-  }
-}
-
-function logVoiceDebug(event: string, details: Record<string, unknown>) {
-  if (!voiceDebugEnabled) return
-  console.log(`[uno voice] ${event}`, details)
-}
-
-function describeVoiceSignal(signal: VoiceSignal) {
-  if (signal.type === "offer" || signal.type === "answer") {
-    return { type: signal.type, sdpLength: signal.sdp.length }
-  }
-
-  if (signal.type === "leave") {
-    return { type: signal.type }
-  }
-
-  return {
-    type: signal.type,
-    candidate: describeVoiceCandidate(signal.candidate),
-  }
-}
-
-function describeVoiceCandidate(candidate: unknown) {
-  if (!candidate || typeof candidate !== "object") return null
-
-  const candidateValue =
-    "candidate" in candidate && typeof candidate.candidate === "string"
-      ? candidate.candidate
-      : ""
-
-  return {
-    type: candidateValue.match(/ typ ([a-z]+)/i)?.[1] ?? "unknown",
-    protocol:
-      candidateValue.match(/ (udp|tcp) /i)?.[1]?.toLowerCase() ?? "unknown",
   }
 }
 

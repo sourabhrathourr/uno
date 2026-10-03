@@ -92,7 +92,8 @@ import {
   playWinnerSound,
 } from "@/lib/sound"
 import { useSoundSystem } from "@/lib/use-sound-system"
-import { logRoomVoiceDebug, useRoomVoice } from "@/lib/use-room-voice"
+import { VoiceAudioOutputs } from "@/components/voice-audio-outputs"
+import { useRoomVoice } from "@/lib/use-room-voice"
 
 type ResponsiveCardSize = "sm" | "md"
 type DeckDrawFlightState = {
@@ -121,6 +122,7 @@ function RoomPage() {
   const [error, setError] = useState<string | null>(null)
   const [errorNonce, setErrorNonce] = useState(0)
   const [socket, setSocket] = useState<GameSocket | null>(null)
+  const [joinedSocketId, setJoinedSocketId] = useState<string | null>(null)
   const [playerGame, setPlayerGame] = useState<PlayerGameSnapshot | null>(null)
   const [playerSocial, setPlayerSocial] = useState<PlayerSocialSnapshot | null>(
     null
@@ -150,6 +152,7 @@ function RoomPage() {
   )
   const voice = useRoomVoice({
     socket,
+    joinedSocketId,
     roomCode: normalizedRoomCode,
     selfPlayerId: player?.id ?? null,
     players: room?.players ?? [],
@@ -200,7 +203,11 @@ function RoomPage() {
     setPlayerSocial(nextSocial)
   }
 
-  function applyJoinSuccess(result: JoinRoomResponse) {
+  function applyJoinSuccess(
+    result: JoinRoomResponse,
+    socketId: string | undefined
+  ) {
+    setJoinedSocketId(socketId ?? null)
     saveActiveRoomCode(result.room.code)
     applyPlayer(result.player)
     applyRoomSnapshot(result.room)
@@ -212,6 +219,7 @@ function RoomPage() {
   }
 
   function clearJoinedRoom() {
+    setJoinedSocketId(null)
     saveActiveRoomCode("")
     applyPlayer(null)
     applyRoomSnapshot(null)
@@ -255,7 +263,7 @@ function RoomPage() {
         }
 
         setError(null)
-        applyJoinSuccess(result.data)
+        applyJoinSuccess(result.data, activeSocket.id)
       }
     )
   }
@@ -314,6 +322,7 @@ function RoomPage() {
     }
 
     function handleDisconnect() {
+      setJoinedSocketId(null)
       joinInFlightRef.current = false
       setConnected(false)
     }
@@ -616,7 +625,7 @@ function RoomPage() {
           return
         }
 
-        applyJoinSuccess(result.data)
+        applyJoinSuccess(result.data, activeSocket.id)
       }
     )
   }
@@ -868,6 +877,16 @@ function RoomPage() {
     await copyTextToClipboard(inviteUrl.toString())
   }
 
+  const audioOutputs = (
+    <VoiceAudioOutputs
+      streamsByPlayerId={voice.remoteStreamsByPlayerId}
+      connectionIssues={voice.connectionIssues}
+      playerNames={Object.fromEntries(
+        (room?.players ?? []).map((player) => [player.id, player.name])
+      )}
+    />
+  )
+
   if (!player) {
     return (
       <InviteJoinScreen
@@ -889,11 +908,14 @@ function RoomPage() {
     !room.game
   ) {
     return (
-      <main className="grid min-h-svh place-items-center bg-neutral-950 px-6 text-white antialiased">
-        <div className="rounded-lg border border-white/10 bg-white/[0.035] p-5 text-sm text-white/62">
-          Loading game state...
-        </div>
-      </main>
+      <>
+        {audioOutputs}
+        <main className="grid min-h-svh place-items-center bg-neutral-950 px-6 text-white antialiased">
+          <div className="rounded-lg border border-white/10 bg-white/[0.035] p-5 text-sm text-white/62">
+            Loading game state...
+          </div>
+        </main>
+      </>
     )
   }
 
@@ -904,6 +926,7 @@ function RoomPage() {
     const showIntro = startIntroPhase !== "idle" && startIntroPhase !== "done"
     return (
       <>
+        {audioOutputs}
         <GameTable
           room={room}
           player={player}
@@ -945,22 +968,25 @@ function RoomPage() {
   }
 
   return (
-    <LobbyWaitingRoom
-      room={room}
-      player={player}
-      roomCode={normalizedRoomCode}
-      connected={connected}
-      error={error}
-      isHost={isHost}
-      currentPlayerReady={Boolean(currentPlayer?.ready)}
-      onReady={setReady}
-      onStart={startGame}
-      onCopyInvite={copyInvite}
-      onSendChatMessage={sendChatMessage}
-      onStartVoteKick={startVoteKick}
-      onCastVoteKick={castVoteKick}
-      voice={voice}
-    />
+    <>
+      {audioOutputs}
+      <LobbyWaitingRoom
+        room={room}
+        player={player}
+        roomCode={normalizedRoomCode}
+        connected={connected}
+        error={error}
+        isHost={isHost}
+        currentPlayerReady={Boolean(currentPlayer?.ready)}
+        onReady={setReady}
+        onStart={startGame}
+        onCopyInvite={copyInvite}
+        onSendChatMessage={sendChatMessage}
+        onStartVoteKick={startVoteKick}
+        onCastVoteKick={castVoteKick}
+        voice={voice}
+      />
+    </>
   )
 }
 
@@ -1646,9 +1672,6 @@ function GameTable({
     return (
       <>
         <main className="h-dvh overflow-hidden bg-[#070604] text-white antialiased">
-          <VoiceAudioOutputs
-            streamsByPlayerId={voice.remoteStreamsByPlayerId}
-          />
           {celebratingWinner && (
             <FirstPlaceCelebration playerName={celebratingWinner.name} />
           )}
@@ -2105,7 +2128,6 @@ function GameTable({
   return (
     <>
       <main className="h-dvh overflow-hidden bg-[#070604] text-white antialiased">
-        <VoiceAudioOutputs streamsByPlayerId={voice.remoteStreamsByPlayerId} />
         {celebratingWinner && (
           <FirstPlaceCelebration playerName={celebratingWinner.name} />
         )}
@@ -8056,199 +8078,6 @@ function VoiceToggleButton({
   )
 }
 
-const remoteVoiceAudioElements = new Set<HTMLAudioElement>()
-
-function describeVoiceStream(stream: MediaStream) {
-  return {
-    id: stream.id,
-    active: stream.active,
-    tracks: stream.getAudioTracks().map((track) => ({
-      id: track.id,
-      enabled: track.enabled,
-      muted: track.muted,
-      readyState: track.readyState,
-    })),
-  }
-}
-
-function playRegisteredVoiceAudio(reason: string) {
-  for (const audio of remoteVoiceAudioElements) {
-    void audio
-      .play()
-      .then(() => {
-        logRoomVoiceDebug("remote audio play resolved", {
-          reason,
-          playerId: audio.dataset.playerId,
-          readyState: audio.readyState,
-          paused: audio.paused,
-        })
-      })
-      .catch((cause: unknown) => {
-        logRoomVoiceDebug("remote audio play blocked", {
-          reason,
-          playerId: audio.dataset.playerId,
-          readyState: audio.readyState,
-          paused: audio.paused,
-          cause,
-        })
-      })
-  }
-}
-
-function VoiceAudioOutputs({
-  streamsByPlayerId,
-}: {
-  streamsByPlayerId: Partial<Record<string, MediaStream>>
-}) {
-  useEffect(() => {
-    const unlockAudio = () => playRegisteredVoiceAudio("user-gesture")
-    window.addEventListener("pointerdown", unlockAudio, { capture: true })
-    window.addEventListener("touchend", unlockAudio, { capture: true })
-    window.addEventListener("keydown", unlockAudio, { capture: true })
-
-    return () => {
-      window.removeEventListener("pointerdown", unlockAudio, { capture: true })
-      window.removeEventListener("touchend", unlockAudio, { capture: true })
-      window.removeEventListener("keydown", unlockAudio, { capture: true })
-    }
-  }, [])
-
-  return (
-    <>
-      {Object.entries(streamsByPlayerId).flatMap(([playerId, stream]) =>
-        stream ? (
-          <RemoteVoiceAudio
-            key={playerId}
-            playerId={playerId}
-            stream={stream}
-          />
-        ) : (
-          []
-        )
-      )}
-    </>
-  )
-}
-
-function RemoteVoiceAudio({
-  playerId,
-  stream,
-}: {
-  playerId: string
-  stream: MediaStream
-}) {
-  const audioRef = useRef<HTMLAudioElement | null>(null)
-
-  useEffect(() => {
-    const audio = audioRef.current
-    if (!audio) return
-
-    audio.dataset.playerId = playerId
-    audio.muted = false
-    audio.volume = 1
-    audio.srcObject = stream
-    remoteVoiceAudioElements.add(audio)
-    logRoomVoiceDebug("remote audio element attached", {
-      playerId,
-      stream: describeVoiceStream(stream),
-    })
-    let waitingForGesture = false
-    const unlockEvents: Array<keyof WindowEventMap> = [
-      "pointerdown",
-      "touchend",
-      "keydown",
-    ]
-
-    const removeUnlockListeners = () => {
-      if (!waitingForGesture) return
-      waitingForGesture = false
-      for (const eventName of unlockEvents) {
-        window.removeEventListener(eventName, playAudio)
-      }
-    }
-
-    const addUnlockListeners = () => {
-      if (waitingForGesture) return
-      waitingForGesture = true
-      for (const eventName of unlockEvents) {
-        window.addEventListener(eventName, playAudio, { once: true })
-      }
-    }
-
-    const playAudio = () => {
-      void audio
-        .play()
-        .then(() => {
-          removeUnlockListeners()
-          logRoomVoiceDebug("remote audio play resolved", {
-            playerId,
-            readyState: audio.readyState,
-            paused: audio.paused,
-          })
-        })
-        .catch((cause: unknown) => {
-          logRoomVoiceDebug("remote audio play blocked", {
-            playerId,
-            readyState: audio.readyState,
-            paused: audio.paused,
-            cause,
-          })
-          addUnlockListeners()
-        })
-    }
-
-    const handleTrackChanged = () => {
-      logRoomVoiceDebug("remote audio track changed", {
-        playerId,
-        stream: describeVoiceStream(stream),
-      })
-      playAudio()
-    }
-    const handlePlaying = () => {
-      logRoomVoiceDebug("remote audio playing", {
-        playerId,
-        readyState: audio.readyState,
-        paused: audio.paused,
-      })
-    }
-
-    const audioTracks = stream.getAudioTracks()
-    playAudio()
-    audio.addEventListener("loadedmetadata", playAudio)
-    audio.addEventListener("canplay", playAudio)
-    audio.addEventListener("playing", handlePlaying)
-    for (const track of audioTracks) {
-      track.addEventListener("mute", handleTrackChanged)
-      track.addEventListener("unmute", handleTrackChanged)
-      track.addEventListener("ended", handleTrackChanged)
-    }
-
-    return () => {
-      removeUnlockListeners()
-      remoteVoiceAudioElements.delete(audio)
-      audio.removeEventListener("loadedmetadata", playAudio)
-      audio.removeEventListener("canplay", playAudio)
-      audio.removeEventListener("playing", handlePlaying)
-      for (const track of audioTracks) {
-        track.removeEventListener("mute", handleTrackChanged)
-        track.removeEventListener("unmute", handleTrackChanged)
-        track.removeEventListener("ended", handleTrackChanged)
-      }
-      audio.srcObject = null
-    }
-  }, [playerId, stream])
-
-  return (
-    <audio
-      ref={audioRef}
-      data-player-id={playerId}
-      autoPlay
-      playsInline
-      className="pointer-events-none absolute size-px opacity-0"
-    />
-  )
-}
-
 function PlayerRow({
   player,
   isHost,
@@ -8338,7 +8167,6 @@ function LobbyWaitingRoom({
 
   return (
     <main className="relative h-dvh overflow-hidden bg-[#070604] text-white antialiased">
-      <VoiceAudioOutputs streamsByPlayerId={voice.remoteStreamsByPlayerId} />
       <div
         className="pointer-events-none absolute inset-0"
         style={{
