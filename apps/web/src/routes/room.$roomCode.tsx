@@ -69,6 +69,7 @@ import type { RoomVoiceController } from "@/lib/use-room-voice"
 import type { ChatTray } from "@/components/use-channel-chat"
 import { GifPicker } from "@/components/gif-picker"
 import { HowToPlayGuide } from "@/components/how-to-play-dialog"
+import { VoiceFilterPicker } from "@/components/voice-filter-picker"
 import {
   SupportConfirmDialog,
   SupportRequestInbox,
@@ -8053,28 +8054,39 @@ function VoiceToggleButton({
         : "Mute mic"
 
   return (
-    <button
-      type="button"
-      onClick={voice.toggle}
-      disabled={voice.connecting}
-      title={title}
-      aria-label={title}
-      className={
-        "inline-flex size-9 shrink-0 items-center justify-center rounded-full border transition-[background-color,border-color,color,opacity,scale] active:scale-[0.96] disabled:opacity-70 " +
-        " " +
-        (micOn
-          ? "border-white/10 bg-white/[0.045] text-white/74 hover:border-white/18 hover:bg-white/[0.075] hover:text-white/88"
-          : voice.error
-            ? "border-red-300/35 bg-red-500/12 text-red-100"
-            : "border-white/10 bg-white/[0.045] text-red-300 hover:border-white/18 hover:bg-white/[0.075] hover:text-red-200")
-      }
-    >
-      {micOn ? (
-        <Mic className="size-4" strokeWidth={2} />
-      ) : (
-        <MicOff className="size-4" strokeWidth={2} />
-      )}
-    </button>
+    <div className="inline-flex shrink-0 items-center gap-1">
+      <button
+        type="button"
+        onClick={voice.toggle}
+        disabled={voice.connecting}
+        title={title}
+        aria-label={title}
+        className={
+          "inline-flex size-11 shrink-0 items-center justify-center rounded-full border transition-[background-color,border-color,color,opacity,scale] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300 active:scale-[0.96] disabled:opacity-70 " +
+          " " +
+          (micOn
+            ? "border-white/10 bg-white/[0.045] text-white/74 hover:border-white/18 hover:bg-white/[0.075] hover:text-white/88"
+            : voice.error
+              ? "border-red-300/35 bg-red-500/12 text-red-100"
+              : "border-white/10 bg-white/[0.045] text-red-300 hover:border-white/18 hover:bg-white/[0.075] hover:text-red-200")
+        }
+      >
+        {micOn ? (
+          <Mic className="size-4" strokeWidth={2} />
+        ) : (
+          <MicOff className="size-4" strokeWidth={2} />
+        )}
+      </button>
+      <VoiceFilterPicker
+        filter={voice.filter}
+        filterError={voice.filterError}
+        setFilter={voice.setFilter}
+        micOn={micOn}
+        connecting={voice.connecting}
+        voiceError={voice.error}
+        onToggleMic={voice.toggle}
+      />
+    </div>
   )
 }
 
@@ -8177,8 +8189,8 @@ function LobbyWaitingRoom({
       />
 
       <div className="relative z-10 mx-auto flex h-full w-full max-w-[1500px] flex-col gap-3 px-3 py-3 sm:px-5 sm:py-4 lg:px-8">
-        <header className="relative z-40 flex shrink-0 items-center justify-between gap-3 border-b border-white/10 pb-2 sm:pb-3">
-          <div>
+        <header className="relative z-40 flex shrink-0 flex-col items-stretch justify-between gap-3 border-b border-white/10 pb-2 sm:flex-row sm:items-center sm:pb-3">
+          <div className="flex items-center justify-between gap-3 sm:block">
             <p className="text-[10px] font-medium tracking-[0.18em] text-white/45 uppercase sm:text-xs">
               UNO No Mercy
             </p>
@@ -8186,7 +8198,7 @@ function LobbyWaitingRoom({
               Room {roomCode}
             </h1>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center justify-between gap-1 sm:justify-start sm:gap-2">
             <VoiceToggleButton voice={voice} />
             <SoundToggle />
             <StatusDot connected={connected} />

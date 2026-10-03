@@ -9,9 +9,11 @@ import type {
 } from "@workspace/game"
 
 import type { GameSocket } from "@/lib/realtime"
+import type { VoiceFilterControls } from "@/lib/use-voice-filters"
 import { candidateMatchesDescription } from "@/lib/voice-negotiation"
 
 import { getRealtimeUrl } from "@/lib/realtime"
+import { useVoiceFilters } from "@/lib/use-voice-filters"
 import {
   PEER_DISCONNECT_GRACE_MS,
   PEER_RECONCILE_INTERVAL_MS,
@@ -33,7 +35,7 @@ type SilentAudioSource = {
   cleanup: () => void
 }
 
-export type RoomVoiceController = {
+export type RoomVoiceController = VoiceFilterControls & {
   enabled: boolean
   connecting: boolean
   muted: boolean
@@ -274,6 +276,16 @@ export function useRoomVoice({
   selfPlayerId: string | null
   players: Array<Player>
 }): RoomVoiceController {
+  const {
+    filter,
+    filterError,
+    setFilter,
+    prepareFilters,
+    attachFilters,
+    stopFilters,
+    muteFilters,
+    getFilteredStream,
+  } = useVoiceFilters()
   const [enabled, setEnabled] = useState(false)
   const [connecting, setConnecting] = useState(false)
   const [muted, setMuted] = useState(true)
@@ -480,12 +492,16 @@ export function useRoomVoice({
     }
   }, [])
 
-  const stopLocalStream = useCallback(() => {
-    localTrackCleanupRef.current?.()
-    localTrackCleanupRef.current = null
-    localStreamRef.current?.getTracks().forEach((track) => track.stop())
-    localStreamRef.current = null
-  }, [])
+  const stopLocalStream = useCallback(
+    (preservePreparedContext = false) => {
+      localTrackCleanupRef.current?.()
+      localTrackCleanupRef.current = null
+      localStreamRef.current?.getTracks().forEach((track) => track.stop())
+      localStreamRef.current = null
+      stopFilters(preservePreparedContext)
+    },
+    [stopFilters]
+  )
 
   const stopSilentAudioSource = useCallback(() => {
     const silentAudioSource = silentAudioSourceRef.current
@@ -555,10 +571,13 @@ export function useRoomVoice({
     const localStream = localStreamRef.current
     const localTrack = localStream?.getAudioTracks()[0]
     if (localStream && localTrack?.readyState === "live") {
+      const processedStream = getFilteredStream()
+      const processedTrack = processedStream?.getAudioTracks()[0]
+      const filtered = processedStream && processedTrack?.readyState === "live"
       return {
         kind: "mic",
-        stream: localStream,
-        track: localTrack,
+        stream: filtered ? processedStream : localStream,
+        track: filtered ? processedTrack : localTrack,
       }
     }
 
@@ -570,7 +589,7 @@ export function useRoomVoice({
       stream: silentAudioSource.stream,
       track: silentAudioSource.track,
     }
-  }, [getSilentAudioSource])
+  }, [getFilteredStream, getSilentAudioSource])
 
   // Only the lower id opens the conversation, so two peers never collide on
   // the very first offer. Recovery offers can come from either side, which is
@@ -1362,6 +1381,7 @@ export function useRoomVoice({
       for (const track of localStreamRef.current.getAudioTracks()) {
         track.enabled = !nextMuted
       }
+      muteFilters(nextMuted)
 
       mutedRef.current = nextMuted
       setMuted(nextMuted)
@@ -1384,7 +1404,7 @@ export function useRoomVoice({
       })
       await syncAllPeers()
     },
-    [publishLocalVoiceState, syncAllPeers]
+    [muteFilters, publishLocalVoiceState, syncAllPeers]
   )
 
   const startSpeakingMeter = useCallback(
@@ -1466,13 +1486,14 @@ export function useRoomVoice({
       await setLocalMuted(false)
       return
     }
-    stopLocalStream()
+    stopLocalStream(true)
     const mediaDevices = (
       navigator as {
         mediaDevices?: { getUserMedia?: MediaDevices["getUserMedia"] }
       }
     ).mediaDevices
     if (!mediaDevices?.getUserMedia) {
+      stopFilters()
       setError("Voice chat is not available in this browser.")
       return
     }
@@ -1501,6 +1522,9 @@ export function useRoomVoice({
         stream.getTracks().forEach((audioTrack) => audioTrack.stop())
         throw new Error("No live microphone")
       }
+      // Keep capture gated while the processor loads; mesh repair may run
+      // during this await and must not send an unfiltered mic in the meantime.
+      track.enabled = false
       localStreamRef.current = stream
       const ended = () => {
         if (localStreamRef.current !== stream) return
@@ -1515,7 +1539,18 @@ export function useRoomVoice({
       track.addEventListener("ended", ended)
       localTrackCleanupRef.current = () =>
         track.removeEventListener("ended", ended)
+      await attachFilters(stream)
+      if (
+        lifecycle !== lifecycleRef.current ||
+        !canSignal() ||
+        localStreamRef.current !== stream ||
+        track.readyState !== "live"
+      ) {
+        if (localStreamRef.current === stream) stopLocalStream()
+        return
+      }
       track.enabled = true
+      muteFilters(false)
       mutedRef.current = false
       speakingRef.current = false
       setMuted(false)
@@ -1548,15 +1583,18 @@ export function useRoomVoice({
       }
     }
   }, [
+    attachFilters,
     canSignal,
     connectToEnabledPeers,
     publishLocalVoiceState,
     setLocalMuted,
     startListening,
     startSpeakingMeter,
+    stopFilters,
     stopLocalStream,
     stopSpeakingMeter,
     syncAllPeers,
+    muteFilters,
   ])
 
   const handleIncomingSignal = useCallback(
@@ -1887,6 +1925,7 @@ export function useRoomVoice({
   }, [remoteStreamsByPlayerId])
 
   const toggle = useCallback(() => {
+    if (mutedRef.current) prepareFilters()
     if (
       canSignal() &&
       enabledRef.current &&
@@ -1898,7 +1937,7 @@ export function useRoomVoice({
     } else {
       void start()
     }
-  }, [canSignal, setLocalMuted, start])
+  }, [canSignal, prepareFilters, setLocalMuted, start])
 
   return useMemo(
     () => ({
@@ -1907,6 +1946,9 @@ export function useRoomVoice({
       muted,
       speaking,
       error,
+      filter,
+      filterError,
+      setFilter,
       voiceStates,
       remoteStreamsByPlayerId,
       connectionIssues,
@@ -1917,6 +1959,9 @@ export function useRoomVoice({
       connecting,
       enabled,
       error,
+      filter,
+      filterError,
+      setFilter,
       muted,
       remoteStreamsByPlayerId,
       speaking,

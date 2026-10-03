@@ -295,6 +295,132 @@ afterEach(async () => {
 })
 
 describe("room voice reliability", () => {
+  it("sends the filtered track, switches without new offers, and mutes capture and output", async () => {
+    const p = await mount()
+    const peer = await remote(p.socket, "b")
+    await signal(p.socket, "a", "b", {
+      type: "answer",
+      sdp: "a=ice-ufrag:good",
+    })
+    const output = new Track()
+    const postMessage = vi.fn()
+    const node = {
+      port: { postMessage, close: vi.fn() },
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      onprocessorerror: null,
+    }
+    vi.stubGlobal(
+      "AudioWorkletNode",
+      class {
+        constructor() {
+          return node
+        }
+      }
+    )
+    vi.stubGlobal(
+      "AudioContext",
+      class {
+        audioWorklet = { addModule: vi.fn().mockResolvedValue(undefined) }
+        resume = vi.fn().mockResolvedValue(undefined)
+        close = vi.fn().mockResolvedValue(undefined)
+        createMediaStreamSource() {
+          return { connect: () => node, disconnect: vi.fn() }
+        }
+        createMediaStreamDestination() {
+          return { stream: new Stream([output]), channelCount: 2 }
+        }
+      }
+    )
+    await act(async () => {
+      p.voice().setFilter("cat")
+      p.voice().toggle()
+      await drain()
+    })
+    expect(peer.transceivers[0].sender.track).toBe(output)
+    expect(peer.transceivers[0].sender.track).not.toBe(mic)
+    expect(output.enabled).toBe(true)
+    const offers = peer.offers
+    await act(async () => {
+      p.voice().setFilter("robot")
+      await drain()
+    })
+    expect(postMessage).toHaveBeenLastCalledWith("robot")
+    expect(peer.offers).toBe(offers)
+    expect(peer.transceivers[0].sender.track).toBe(output)
+    await act(async () => {
+      p.voice().toggle()
+      await drain()
+    })
+    expect(mic.enabled).toBe(false)
+    expect(output.enabled).toBe(false)
+    await act(async () => {
+      p.voice().toggle()
+      await drain()
+    })
+    expect(mic.enabled).toBe(true)
+    expect(output.enabled).toBe(true)
+  })
+
+  it("keeps capture muted during processor loading and disposes it on room exit", async () => {
+    const p = await mount()
+    let resolveModule!: () => void
+    const close = vi.fn().mockResolvedValue(undefined)
+    const output = new Track()
+    const node = {
+      port: { postMessage: vi.fn(), close: vi.fn() },
+      connect: vi.fn(),
+      disconnect: vi.fn(),
+      onprocessorerror: null,
+    }
+    vi.stubGlobal(
+      "AudioWorkletNode",
+      class {
+        constructor() {
+          return node
+        }
+      }
+    )
+    vi.stubGlobal(
+      "AudioContext",
+      class {
+        audioWorklet = {
+          addModule: () =>
+            new Promise<void>((resolve) => {
+              resolveModule = resolve
+            }),
+        }
+        resume = vi.fn().mockResolvedValue(undefined)
+        close = close
+        createMediaStreamSource() {
+          return { connect: () => node, disconnect: vi.fn() }
+        }
+        createMediaStreamDestination() {
+          return { stream: new Stream([output]), channelCount: 2 }
+        }
+      }
+    )
+    await act(async () => {
+      p.voice().toggle()
+      await drain()
+    })
+    expect(mic.enabled).toBe(false)
+    expect(p.voice().muted).toBe(true)
+    expect(p.voice().connecting).toBe(true)
+    await act(async () => {
+      p.root.unmount()
+      await drain()
+    })
+    roots = roots.filter((root) => root !== p.root)
+    expect(mic.readyState).toBe("ended")
+    expect(close).toHaveBeenCalled()
+    await act(async () => {
+      resolveModule()
+      await drain()
+    })
+    expect(output.readyState).toBe("ended")
+  })
+
   it("baseline: joins as listener and swaps in a live mic", async () => {
     const p = await mount()
     const peer = await remote(p.socket, "b")
