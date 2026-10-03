@@ -69,10 +69,33 @@ export function SkipCenter() {
 export function SkipEveryoneCenter() {
   return (
     <GlyphCanvas>
-      <SkipMark cx={34} cy={62} r={18} outerWidth={9} innerWidth={5.5} />
-      <SkipMark cx={66} cy={62} r={18} outerWidth={9} innerWidth={5.5} />
-      <SkipMark cx={50} cy={92} r={18} outerWidth={9} innerWidth={5.5} />
+      <g transform="translate(46 70)">
+        <SkipEveryoneMark />
+      </g>
     </GlyphCanvas>
+  )
+}
+
+/** One clockwise loop arrow, with an open gap below its arrowhead. */
+function SkipEveryoneMark() {
+  return (
+    <path
+      d="M 22.5 26.8 A 35 35 0 1 1 35 0 L 44 0 L 30 18 L 16 0 L 25 0 A 25 25 0 1 0 16.1 19.2 A 5 5 0 0 1 22.5 26.8 Z"
+      fill="white"
+      stroke="black"
+      strokeWidth={4.5}
+      strokeLinejoin="round"
+    />
+  )
+}
+
+export function SkipEveryoneCorner() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-[1em] w-[1em]">
+      <g transform="translate(11 12) scale(0.25)">
+        <SkipEveryoneMark />
+      </g>
+    </svg>
   )
 }
 

@@ -82,7 +82,7 @@ describe("full-table stress", () => {
 
       expect(crownHolders).toHaveLength(MATCHES)
     },
-    // Each seed plays twelve complete matches and checks all 168 cards per step.
+    // Each seed plays twelve complete matches and checks every card per step.
     30_000
   )
 })

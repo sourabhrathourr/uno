@@ -131,7 +131,7 @@ export function WildDrawCorner({ count }: { count: number }) {
  * Reverse-Draw center: cards stack between two straight chunky arrows —
  * top points right, bottom points left. White fill + thick black stroke.
  */
-export function WildReverseDrawCenter({ count }: { count: 4 }) {
+export function WildReverseDrawCenter({ count }: { count: 4 | 10 }) {
   const arrow = (
     <path
       d="M -34 -3 L 16 -3 L 16 -13 L 36 0 L 16 13 L 16 3 L -34 3 Z"
@@ -146,16 +146,20 @@ export function WildReverseDrawCenter({ count }: { count: 4 }) {
       {slotMap[count].map((slot, i) => (
         <ColoredMiniCard
           key={i}
-          {...slot}
+          x={count === 10 ? 50 + (slot.x - 50) * 0.9 : slot.x}
+          y={count === 10 ? 70 + (slot.y - 70) * 0.6 : slot.y}
+          rotate={slot.rotate}
           color={colorCycle[i % colorCycle.length]}
-          w={22}
-          h={30}
+          w={count === 10 ? 19 : 22}
+          h={count === 10 ? 26 : 30}
         />
       ))}
       {/* Top arrow points right */}
-      <g transform="translate(50 38)">{arrow}</g>
+      <g transform={`translate(50 ${count === 10 ? 30 : 38})`}>{arrow}</g>
       {/* Bottom arrow flipped horizontally — points left */}
-      <g transform="translate(50 102) scale(-1 1)">{arrow}</g>
+      <g transform={`translate(50 ${count === 10 ? 110 : 102}) scale(-1 1)`}>
+        {arrow}
+      </g>
     </GlyphCanvas>
   )
 }

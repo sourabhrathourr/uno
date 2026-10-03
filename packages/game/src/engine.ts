@@ -2513,7 +2513,7 @@ function cardLabel(card: Card): string {
     case "wild-draw":
       return `Wild +${card.face.count}`
     case "wild-reverse-draw":
-      return "Wild Reverse +4"
+      return `Wild Reverse +${card.face.count}`
     case "wild-color-roulette":
       return "Wild Color Roulette"
   }

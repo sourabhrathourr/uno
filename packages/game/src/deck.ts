@@ -23,6 +23,7 @@ export function createNoMercyDeck(): Card[] {
   }
 
   addCopies(deck, "wild", { kind: "wild-reverse-draw", count: 4 }, 8)
+  addCopies(deck, "wild", { kind: "wild-reverse-draw", count: 10 }, 2)
   addCopies(deck, "wild", { kind: "wild-draw", count: 6 }, 4)
   addCopies(deck, "wild", { kind: "wild-draw", count: 10 }, 4)
   addCopies(deck, "wild", { kind: "wild-color-roulette" }, 8)
