@@ -185,6 +185,14 @@ function playUntilFinished(manager: RoomManager, code: string): string {
       return winner.playerId
     }
 
+    if (game.lastGift) {
+      expect(
+        manager.resolveLastGift(code, game.lastGift.playerId, {
+          giftId: game.lastGift.id,
+        }).ok
+      ).toBe(true)
+      continue
+    }
     const turnPlayerId = game.turnPlayerId
     if (game.pendingChoice?.type === "roulette-draw") {
       manager.drawRouletteCard(code, game.pendingChoice.playerId)

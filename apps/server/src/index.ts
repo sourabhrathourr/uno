@@ -16,7 +16,7 @@ import type {
 } from "@workspace/game"
 
 import { RoomVoice } from "./room-voice"
-
+import { registerPartyHandlers } from "./party-handlers"
 import { GiphyService } from "./giphy"
 import { ROOM_MEMORY_CLEANUP_INTERVAL_MS, RoomManager } from "./room-manager"
 
@@ -164,6 +164,9 @@ const voice = new RoomVoice(io)
 
 io.on("connection", (socket) => {
   voice.attach(socket)
+  registerPartyHandlers(socket, rooms, (code, room) => {
+    void emitRoomState(code, room)
+  })
   socket.on("room:join", (input, ack) => {
     const result = rooms.joinRoom(input)
     if (!result.ok) {

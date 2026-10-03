@@ -21,6 +21,16 @@ import type {
 } from "./game"
 import { AVATAR_REACTION_EMOJIS } from "./reactions"
 import type { CommandResult } from "./realtime"
+import {
+  canOfferTrade,
+  tradeTargets,
+  giftTargets,
+  cancelTrade,
+  queueLastGift,
+  expirePartyChoices,
+  giveLastGift,
+} from "./party"
+import type { ResolveLastGiftInput } from "./game"
 
 export type CreateGameOptions = {
   /** Turn direction the match opens with. Defaults to clockwise. */
@@ -78,10 +88,7 @@ export function createGame(
     statsByPlayerId: Object.fromEntries(
       playerOrder.map((playerId) => [
         playerId,
-        emptyPlayerMatchStats(
-          playerId,
-          handsByPlayerId[playerId]?.length ?? 0
-        ),
+        emptyPlayerMatchStats(playerId, handsByPlayerId[playerId]?.length ?? 0),
       ])
     ),
     handsSwapped: 0,
@@ -107,6 +114,11 @@ export function createGame(
     unoDeclaredPlayerIds: [],
     drawnThisTurnPlayerId: null,
     stagedPlay: null,
+    tradeOffer: null,
+    tradeUsedPlayerIds: [],
+    tradeOfferedThisTurn: false,
+    lastGifts: [],
+    partyReceiptsByPlayerId: {},
     winnerPlacements: [],
     winnerPlayerId: null,
     supportLinks: [],
@@ -329,6 +341,23 @@ export function projectPublicGame(
     })),
     supportRecap: isGameFinished(game) ? buildSupportRecap(game) : null,
     matchRecap: isGameFinished(game) ? buildMatchRecap(game) : null,
+    tradeOffer: game.tradeOffer
+      ? {
+          id: game.tradeOffer.id,
+          playerId: game.tradeOffer.playerId,
+          targetPlayerId: game.tradeOffer.targetPlayerId,
+          expiresAt: game.tradeOffer.expiresAt,
+        }
+      : null,
+    tradeUsedPlayerIds: [...game.tradeUsedPlayerIds],
+    lastGift: game.lastGifts[0]
+      ? {
+          id: game.lastGifts[0].id,
+          playerId: game.lastGifts[0].playerId,
+          expiresAt: game.lastGifts[0].expiresAt,
+        }
+      : null,
+    lastGiftQueueCount: game.lastGifts.length,
   }
 }
 
@@ -369,7 +398,9 @@ export function projectPlayerGame(
   context: GameContext,
   playerId: string
 ): PlayerGameSnapshot {
-  void context
+  const giftPending = game.lastGifts.length > 0
+  const ownGift =
+    game.lastGifts[0]?.playerId === playerId ? game.lastGifts[0] : null
   const hand =
     isPlayerActive(game, playerId) || game.turnPlayerId === playerId
       ? (game.handsByPlayerId[playerId] ?? [])
@@ -378,19 +409,32 @@ export function projectPlayerGame(
   return {
     playerId,
     hand: hand.map((card) => ({ ...card })),
-    playableCardIds: hand
+    playableCardIds: (giftPending ? [] : hand)
       .filter((card) => canPlaySingleCard(game, playerId, card))
       .map((card) => card.id),
-    catchablePlayerIds: isPlayerActive(game, playerId)
-      ? game.unoVulnerablePlayerIds.filter(
-          (targetPlayerId) =>
-            targetPlayerId !== playerId &&
-            isPlayerActive(game, targetPlayerId) &&
-            (game.handsByPlayerId[targetPlayerId]?.length ?? 0) === 1
-        )
-      : [],
-    canDraw: canDrawOneFromDeck(game, playerId),
+    catchablePlayerIds:
+      !giftPending && isPlayerActive(game, playerId)
+        ? game.unoVulnerablePlayerIds.filter(
+            (targetPlayerId) =>
+              targetPlayerId !== playerId &&
+              isPlayerActive(game, targetPlayerId) &&
+              (game.handsByPlayerId[targetPlayerId]?.length ?? 0) === 1
+          )
+        : [],
+    canOfferTrade: canOfferTrade(game, context, playerId),
+    tradeTargetPlayerIds: tradeTargets(game, context, playerId),
+    offeredTradeCardId:
+      game.tradeOffer?.playerId === playerId ? game.tradeOffer.cardId : null,
+    lastGiftCards: ownGift?.cards.map((card) => ({ ...card })) ?? [],
+    giftTargetPlayerIds: ownGift ? giftTargets(game, context) : [],
+    partyReceipt:
+      game.partyReceiptsByPlayerId[playerId] &&
+      Date.now() - game.partyReceiptsByPlayerId[playerId]!.createdAt < 4_000
+        ? structuredClone(game.partyReceiptsByPlayerId[playerId]!)
+        : null,
+    canDraw: !giftPending && canDrawOneFromDeck(game, playerId),
     canEndTurn:
+      !giftPending &&
       !isGameFinished(game) &&
       game.turnPlayerId === playerId &&
       game.drawnThisTurnPlayerId === playerId &&
@@ -398,6 +442,7 @@ export function projectPlayerGame(
       !game.pendingChoice &&
       isPlayerActive(game, playerId),
     canTakeDrawPenalty:
+      !giftPending &&
       !isGameFinished(game) &&
       game.turnPlayerId === playerId &&
       game.drawStack?.targetPlayerId === playerId &&
@@ -412,6 +457,8 @@ export function projectSpectatorView(
   targetPlayerId: string
 ): PlayerGameSnapshot | null {
   void context
+  if (game.lastGifts.some((gift) => gift.playerId === spectatorPlayerId))
+    return null
   if (isPlayerActive(game, spectatorPlayerId)) return null
   if (!game.playerOrder.includes(targetPlayerId)) return null
   if (!isPlayerActive(game, targetPlayerId)) return null
@@ -425,6 +472,12 @@ export function projectSpectatorView(
     canDraw: false,
     canEndTurn: false,
     canTakeDrawPenalty: false,
+    canOfferTrade: false,
+    tradeTargetPlayerIds: [],
+    offeredTradeCardId: null,
+    lastGiftCards: [],
+    giftTargetPlayerIds: [],
+    partyReceipt: null,
   }
 }
 
@@ -433,6 +486,8 @@ export function projectSupportView(
   context: GameContext,
   supporterPlayerId: string
 ): PlayerGameSnapshot | null {
+  if (game.lastGifts.some((gift) => gift.playerId === supporterPlayerId))
+    return null
   const link = game.supportLinks.find(
     (candidate) => candidate.supporterPlayerId === supporterPlayerId
   )
@@ -441,6 +496,12 @@ export function projectSupportView(
   const view = projectPlayerGame(game, context, link.supportedPlayerId)
   return {
     ...view,
+    canOfferTrade: false,
+    tradeTargetPlayerIds: [],
+    offeredTradeCardId: null,
+    lastGiftCards: [],
+    giftTargetPlayerIds: [],
+    partyReceipt: null,
     catchablePlayerIds: [],
     canDraw: false,
     canEndTurn: false,
@@ -454,6 +515,9 @@ export function supportPlayer(
   supporterPlayerId: string,
   supportedPlayerId: string
 ): CommandResult<GameState> {
+  if (game.lastGifts.some((gift) => gift.playerId === supporterPlayerId)) {
+    return fail("last-gift-pending", "Choose or skip your last gift first.")
+  }
   if (isGameFinished(game))
     return fail("game-finished", "This match is finished.")
   if (!game.playerOrder.includes(supporterPlayerId)) {
@@ -812,6 +876,9 @@ export function stageCards(
   playerId: string,
   input: StageCardsInput
 ): CommandResult<GameState> {
+  if (game.lastGifts.length) {
+    return fail("last-gift-pending", "Wait for the last gift before playing.")
+  }
   void context
   if (isGameFinished(game)) {
     return fail("game-finished", "This game is already finished.")
@@ -835,6 +902,7 @@ export function stageCards(
   const validation = validateStage(game, playerId, cardsResult.data)
   if (!validation.ok) return validation
 
+  cancelTrade(game, context)
   game.stagedPlay = {
     playerId,
     kind: "play",
@@ -861,7 +929,8 @@ export function playCards(
   const validation = validatePlay(game, context, playerId, cards, input)
   if (!validation.ok) return validation
 
-  beginTurnAction(game, playerId)
+  beginTurnAction(game, playerId, context)
+  game.tradeOfferedThisTurn = false
   game.drawnThisTurnPlayerId = null
   game.stagedPlay = null
 
@@ -948,6 +1017,9 @@ export function drawOne(
   context: GameContext,
   playerId: string
 ): CommandResult<GameState> {
+  if (game.lastGifts.length) {
+    return fail("last-gift-pending", "Wait for the last gift before playing.")
+  }
   if (isGameFinished(game)) {
     return fail("game-finished", "This game is already finished.")
   }
@@ -975,7 +1047,7 @@ export function drawOne(
     )
   }
 
-  beginTurnAction(game, playerId)
+  beginTurnAction(game, playerId, context)
   game.stagedPlay = null
   const drawn = drawCards(game, 1)
   addCardsToHand(game, playerId, drawn)
@@ -1001,6 +1073,9 @@ export function endTurn(
   context: GameContext,
   playerId: string
 ): CommandResult<GameState> {
+  if (game.lastGifts.length) {
+    return fail("last-gift-pending", "Wait for the last gift before playing.")
+  }
   if (isGameFinished(game)) {
     return fail("game-finished", "This game is already finished.")
   }
@@ -1036,12 +1111,24 @@ export function takeDrawPenalty(
   context: GameContext,
   playerId: string
 ): CommandResult<GameState> {
+  if (game.lastGifts.length) {
+    return fail("last-gift-pending", "Wait for the last gift before playing.")
+  }
   if (!game.drawStack || game.drawStack.targetPlayerId !== playerId) {
     return fail("no-draw-penalty", "There is no draw penalty waiting for you.")
   }
 
-  beginTurnAction(game, playerId)
-  const amount = game.drawStack.amount
+  beginTurnAction(game, playerId, context)
+  const penalty = game.drawStack.amount
+  const amount = Math.min(
+    penalty,
+    Math.max(
+      0,
+      context.houseRules.mercyHandLimit +
+        1 -
+        (game.handsByPlayerId[playerId]?.length ?? 0)
+    )
+  )
   const penaltyStats = statsFor(game, playerId)
   penaltyStats.penaltyCardsTaken += amount
   penaltyStats.biggestPenaltyTaken = Math.max(
@@ -1057,7 +1144,10 @@ export function takeDrawPenalty(
     playerId,
     cardCount: amount,
     drawKind: "penalty",
-    message: `${playerName(context, playerId)} took the +${amount} penalty.`,
+    message:
+      amount === penalty
+        ? `${playerName(context, playerId)} took the +${penalty} penalty.`
+        : `${playerName(context, playerId)} drew ${amount} cards from the +${penalty} penalty before crossing the mercy limit.`,
   })
 
   checkMercyEliminations(game, context)
@@ -1070,6 +1160,9 @@ export function drawRouletteCard(
   context: GameContext,
   playerId: string
 ): CommandResult<GameState> {
+  if (game.lastGifts.length) {
+    return fail("last-gift-pending", "Wait for the last gift before playing.")
+  }
   if (game.pendingChoice?.type !== "roulette-draw") {
     return fail("no-roulette-draw", "There is no roulette pickup waiting.")
   }
@@ -1078,7 +1171,7 @@ export function drawRouletteCard(
     return fail("not-your-pickup", "Another player must pick up these cards.")
   }
 
-  beginTurnAction(game, playerId)
+  beginTurnAction(game, playerId, context)
 
   const pendingChoice = game.pendingChoice
   const next = drawCards(game, 1)[0]
@@ -1099,15 +1192,12 @@ export function drawRouletteCard(
     message: `${playerName(context, playerId)} revealed ${cardLabel(next)}.`,
   })
 
-  if (rouletteDrawCrossesMercyLimit(game, context, playerId, pendingChoice)) {
-    addCardsToHand(game, playerId, pendingChoice.drawnCards)
-    game.pendingChoice = null
-    game.drawnThisTurnPlayerId = null
-    checkMercyEliminations(game, context)
+  if (
+    next.color !== pendingChoice.color &&
+    !rouletteDrawCrossesMercyLimit(game, context, playerId, pendingChoice)
+  ) {
     return ok(game)
   }
-
-  if (next.color !== pendingChoice.color) return ok(game)
 
   return completeRouletteDraw(game, context, playerId, pendingChoice)
 }
@@ -1132,6 +1222,8 @@ function completeRouletteDraw(
   pendingChoice: NonNullable<GameState["pendingChoice"]>
 ): CommandResult<GameState> {
   const drawnCards = pendingChoice.drawnCards
+  const foundColor =
+    drawnCards[drawnCards.length - 1]?.color === pendingChoice.color
 
   addCardsToHand(game, playerId, drawnCards)
   game.pendingChoice = null
@@ -1146,12 +1238,15 @@ function completeRouletteDraw(
     message:
       drawnCards.length === 0
         ? `${playerName(context, playerId)} found no roulette cards to draw.`
-        : `${playerName(context, playerId)} found ${pendingChoice.color} after drawing ${drawnCards.length} card${drawnCards.length === 1 ? "" : "s"}.`,
+        : foundColor
+          ? `${playerName(context, playerId)} found ${pendingChoice.color} after drawing ${drawnCards.length} card${drawnCards.length === 1 ? "" : "s"}.`
+          : `${playerName(context, playerId)} stopped roulette after drawing ${drawnCards.length} card${drawnCards.length === 1 ? "" : "s"}.`,
   })
 
   checkMercyEliminations(game, context)
 
   if (!isGameFinished(game) && isPlayerActive(game, playerId)) {
+    game.tradeOfferedThisTurn = false
     game.turnPlayerId = nextPlayerId(game, playerId, 1)
     if (drawnCards.length > 0) {
       game.stagedPlay = {
@@ -1171,6 +1266,9 @@ export function catchUno(
   playerId: string,
   input: CatchUnoInput
 ): CommandResult<GameState> {
+  if (game.lastGifts.length) {
+    return fail("last-gift-pending", "Wait for the last gift before playing.")
+  }
   if (!isPlayerActive(game, playerId)) {
     return fail("player-inactive", "Inactive players cannot call UNO.")
   }
@@ -1184,7 +1282,17 @@ export function catchUno(
 
   statsFor(game, playerId).unoCatches += 1
   statsFor(game, input.targetPlayerId).timesCaught += 1
-  const drawn = drawCards(game, 2)
+  cancelTrade(game, context)
+  const amount = Math.min(
+    2,
+    Math.max(
+      0,
+      context.houseRules.mercyHandLimit +
+        1 -
+        (game.handsByPlayerId[input.targetPlayerId]?.length ?? 0)
+    )
+  )
+  const drawn = drawCards(game, amount)
   addCardsToHand(game, input.targetPlayerId, drawn)
   game.unoVulnerablePlayerIds = game.unoVulnerablePlayerIds.filter(
     (targetPlayerId) => targetPlayerId !== input.targetPlayerId
@@ -1197,7 +1305,7 @@ export function catchUno(
     message: `${playerName(context, playerId)} caught ${playerName(
       context,
       input.targetPlayerId
-    )}. +2 cards.`,
+    )}. +${drawn.length} card${drawn.length === 1 ? "" : "s"}.`,
   })
 
   checkMercyEliminations(game, context)
@@ -1444,6 +1552,9 @@ function validatePlay(
   cards: Card[],
   input: PlayCardsInput
 ): CommandResult<GameState> {
+  if (game.lastGifts.length) {
+    return fail("last-gift-pending", "Wait for the last gift before playing.")
+  }
   if (isGameFinished(game)) {
     return fail("game-finished", "This game is already finished.")
   }
@@ -1981,10 +2092,13 @@ function canReshuffle(game: GameState) {
 }
 
 function checkMercyEliminations(game: GameState, context: GameContext) {
+  const frozenHands: Array<{ playerId: string; cards: Card[] }> = []
   for (const playerId of activePlayerIds(game)) {
     const hand = game.handsByPlayerId[playerId] ?? []
     if (hand.length <= context.houseRules.mercyHandLimit) continue
 
+    frozenHands.push({ playerId, cards: [...hand] })
+    game.handsByPlayerId[playerId] = []
     game.eliminatedPlayerIds.push(playerId)
     removePlayerFromActivePlay(game, playerId)
     pushEvent(game, {
@@ -1994,12 +2108,14 @@ function checkMercyEliminations(game: GameState, context: GameContext) {
     })
   }
 
+  for (const { playerId, cards } of frozenHands) {
+    queueLastGift(game, context, playerId, cards)
+  }
+  expirePartyChoices(game, context)
+  if (game.lastGifts.length) game.stagedPlay = null
   finishGameIfComplete(game, context)
 
-  if (isGameFinished(game)) {
-    return
-  }
-
+  if (isGameFinished(game)) return
   normalizeInactiveTurnState(game)
 }
 
@@ -2031,6 +2147,7 @@ function normalizeInactiveTurnState(
   }
 
   if (game.turnPlayerId && !isPlayerActive(game, game.turnPlayerId)) {
+    game.tradeOfferedThisTurn = false
     game.turnPlayerId = nextPlayerId(
       game,
       fallbackFromPlayerId ?? game.turnPlayerId,
@@ -2080,6 +2197,9 @@ function recordWinner(game: GameState, context: GameContext, playerId: string) {
 function finishGameIfComplete(game: GameState, context: GameContext) {
   const remaining = activePlayerIds(game)
   if (remaining.length > 1) return
+  cancelTrade(game, context)
+  for (const gift of game.lastGifts) game.knockedOutCards.push(...gift.cards)
+  game.lastGifts = []
   game.finishedAt ??= new Date().toISOString()
 
   if (remaining.length === 1) {
@@ -2098,6 +2218,7 @@ function finishGameIfComplete(game: GameState, context: GameContext) {
 
 function advanceTurn(game: GameState, fromPlayerId: string, steps: number) {
   if (isGameFinished(game)) return
+  game.tradeOfferedThisTurn = false
   game.turnPlayerId = nextPlayerId(game, fromPlayerId, steps)
   game.drawnThisTurnPlayerId = null
   game.stagedPlay = null
@@ -2109,6 +2230,7 @@ function advanceTurnAfterSkips(
   skipCount: number
 ) {
   if (isGameFinished(game)) return
+  game.tradeOfferedThisTurn = false
   game.turnPlayerId = nextPlayerIdSkippingOpponents(
     game,
     fromPlayerId,
@@ -2296,7 +2418,12 @@ function swapHands(game: GameState, a: string, b: string) {
   recordPeakHandSize(game, b)
 }
 
-function beginTurnAction(game: GameState, playerId?: string) {
+function beginTurnAction(
+  game: GameState,
+  playerId: string,
+  context: GameContext
+) {
+  cancelTrade(game, context)
   game.unoVulnerablePlayerIds = []
   if (playerId) clearUnoDeclaration(game, playerId)
   game.stagedPlay = null
@@ -2424,4 +2551,29 @@ function ok<T>(data: T): CommandResult<T> {
 
 function fail<T>(code: string, message: string): CommandResult<T> {
   return { ok: false, error: { code, message } }
+}
+
+export function resolveLastGift(
+  game: GameState,
+  context: GameContext,
+  playerId: string,
+  input: ResolveLastGiftInput
+): CommandResult<GameState> {
+  const result = giveLastGift(game, context, playerId, input)
+  if (!result.ok) return result
+  finishGameIfComplete(game, context)
+  normalizeInactiveTurnState(game)
+  return result
+}
+
+export function settlePartyChoices(
+  game: GameState,
+  context: GameContext
+): boolean {
+  const changed = expirePartyChoices(game, context)
+  if (changed) {
+    finishGameIfComplete(game, context)
+    normalizeInactiveTurnState(game)
+  }
+  return changed
 }

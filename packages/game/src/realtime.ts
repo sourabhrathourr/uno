@@ -1,4 +1,8 @@
 import type {
+  OfferBlindTradeInput,
+  RespondBlindTradeInput,
+  CancelBlindTradeInput,
+  ResolveLastGiftInput,
   CatchUnoInput,
   Direction,
   PlayerGameSnapshot,
@@ -182,6 +186,22 @@ export type ClientToServerEvents = {
   "voice:requestStates": () => void
   "voice:setState": (input: VoiceStateInput) => void
   "voice:signal": (input: VoiceSignalInput) => void
+  "game:offerBlindTrade": (
+    input: OfferBlindTradeInput,
+    ack: (result: CommandResult<RoomSnapshot>) => void
+  ) => void
+  "game:respondBlindTrade": (
+    input: RespondBlindTradeInput,
+    ack: (result: CommandResult<RoomSnapshot>) => void
+  ) => void
+  "game:cancelBlindTrade": (
+    input: CancelBlindTradeInput,
+    ack: (result: CommandResult<RoomSnapshot>) => void
+  ) => void
+  "game:resolveLastGift": (
+    input: ResolveLastGiftInput,
+    ack: (result: CommandResult<RoomSnapshot>) => void
+  ) => void
   "game:playCards": (
     input: PlayCardsInput,
     ack: (result: CommandResult<RoomSnapshot>) => void
