@@ -615,6 +615,46 @@ describe("room voice reliability", () => {
     expect(p.voice().connectionIssues.b).toContain("Reconnecting")
   })
 
+  it.each([true, false])(
+    "clears a recovered connected peer's warning when speech stops (muted: %s)",
+    async (muted) => {
+      const p = await mount()
+      const peer = await remote(p.socket, "b")
+      await signal(p.socket, "a", "b", {
+        type: "answer",
+        sdp: "a=ice-ufrag:good",
+      })
+      await act(async () => {
+        peer.state("connected")
+        await drain()
+      })
+      await receive(p.socket, "voice:state", {
+        playerId: "b",
+        enabled: true,
+        muted: false,
+        speaking: true,
+      })
+      // A media stall restarts ICE without changing the transport's connected
+      // state, so there is no new connectionstatechange event to clear the issue.
+      await time(25_000)
+      expect(peer.connectionState).toBe("connected")
+      expect(p.voice().connectionIssues.b).toContain("Reconnecting")
+      await signal(p.socket, "a", "b", {
+        type: "answer",
+        sdp: "a=ice-ufrag:recovered",
+      })
+      await receive(p.socket, "voice:state", {
+        playerId: "b",
+        enabled: true,
+        muted,
+        speaking: false,
+      })
+      await time(5_000)
+      expect(p.voice().connectionIssues.b).toBeUndefined()
+      expect(Peer.all).toHaveLength(1)
+    }
+  )
+
   it("preserves build-time TURN when runtime only supplies STUN", async () => {
     vi.stubEnv(
       "VITE_RTC_ICE_SERVERS",

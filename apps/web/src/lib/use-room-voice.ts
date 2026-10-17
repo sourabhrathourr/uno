@@ -1136,6 +1136,9 @@ export function useRoomVoice({
         typeof peer.getStats !== "function"
       ) {
         meta.unhealthySince = undefined
+        // ICE recovery can finish without another connectionstatechange when
+        // the transport stays connected. Silence must also clear its old warning.
+        setPeerIssue(playerId, null)
         return
       }
       meta.statsPending = true
