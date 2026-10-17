@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react"
-import { RefreshCw } from "lucide-react"
 import { logRoomVoiceDebug } from "@/lib/use-room-voice"
 import { useVoiceConnectionNotices } from "@/lib/use-voice-connection-notices"
 
@@ -13,11 +12,7 @@ export function VoiceAudioOutputs({
   playerNames: Record<string, string>
 }) {
   const [blocked, setBlocked] = useState<Record<string, boolean>>({})
-  const { visibleIssues, showNotices } =
-    useVoiceConnectionNotices(connectionIssues)
-  const hasHiddenIssues = Object.keys(connectionIssues).some(
-    (playerId) => !visibleIssues[playerId]
-  )
+  const { visibleIssues } = useVoiceConnectionNotices(connectionIssues)
   const audioElements = useRef(new Set<HTMLAudioElement>())
   const updateBlocked = useCallback((playerId: string, value: boolean) => {
     setBlocked((current) => {
@@ -46,24 +41,13 @@ export function VoiceAudioOutputs({
           )
       )}
       {(blockedPlayers.length > 0 ||
-        Object.keys(connectionIssues).length > 0) && (
+        Object.keys(visibleIssues).length > 0) && (
         <div className="fixed top-16 right-3 z-[80] max-w-[calc(100vw-1.5rem)] rounded-xl border border-white/15 bg-neutral-950/95 px-3 py-2 text-sm text-white shadow-lg">
           {Object.entries(visibleIssues).map(([playerId, message]) => (
             <p key={playerId} role="status">
               {message}
             </p>
           ))}
-          {hasHiddenIssues && (
-            <button
-              type="button"
-              aria-label="Show voice connection status"
-              title={Object.values(connectionIssues).join("\n")}
-              className="inline-flex min-h-10 min-w-10 items-center justify-center rounded-lg text-amber-300 hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white"
-              onClick={showNotices}
-            >
-              <RefreshCw size={16} aria-hidden="true" />
-            </button>
-          )}
           {blockedPlayers.length > 0 && (
             <button
               type="button"

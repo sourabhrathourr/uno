@@ -6,7 +6,6 @@ const NOTICE_DURATION_MS = 6_000
 export function useVoiceConnectionNotices(issues: Record<string, string>) {
   const deadlines = useRef(new Map<string, number>())
   const [visiblePlayerIds, setVisiblePlayerIds] = useState<Array<string>>([])
-  const [revision, setRevision] = useState(0)
 
   useEffect(() => {
     const playerIds = Object.keys(issues)
@@ -32,14 +31,7 @@ export function useVoiceConnectionNotices(issues: Record<string, string>) {
     return () => {
       for (const timer of timers) window.clearTimeout(timer)
     }
-  }, [issues, revision])
-
-  function showNotices() {
-    const until = Date.now() + NOTICE_DURATION_MS
-    for (const playerId of Object.keys(issues))
-      deadlines.current.set(playerId, until)
-    setRevision((current) => current + 1)
-  }
+  }, [issues])
 
   return {
     visibleIssues: Object.fromEntries(
@@ -47,6 +39,5 @@ export function useVoiceConnectionNotices(issues: Record<string, string>) {
         .filter((playerId) => issues[playerId])
         .map((playerId) => [playerId, issues[playerId]!])
     ),
-    showNotices,
   }
 }
