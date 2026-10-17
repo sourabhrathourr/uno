@@ -80,7 +80,7 @@ it("keeps the same audio element across status updates", async () => {
   )
 })
 
-it("dismisses reconnect text after six seconds while keeping status accessible", async () => {
+it("removes the whole reconnect notice after six seconds without a floating button", async () => {
   vi.useFakeTimers()
   const issues = { b: "Reconnecting voice with Priya…" }
   await render(issues)
@@ -91,21 +91,8 @@ it("dismisses reconnect text after six seconds while keeping status accessible",
     await vi.advanceTimersByTimeAsync(6_000)
   })
   expect(container.querySelector('[role="status"]')).toBeNull()
-  const status = container.querySelector<HTMLButtonElement>(
-    '[aria-label="Show voice connection status"]'
-  )!
-  expect(status.title).toContain("Reconnecting voice with Priya")
-  await act(async () => {
-    status.click()
-  })
-  expect(container.querySelector('[role="status"]')?.textContent).toContain(
-    "Priya"
-  )
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(6_000)
-  })
-  expect(container.querySelector('[role="status"]')).toBeNull()
-  await render()
+  expect(container.querySelector("button")).toBeNull()
+  expect(container.querySelector("div.fixed")).toBeNull()
   expect(
     container.querySelector('[aria-label="Show voice connection status"]')
   ).toBeNull()
