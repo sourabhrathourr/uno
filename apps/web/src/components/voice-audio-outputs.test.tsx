@@ -44,6 +44,7 @@ afterEach(async () => {
     await drain()
   })
   document.body.innerHTML = ""
+  vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
@@ -77,6 +78,113 @@ it("keeps the same audio element across status updates", async () => {
   expect(container.querySelector('[role="status"]')?.textContent).toContain(
     "Priya"
   )
+})
+
+it("dismisses reconnect text after six seconds while keeping status accessible", async () => {
+  vi.useFakeTimers()
+  const issues = { b: "Reconnecting voice with Priya…" }
+  await render(issues)
+  expect(container.querySelector('[role="status"]')?.textContent).toContain(
+    "Priya"
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(6_000)
+  })
+  expect(container.querySelector('[role="status"]')).toBeNull()
+  const status = container.querySelector<HTMLButtonElement>(
+    '[aria-label="Show voice connection status"]'
+  )!
+  expect(status.title).toContain("Reconnecting voice with Priya")
+  await act(async () => {
+    status.click()
+  })
+  expect(container.querySelector('[role="status"]')?.textContent).toContain(
+    "Priya"
+  )
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(6_000)
+  })
+  expect(container.querySelector('[role="status"]')).toBeNull()
+  await render()
+  expect(
+    container.querySelector('[aria-label="Show voice connection status"]')
+  ).toBeNull()
+})
+
+it("does not extend or reopen a notice on repeated updates in the same episode", async () => {
+  vi.useFakeTimers()
+  await render({ b: "Reconnecting voice with Priya…" })
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(4_000)
+  })
+  await render({ b: "Reconnecting voice with Priya…" })
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2_000)
+  })
+  expect(container.querySelector('[role="status"]')).toBeNull()
+  await render({ b: "Reconnecting voice with Priya…" })
+  expect(container.querySelector('[role="status"]')).toBeNull()
+  await render()
+  await render({ b: "Reconnecting voice with Priya…" })
+  expect(container.querySelector('[role="status"]')?.textContent).toContain(
+    "Priya"
+  )
+})
+
+it("gives each peer its own deadline without reviving an older notice", async () => {
+  vi.useFakeTimers()
+  await render({ b: "Reconnecting voice with Priya…" })
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(4_000)
+  })
+  await render({
+    b: "Reconnecting voice with Priya…",
+    c: "Reconnecting voice with Aman…",
+  })
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(2_000)
+  })
+  const messages = Array.from(container.querySelectorAll('[role="status"]'))
+  expect(messages.map((message) => message.textContent)).toEqual([
+    "Reconnecting voice with Aman…",
+  ])
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(4_000)
+  })
+  expect(container.querySelector('[role="status"]')).toBeNull()
+})
+
+it("removes recovered peers immediately and cancels timers on unmount", async () => {
+  vi.useFakeTimers()
+  await render({ b: "Reconnecting voice with Priya…" })
+  expect(vi.getTimerCount()).toBe(1)
+  await render()
+  expect(container.querySelector('[role="status"]')).toBeNull()
+  expect(vi.getTimerCount()).toBe(0)
+  await render({ b: "Reconnecting voice with Priya…" })
+  expect(vi.getTimerCount()).toBe(1)
+  await act(async () => {
+    root.unmount()
+  })
+  root = createRoot(container)
+  expect(vi.getTimerCount()).toBe(0)
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(10_000)
+  })
+  expect(container.textContent).toBe("")
+})
+
+it("keeps the playback retry control available after reconnect text expires", async () => {
+  vi.useFakeTimers()
+  play.mockRejectedValue(new DOMException("blocked", "NotAllowedError"))
+  await render({ b: "Reconnecting voice with Priya…" })
+  const audio = container.querySelector("audio")
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(6_000)
+  })
+  expect(container.querySelector('[role="status"]')).toBeNull()
+  expect(container.textContent).toContain("Tap to hear Priya")
+  expect(container.querySelector("audio")).toBe(audio)
 })
 
 it("retries playback when the received track resumes", async () => {
