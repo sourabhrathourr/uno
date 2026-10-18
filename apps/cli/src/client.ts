@@ -51,6 +51,7 @@ export class UnoClient extends EventEmitter {
   private readonly proxyAgent?: HttpsProxyAgent<string>
   private target: Target | null = null
   private room: RoomSnapshot | null = null
+  private roomClock: { serverMs: number; receivedAt: number } | null = null
   private player: Player | null = null
   private self: PlayerGameSnapshot | null = null
   private joinedSocketId: string | null = null
@@ -172,6 +173,45 @@ export class UnoClient extends EventEmitter {
     )
   }
 
+  private voteKickState(voteKickId = this.room?.voteKick.activeVoteKickId) {
+    const poll = this.room?.chatMessages.find(
+      (message) => message.voteKick?.id === voteKickId
+    )?.voteKick
+    if (!poll) return null
+    const serverNow = this.roomClock
+      ? this.roomClock.serverMs + performance.now() - this.roomClock.receivedAt
+      : Date.now()
+    const remainingMs = Math.max(0, Date.parse(poll.closesAt) - serverNow)
+    const open =
+      poll.id === this.room?.voteKick.activeVoteKickId &&
+      poll.status === "open" &&
+      remainingMs > 0
+    const eligible = poll.eligibleVoterIds.includes(this.player?.id ?? "")
+    const myChoice =
+      poll.votes.find((vote) => vote.playerId === this.player?.id)?.choice ??
+      null
+    const actionable =
+      open &&
+      eligible &&
+      this.isSynchronized() &&
+      !this.uncertainAction &&
+      !this.closed
+    return structuredClone({
+      poll,
+      remainingMs,
+      open,
+      eligible,
+      myChoice,
+      actionable,
+      yesCommand: actionable
+        ? { action: "vote-cast", voteKickId: poll.id, choice: "yes" }
+        : null,
+      noCommand: actionable
+        ? { action: "vote-cast", voteKickId: poll.id, choice: "no" }
+        : null,
+    })
+  }
+
   status() {
     const gift = this.room?.game?.lastGift
     const trade = this.room?.game?.tradeOffer
@@ -201,6 +241,7 @@ export class UnoClient extends EventEmitter {
       needsResync: this.uncertainAction !== null,
       uncertainAction: this.uncertainAction,
       pending: {
+        voteKick: this.voteKickState(),
         lastGift: gift
           ? {
               ...gift,
@@ -250,9 +291,21 @@ export class UnoClient extends EventEmitter {
 
   private applyRoom(room: RoomSnapshot) {
     if (this.room && room.version < this.room.version) return
+    // Use server time plus monotonic elapsed time, not the device wall clock.
+    // Repeated snapshots of the same version must not extend a poll's lease.
+    if (!this.room || room.version > this.room.version) {
+      this.anchorRoomClock(room)
+    }
     this.room = structuredClone(room)
     this.observeChat()
     this.changed("state")
+  }
+
+  private anchorRoomClock(room: RoomSnapshot) {
+    const serverMs = Date.parse(room.updatedAt)
+    this.roomClock = Number.isFinite(serverMs)
+      ? { serverMs, receivedAt: performance.now() }
+      : null
   }
 
   private applyChatTyping(players: ChatTypingPlayer[]) {
@@ -351,6 +404,7 @@ export class UnoClient extends EventEmitter {
       if (this.closed || !this.socket.connected || this.socket.id !== socketId)
         return
       this.player = structuredClone(result.player)
+      this.anchorRoomClock(result.room)
       this.room = structuredClone(result.room)
       this.self =
         result.playerGame?.playerId === this.player.id
@@ -438,6 +492,8 @@ export class UnoClient extends EventEmitter {
       return Promise.resolve({ samples: structuredClone(this.metrics) })
     if (command.action === "chat-read")
       return Promise.resolve(this.readChat(command))
+    if (command.action === "vote-read")
+      return Promise.resolve(this.voteKickState(command.voteKickId))
     if (command.action === "chat-watch") {
       this.chatWatching = command.enabled
       return Promise.resolve(this.status())
@@ -589,6 +645,23 @@ export class UnoClient extends EventEmitter {
         false
       )
       return { confirmed: true }
+    }
+    if (command.action === "vote-cast") {
+      const vote = this.voteKickState(command.voteKickId)
+      if (!vote)
+        throw new CliError(
+          "vote-kick-not-found",
+          "That vote-kick is not in this room's retained public history."
+        )
+      if (!vote.open)
+        throw new CliError("vote-kick-closed", "That vote-kick has closed.")
+      if (!vote.eligible)
+        throw new CliError(
+          "vote-kick-not-eligible",
+          "You cannot vote in this vote-kick."
+        )
+      if (vote.myChoice === command.choice)
+        return { confirmed: true, alreadyVoted: true, state: this.status() }
     }
     if (
       command.action === "resolve-roulette" ||
@@ -911,6 +984,13 @@ export class UnoClient extends EventEmitter {
   private sendCommand(command: CliCommand, ack: Ack<RoomSnapshot>) {
     const socket = this.socket.timeout(this.timeoutMs).volatile
     switch (command.action) {
+      case "vote-cast":
+        socket.emit(
+          "room:castVoteKick",
+          { voteKickId: command.voteKickId, choice: command.choice },
+          ack
+        )
+        break
       case "chat-send":
         socket.emit(
           "room:sendChatMessage",

@@ -62,7 +62,11 @@ import type {
   VoteKickChoice,
   VoteKickPoll,
 } from "@workspace/game"
-import type { PointerEvent as ReactPointerEvent, ReactNode } from "react"
+import type {
+  CSSProperties,
+  PointerEvent as ReactPointerEvent,
+  ReactNode,
+} from "react"
 import type { Options as ConfettiOptions } from "canvas-confetti"
 
 import type { GameSocket } from "@/lib/realtime"
@@ -1170,9 +1174,16 @@ function GameTable({
   >(null)
   const [nextMatchPanelOpen, setNextMatchPanelOpen] = useState(false)
   const [shortcutGuideOpen, setShortcutGuideOpen] = useState(false)
+  const [keyboardSelectionHint, setKeyboardSelectionHint] = useState(false)
   const [chatCollapsed, setChatCollapsed] = useState(readStoredChatCollapsed)
   const [directionPulseKey, setDirectionPulseKey] = useState(0)
   const [directionPulseOn, setDirectionPulseOn] = useState(false)
+
+  useEffect(() => {
+    if (!keyboardSelectionHint) return
+    const timer = window.setTimeout(() => setKeyboardSelectionHint(false), 2500)
+    return () => window.clearTimeout(timer)
+  }, [keyboardSelectionHint])
 
   function showDirectionPulse() {
     setDirectionPulseKey((current) => current + 1)
@@ -1662,15 +1673,18 @@ function GameTable({
           ? []
           : current.filter((cardId) => cardId !== card.id)
       )
-      return
+      setKeyboardSelectionHint(false)
+      return true
     }
 
     if (canStageCard(card)) {
       haptic.trigger("selection")
       setSelectedCardIds([...current, card.id])
-      return
+      setKeyboardSelectionHint(false)
+      return true
     }
     haptic.trigger("error")
+    return false
   }
 
   function stageCard(card: Card) {
@@ -1775,6 +1789,7 @@ function GameTable({
           Boolean(socket?.connected) &&
           room.status === "playing",
         navigate: (direction) => {
+          setKeyboardSelectionHint(false)
           const buttons = [
             ...document.querySelectorAll<HTMLButtonElement>("[data-hand-card]"),
           ].filter((button) => button.getClientRects().length > 0)
@@ -1806,7 +1821,7 @@ function GameTable({
               ?.dataset.handCard
           const card = playerGame?.hand.find((candidate) => candidate.id === id)
           if (!card) return
-          toggleSelected(card)
+          if (!toggleSelected(card)) setKeyboardSelectionHint(true)
           requestAnimationFrame(() =>
             [
               ...document.querySelectorAll<HTMLButtonElement>(
@@ -2742,6 +2757,19 @@ function GameTable({
                     </button>
                   </div>
                 )}
+
+                <p
+                  role="status"
+                  aria-live="polite"
+                  aria-atomic="true"
+                  className={
+                    keyboardSelectionHint
+                      ? "mt-1 text-right text-[11px] text-amber-100/85"
+                      : "sr-only"
+                  }
+                >
+                  {keyboardSelectionHint && "Can’t add this card to this play"}
+                </p>
 
                 {isSelfEliminated &&
                   game?.stagedPlay?.playerId === spectatingPlayerId && (
@@ -7100,12 +7128,14 @@ function TableStagedPlay({
               return (
                 <div
                   key={card.id}
-                  className="absolute bottom-0 left-1/2 sm:bottom-1.5"
-                  style={{
-                    transform: `translateX(${offset * gap - cardAnchor}px) rotate(${offset * 3.5}deg) scale(${cardScale})`,
-                    transformOrigin: "bottom center",
-                    zIndex: 10 + index,
-                  }}
+                  className="absolute bottom-0 left-1/2 z-[var(--card-layer)] has-[:focus-visible]:z-[100] sm:bottom-1.5"
+                  style={
+                    {
+                      transform: `translateX(${offset * gap - cardAnchor}px) rotate(${offset * 3.5}deg) scale(${cardScale})`,
+                      transformOrigin: "bottom center",
+                      "--card-layer": 10 + index,
+                    } as CSSProperties
+                  }
                 >
                   <UnoCard
                     card={card}
@@ -7618,27 +7648,29 @@ function FannedGameHand({
               <div
                 key={card.id}
                 className={
-                  "absolute bottom-0 " +
+                  "absolute bottom-0 z-[var(--card-layer)] has-[:focus-visible]:z-[100] " +
                   (draggable
                     ? "cursor-grab touch-none active:cursor-grabbing"
                     : "")
                 }
-                style={{
-                  transform: `translateX(${translateX}px) translateY(${translateY}px) rotate(${rotate}deg) scale(${scale})`,
-                  transitionProperty: "transform",
-                  transitionDuration: dragging
-                    ? "0ms"
-                    : magnifying
-                      ? "150ms"
-                      : "480ms",
-                  transitionTimingFunction: magnifying
-                    ? "cubic-bezier(0.22, 1.4, 0.36, 1)"
-                    : "cubic-bezier(0.22, 0.9, 0.18, 1)",
-                  zIndex: dragging || magnifying ? 90 : 10 + index,
-                  willChange: "transform",
-                  opacity: dragging ? 0 : muted ? 0.32 : 1,
-                  filter: muted ? "saturate(0.55)" : undefined,
-                }}
+                style={
+                  {
+                    transform: `translateX(${translateX}px) translateY(${translateY}px) rotate(${rotate}deg) scale(${scale})`,
+                    transitionProperty: "transform",
+                    transitionDuration: dragging
+                      ? "0ms"
+                      : magnifying
+                        ? "150ms"
+                        : "480ms",
+                    transitionTimingFunction: magnifying
+                      ? "cubic-bezier(0.22, 1.4, 0.36, 1)"
+                      : "cubic-bezier(0.22, 0.9, 0.18, 1)",
+                    "--card-layer": dragging || magnifying ? 90 : 10 + index,
+                    willChange: "transform",
+                    opacity: dragging ? 0 : muted ? 0.32 : 1,
+                    filter: muted ? "saturate(0.55)" : undefined,
+                  } as CSSProperties
+                }
               >
                 <UnoCard
                   card={card}
