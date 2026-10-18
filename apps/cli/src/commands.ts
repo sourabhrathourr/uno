@@ -1,10 +1,25 @@
+import { CHAT_REACTIONS } from "@workspace/game"
 import type { PlayCardsInput, StageCardsInput } from "@workspace/game"
 
 type Envelope = { id?: string | number; expectedVersion?: number }
 export type CliCommand = Envelope &
   (
-    | { action: "help" | "status" | "resync" | "quit" }
-    | { action: "watch"; enabled: boolean }
+    | { action: "help" | "status" | "resync" | "quit" | "metrics" }
+    | { action: "watch" | "chat-watch"; enabled: boolean }
+    | { action: "chat-read"; afterMessageId?: string; limit?: number }
+    | {
+        action: "chat-send"
+        body: string
+        mentionPlayerIds?: string[]
+        replyToMessageId?: string
+      }
+    | {
+        action: "chat-react"
+        messageId: string
+        emoji: string
+        active: boolean
+      }
+    | { action: "chat-typing"; typing: boolean }
     | { action: "wait-for-action"; afterVersion?: number; timeoutMs?: number }
     | { action: "resolve-roulette" }
     | { action: "join"; code: string; name: string }
@@ -12,6 +27,7 @@ export type CliCommand = Envelope &
     | { action: "ready"; ready: boolean }
     | { action: "start" | "restart" }
     | ({ action: "play" } & PlayCardsInput)
+    | ({ action: "stage-play"; previewMs?: number } & PlayCardsInput)
     | ({ action: "stage" } & StageCardsInput)
     | { action: "draw" | "pass" | "penalty" | "roulette" }
     | { action: "catch-uno"; targetPlayerId: string }
@@ -64,6 +80,46 @@ const schemas: Record<
 > = {
   help: {},
   status: {},
+  metrics: {},
+  "chat-watch": { required: { enabled: bool } },
+  "chat-read": {
+    optional: {
+      afterMessageId: text,
+      limit: (value) =>
+        Number.isInteger(value) &&
+        (value as number) >= 1 &&
+        (value as number) <= 100,
+    },
+  },
+  "chat-send": {
+    required: {
+      body: (value) => text(value) && (value as string).trim().length <= 240,
+    },
+    optional: { mentionPlayerIds: ids, replyToMessageId: text },
+  },
+  "chat-react": {
+    required: {
+      messageId: text,
+      emoji: (value) =>
+        CHAT_REACTIONS.includes(value as (typeof CHAT_REACTIONS)[number]),
+      active: bool,
+    },
+  },
+  "chat-typing": { required: { typing: bool } },
+  "stage-play": {
+    required: {
+      cardIds: (value) => ids(value) && (value as string[]).length > 0,
+    },
+    optional: {
+      ...decisions,
+      discardCardIds: ids,
+      topCardId: text,
+      previewMs: (value) =>
+        Number.isInteger(value) &&
+        (value as number) >= 0 &&
+        (value as number) <= 500,
+    },
+  },
   resync: {},
   quit: {},
   watch: { required: { enabled: bool } },

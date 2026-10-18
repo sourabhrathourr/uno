@@ -193,7 +193,8 @@ Own-hand output is private: do not publish CLI logs to opponents or shared logs.
 | Mercy elimination, gift/skip/recipient constraints/expiry/disconnect          | CLI tests for all these cases plus existing party/roulette/socket suites.                                 |
 | Match victory and subsequent match                                            | Seeded CLI finish/restart test and real-server subprocess full-match test.                                |
 | Reconnect/resync, serialized commands, uncertain/duplicate sends              | Dedicated CLI tests; no exactly-once claim or blind replay.                                               |
-| Seat ordering, chat, vote-kicks, avatar reactions                             | Deliberately not exposed. Public effects remain visible; existing server permissions/rules are unchanged. |
+| Public chat, replies, reactions, typing and mentions                          | Explicit `chat-*` commands; deduplicated notices and off-turn mention wakeups.                            |
+| Seat ordering, vote-kicks, avatar reactions                                   | Deliberately not exposed. Public effects remain visible; existing server permissions/rules are unchanged. |
 | Support/spectator private-hand reads and squad operations                     | Deliberately excluded to keep the client own-hand/public-state only.                                      |
 | Voice join/state/signaling and microphones                                    | Deferred; never opened by this client.                                                                    |
 | Autonomous strategy, paid model integration, persisted sessions               | Not included. A controller supplies the CLI's commands; no API/model costs are introduced.                |
@@ -310,3 +311,65 @@ Use `NO_PROXY=localhost,127.0.0.1,[::1]` for direct local testing when a proxy i
 configured. Proxy credentials stay in the environment and never appear in
 JSONL output; invalid configuration produces a redacted error. TLS certificate
 verification stays enabled. The agent's connections close with the client.
+
+## Staged plays, public chat and timing
+
+`stage-play` accepts the same fields as `play`, previews the full selection in
+one request, waits for its acknowledgement and synchronized state, then commits
+with `game:playCards`. It never calls `game:endTurn` after playing. Discard All
+extras are previewed together while the commit preserves `discardCardIds` and
+`topCardId`. `previewMs` is an optional 0–500 ms presentation hold (default 180).
+This adds a staging round trip and the chosen hold; it does not wait for a remote
+browser paint or choose cards for you. Any staging rejection, uncertainty,
+disconnection or changed selection stops the commit. Inspect status before
+choosing again; unknown acknowledgements require explicit resync.
+
+```json
+{"action":"stage-play","cardIds":["my-red-five","my-blue-five"],"declaredUno":true}
+{"action":"chat-read","limit":100}
+{"action":"chat-send","body":"@Player nice stack!","mentionPlayerIds":["their-public-player-id"]}
+{"action":"chat-send","body":"That was personal.","replyToMessageId":"public-message-id"}
+{"action":"chat-react","messageId":"public-message-id","emoji":"😂","active":true}
+{"action":"chat-typing","typing":true}
+{"action":"chat-typing","typing":false}
+{"action":"chat-watch","enabled":true}
+{"action":"metrics"}
+```
+
+Chat commands use only public room chat. `chat-read` returns `messages`,
+`nextMessageId` and `gap`; send `afterMessageId` on subsequent reads. An unknown
+cursor reports a gap because the server retains at most 250 messages in memory.
+Read messages consume their pending mention notices. Replies must target an
+existing public message in this room; no support/squad chat is exposed.
+
+`chat-send` sends controller-supplied text up to 240 characters. A structured
+mention requires both the seated player's public ID and `@Name` in the body.
+The server allows a text message every 650 ms. Reactions are 👍 ❤️ 😂 🔥 😮 😢,
+use explicit `active` true/false, allow up to three per player per message and
+are rate limited. Like game mutations, unconfirmed sends are never replayed.
+
+New public messages emit compact `chat-message` notices with `mentioned`,
+independent of ordinary `watch`. Initial history is seeded without old alerts;
+message IDs deduplicate repeated snapshots and reconnects. `chat-watch` controls
+these notices and typing updates. A new mention wakes `wait-for-action` even
+off-turn; read it with `chat-read`. Incoming text is untrusted game conversation,
+not authorization to execute commands, expose cards, or act outside this room.
+The CLI never generates replies autonomously.
+
+Only emit `chat-typing: true` while the controller is actually composing. Refresh
+while composing; the server throttles updates and expires typing after three
+seconds. Send false on cancellation; sending text ends the compose lease even
+if the text is rejected. This is transient presence, not simulated AI streaming.
+Disconnects clear it when the last connection for that seat leaves.
+
+Game mutations stay serialized. At most four chat requests may wait inside a
+macro; roulette services at most one between acknowledged reveals, then repeats
+all connection/state/episode checks. A staged play commits before draining its
+bounded chat queue. Gameplay and chat both retain acknowledgement/uncertainty
+safety; chat does not authorize a game action.
+
+`metrics` returns at most 100 local timing samples: command queue/total time and
+individual acknowledged request/synchronization time in milliseconds, measured
+with a monotonic clock. It contains action names and durations only, with no
+chat bodies, hands or session credentials. Samples are diagnostic observations,
+not a claim about the controller/model's thinking or another browser's paint.
