@@ -961,3 +961,16 @@ it("quit cancels room creation without allowing a late response to reopen the se
   })
   expect(f.received).not.toContain("room:join")
 })
+
+it("keeps a timed last-gift wakeup visible alongside an unread mention", async () => {
+  const { a, b, bi } = await pendingGift()
+  await a.execute({
+    action: "chat-send",
+    body: "@CLI B choose your gift",
+    mentionPlayerIds: [bi],
+  })
+  await expect.poll(() => b.status().chat.pendingMentionIds.length).toBe(1)
+  await expect(
+    b.execute({ action: "wait-for-action", timeoutMs: 100 })
+  ).resolves.toMatchObject({ reasons: ["mention", "gift"], timedOut: false })
+})

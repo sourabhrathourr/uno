@@ -17,12 +17,17 @@ export function usePublicChatControls(
   const pendingReactions = useRef(new Set<string>())
   useEffect(() => {
     setTyping([])
-    const update = (value: ChatTypingPlayer[]) =>
+    const update = (value: ChatTypingPlayer[]) => {
+      // Anchor the fallback lease locally; device and server clocks can differ.
+      const expiresAt = Date.now() + 3_000
       setTyping(
-        value.filter((entry) =>
-          players.some((player) => player.id === entry.playerId)
-        )
+        value
+          .filter((entry) =>
+            players.some((player) => player.id === entry.playerId)
+          )
+          .map((entry) => ({ playerId: entry.playerId, expiresAt }))
       )
+    }
     const clear = () => {
       setTyping([])
       composing.current = false

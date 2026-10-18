@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it } from "vitest"
+import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { fixture, card, seed } from "./test-fixture"
 import { parseCommand } from "./commands"
 import type { ChatMessage } from "@workspace/game"
@@ -9,6 +9,7 @@ beforeEach(async () => {
 })
 afterEach(async () => {
   await f.close()
+  vi.restoreAllMocks()
 })
 
 async function seats(playing = false) {
@@ -535,3 +536,62 @@ it("stops roulette if a confirmed interleaved chat loses its connection before s
     f.received.filter((event) => event === "game:drawRouletteCard")
   ).toHaveLength(1)
 })
+
+it("returns pending mentions alongside the current turn and preserves the version gate", async () => {
+  const { a, b, ai } = await seats(true)
+  await b.execute({
+    action: "chat-send",
+    body: "@CLI A hello",
+    mentionPlayerIds: [ai],
+  })
+  await expect.poll(() => a.status().chat.pendingMentionIds.length).toBe(1)
+  await expect(
+    a.execute({ action: "wait-for-action", timeoutMs: 100 })
+  ).resolves.toMatchObject({ reasons: ["mention", "turn"] })
+  await expect(
+    a.execute({
+      action: "wait-for-action",
+      afterVersion: a.status().room!.version,
+      timeoutMs: 100,
+    })
+  ).resolves.toMatchObject({ reasons: ["mention"] })
+  await a.execute({ action: "chat-read" })
+  await expect(
+    a.execute({ action: "wait-for-action", timeoutMs: 100 })
+  ).resolves.toMatchObject({ reasons: ["turn"] })
+})
+
+it.each([-86_400_000, 86_400_000])(
+  "anchors live typing to the local clock with server skew %i",
+  async (skew) => {
+    const { a, bi, code } = await seats()
+    const before = Date.now()
+    f.io
+      .to(code)
+      .emit("room:chatTyping", [{ playerId: bi, expiresAt: before + skew }])
+    await expect.poll(() => a.status().chat.typing.length).toBe(1)
+    const expiry = a.status().chat.typing[0]!.expiresAt
+    expect(expiry).toBeGreaterThan(before)
+    expect(expiry).toBeLessThanOrEqual(Date.now() + 3_000)
+    const clock = vi.spyOn(Date, "now").mockReturnValue(expiry + 1)
+    expect(a.status().chat.typing).toEqual([])
+    clock.mockRestore()
+  }
+)
+
+it.each([-86_400_000, 86_400_000])(
+  "anchors typing hydration to the local clock with server skew %i",
+  async (skew) => {
+    const { ai, code } = await seats()
+    const before = Date.now()
+    vi.spyOn(f.manager, "getChatTyping").mockReturnValue([
+      { playerId: ai, expiresAt: before + skew },
+    ])
+    const newcomer = f.client(700)
+    await newcomer.execute({ action: "join", code, name: "Skew newcomer" })
+    const typing = newcomer.status().chat.typing
+    expect(typing).toHaveLength(1)
+    expect(typing[0]!.expiresAt).toBeGreaterThan(before)
+    expect(typing[0]!.expiresAt).toBeLessThanOrEqual(Date.now() + 3_000)
+  }
+)

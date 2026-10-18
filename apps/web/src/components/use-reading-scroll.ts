@@ -13,11 +13,12 @@ export function useReadingScroll(ids: string[]) {
     setUnread(0)
   }
   useLayoutEffect(() => {
-    const added = previous.current
-      ? ids.filter((id) => !previous.current!.has(id)).length
-      : 0
+    const prior = previous.current
+    const replaced =
+      !prior || prior.size === 0 || !ids.some((id) => prior.has(id))
+    const added = replaced ? 0 : ids.filter((id) => !prior.has(id)).length
     previous.current = new Set(ids)
-    if (nearBottom.current) latest()
+    if (replaced || nearBottom.current) latest()
     else if (added) setUnread((count) => count + added)
   }, [key])
   function onScroll() {
