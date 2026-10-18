@@ -1,5 +1,9 @@
 import { CHAT_REACTIONS } from "@workspace/game"
-import type { PlayCardsInput, StageCardsInput } from "@workspace/game"
+import type {
+  PlayCardsInput,
+  StageCardsInput,
+  VoteKickChoice,
+} from "@workspace/game"
 
 type Envelope = { id?: string | number; expectedVersion?: number }
 export type CliCommand = Envelope &
@@ -20,6 +24,8 @@ export type CliCommand = Envelope &
         active: boolean
       }
     | { action: "chat-typing"; typing: boolean }
+    | { action: "vote-read"; voteKickId?: string }
+    | { action: "vote-cast"; voteKickId: string; choice: VoteKickChoice }
     | { action: "wait-for-action"; afterVersion?: number; timeoutMs?: number }
     | { action: "resolve-roulette" }
     | { action: "join"; code: string; name: string }
@@ -106,6 +112,13 @@ const schemas: Record<
     },
   },
   "chat-typing": { required: { typing: bool } },
+  "vote-read": { optional: { voteKickId: text } },
+  "vote-cast": {
+    required: {
+      voteKickId: text,
+      choice: (value) => value === "yes" || value === "no",
+    },
+  },
   "stage-play": {
     required: {
       cardIds: (value) => ids(value) && (value as string[]).length > 0,

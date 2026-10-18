@@ -129,6 +129,14 @@ export async function fixture() {
         ack
       )
     )
+    socket.on("room:castVoteKick", (input, ack) =>
+      run(
+        "room:castVoteKick",
+        (code, id) =>
+          manager.castVoteKick(code, id, input.voteKickId, input.choice),
+        ack
+      )
+    )
     socket.on("room:start", (ack) =>
       run("room:start", (code, id) => manager.startRoom(code, id), ack)
     )

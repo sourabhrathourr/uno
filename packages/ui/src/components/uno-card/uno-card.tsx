@@ -37,7 +37,7 @@ type Props = {
  * The foundation card. Composes a black outer frame, a metallic colored body,
  * and a tilted oval with an upright glyph and corner pips.
  *
- * Interaction: hover lifts a few px, press taps to 0.96, focus shows a ring.
+ * Interaction: hover lifts a few px, press taps to 0.96, focus shows an outline.
  * Animations are interruptible CSS transitions on transform only.
  */
 export function UnoCard({
@@ -101,7 +101,7 @@ export function UnoCard({
       onBlur={() => setHovered(false)}
       className={cn(
         "group relative inline-block border-0 bg-transparent p-0 outline-none",
-        "focus-visible:ring-2 focus-visible:ring-white/70 focus-visible:ring-offset-2 focus-visible:ring-offset-black",
+        "focus-visible:outline-3 focus-visible:outline-offset-2 focus-visible:outline-yellow-300 focus-visible:outline-solid",
         !isStatic &&
           !disabled &&
           "active:[transform:translateY(0)_scale(0.96)]",

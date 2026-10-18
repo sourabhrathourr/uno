@@ -126,3 +126,8 @@ are preserved. Tab and Shift+Tab retain normal focus navigation. Pending actions
 block duplicate submissions; an uncertain acknowledgement requires refreshing
 the seat. Mobile keeps its touch controls. The browser title shows whose turn
 it is.
+
+Keyboard focus uses a yellow card outline above the overlapping fan. Space
+keeps the current play unchanged when a focused card cannot join it and shows
+a brief, accessible explanation. Click a staged card or focus it and press
+Space to remove it; Tab only moves focus.
