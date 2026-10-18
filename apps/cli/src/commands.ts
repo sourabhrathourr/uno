@@ -5,6 +5,8 @@ export type CliCommand = Envelope &
   (
     | { action: "help" | "status" | "resync" | "quit" }
     | { action: "watch"; enabled: boolean }
+    | { action: "wait-for-action"; afterVersion?: number; timeoutMs?: number }
+    | { action: "resolve-roulette" }
     | { action: "join"; code: string; name: string }
     | { action: "create"; name: string }
     | { action: "ready"; ready: boolean }
@@ -65,6 +67,17 @@ const schemas: Record<
   resync: {},
   quit: {},
   watch: { required: { enabled: bool } },
+  "resolve-roulette": {},
+  "wait-for-action": {
+    optional: {
+      afterVersion: (value) =>
+        Number.isSafeInteger(value) && (value as number) >= 0,
+      timeoutMs: (value) =>
+        Number.isSafeInteger(value) &&
+        (value as number) >= 1 &&
+        (value as number) <= 60_000,
+    },
+  },
   join: {
     required: {
       code: (value) =>

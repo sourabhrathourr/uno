@@ -3,6 +3,11 @@ import type { ChildProcess } from "node:child_process"
 import { createServer } from "node:net"
 import { createInterface } from "node:readline"
 import { fileURLToPath } from "node:url"
+import { mkdtemp, copyFile, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { execFile } from "node:child_process"
+import { promisify } from "node:util"
 import { afterEach, beforeEach, expect, it } from "vitest"
 import { io } from "socket.io-client"
 import type { PlayerGameSnapshot, RoomSnapshot } from "@workspace/game"
@@ -11,6 +16,8 @@ const root = fileURLToPath(new URL("../../../", import.meta.url))
 const loader = import.meta.resolve("tsx")
 const children: ChildProcess[] = []
 let serverUrl: string
+let portableDir: string
+let portableEntry: string
 const env = {
   PATH: process.env.PATH,
   NODE_ENV: "test",
@@ -27,6 +34,13 @@ async function stop(child: ChildProcess) {
 }
 
 beforeEach(async () => {
+  portableDir = await mkdtemp(join(tmpdir(), "uno-portable-"))
+  portableEntry = join(portableDir, "uno-cli.cjs")
+  await promisify(execFile)(process.execPath, ["build.mjs"], {
+    cwd: join(root, "apps/cli"),
+    env,
+  })
+  await copyFile(join(root, "apps/cli/dist/uno-cli.cjs"), portableEntry)
   const reservation = createServer()
   await new Promise<void>((resolve) =>
     reservation.listen(0, "127.0.0.1", resolve)
@@ -66,21 +80,15 @@ beforeEach(async () => {
 
 afterEach(async () => {
   for (const child of children.splice(0).reverse()) await stop(child)
+  await rm(portableDir, { recursive: true, force: true })
 })
 
 function cli(args: string[] = []) {
   const child = spawn(
     process.execPath,
-    [
-      "--import",
-      loader,
-      "apps/cli/src/main.ts",
-      "--server",
-      serverUrl,
-      ...args,
-    ],
+    [portableEntry, "--server", serverUrl, ...args],
     {
-      cwd: root,
+      cwd: portableDir,
       env,
       stdio: ["pipe", "pipe", "pipe"],
     }
@@ -207,7 +215,7 @@ it("plays an entire local match alongside a browser-protocol player through real
         event = "game:resolveLastGift"
         input = { giftId: room.game.lastGift.id }
       } else if (room.game.pendingChoice) {
-        command = { action: "roulette" }
+        command = { action: "resolve-roulette" }
         event = "game:drawRouletteCard"
       } else if (own.canTakeDrawPenalty) {
         command = { action: "penalty" }
@@ -277,3 +285,55 @@ it("plays an entire local match alongside a browser-protocol player through real
     browser.disconnect()
   }
 }, 45_000)
+
+it("keeps quit responsive during a pending quiet wait and shuts the portable process down cleanly", async () => {
+  const p = cli(["--create", "--name", "Waiting host"])
+  const state = (await p.send({ action: "status" })).data
+  await p.send({ action: "watch", enabled: false })
+  const wait = p.send({
+    action: "wait-for-action",
+    afterVersion: state.room.version,
+    timeoutMs: 60_000,
+  })
+  const exited = new Promise<number | null>((resolve) =>
+    p.child.once("exit", resolve)
+  )
+  await p.send({ action: "quit" })
+  expect(await wait).toMatchObject({ ok: true, data: { reasons: ["closed"] } })
+  expect(await exited).toBe(0)
+}, 20_000)
+
+it("wakes a pending wait and exits on SIGTERM", async () => {
+  const p = cli(["--create", "--name", "Signal host"])
+  const state = (await p.send({ action: "status" })).data
+  const wait = p.send({
+    action: "wait-for-action",
+    afterVersion: state.room.version,
+  })
+  await p.send({ action: "status" })
+  const exited = new Promise<number | null>((resolve) =>
+    p.child.once("exit", resolve)
+  )
+  p.child.kill("SIGTERM")
+  expect(await wait).toMatchObject({ ok: true, data: { reasons: ["closed"] } })
+  expect(await exited).toBe(0)
+}, 20_000)
+
+it("cancels a pending wait on stdin EOF and closes without waiting for its deadline", async () => {
+  const p = cli(["--create", "--name", "EOF host"])
+  const state = (await p.send({ action: "status" })).data
+  const wait = p.send({
+    action: "wait-for-action",
+    afterVersion: state.room.version,
+  })
+  await p.send({ action: "status" })
+  const exited = new Promise<number | null>((resolve) =>
+    p.child.once("exit", resolve)
+  )
+  p.child.stdin!.end()
+  expect(await wait).toMatchObject({
+    ok: true,
+    data: { reasons: ["cancelled"] },
+  })
+  expect(await exited).toBe(0)
+}, 20_000)

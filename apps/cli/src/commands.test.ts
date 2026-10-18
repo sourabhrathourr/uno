@@ -83,3 +83,26 @@ describe("CLI command boundary", () => {
     }
   })
 })
+
+it("validates bounded event-driven waits and the payload-free roulette macro", () => {
+  expect(parseCommand({ action: "resolve-roulette" })).toEqual({
+    action: "resolve-roulette",
+  })
+  expect(
+    parseCommand({
+      action: "wait-for-action",
+      afterVersion: 0,
+      timeoutMs: 60_000,
+    })
+  ).toMatchObject({ timeoutMs: 60_000 })
+  for (const timeoutMs of [0, -1, 60_001, 1.5, "20"])
+    expect(() =>
+      parseCommand({ action: "wait-for-action", timeoutMs })
+    ).toThrow()
+  expect(() =>
+    parseCommand({ action: "wait-for-action", afterVersion: -1 })
+  ).toThrow()
+  expect(() =>
+    parseCommand({ action: "resolve-roulette", count: 10 })
+  ).toThrow()
+})

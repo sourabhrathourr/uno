@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto"
 import { EventEmitter } from "node:events"
 import { io } from "socket.io-client"
+import { request as httpRequest } from "node:http"
+import { request as httpsRequest } from "node:https"
+import { HttpsProxyAgent } from "https-proxy-agent"
+import { proxyForServer } from "./proxy"
 import type { Socket } from "socket.io-client"
 import type {
   ClientToServerEvents,
@@ -42,6 +46,7 @@ export class UnoClient extends EventEmitter {
   private readonly sessionId = randomUUID()
   private readonly serverUrl: string
   private readonly timeoutMs: number
+  private readonly proxyAgent?: HttpsProxyAgent<string>
   private target: Target | null = null
   private room: RoomSnapshot | null = null
   private player: Player | null = null
@@ -53,14 +58,30 @@ export class UnoClient extends EventEmitter {
   private closed = false
   private watching = true
   private uncertainAction: string | null = null
+  private connectionEpoch = 0
+  private waitingForAction = false
+  private waitEpoch = 0
 
-  constructor(options: { serverUrl: string; timeoutMs?: number }) {
+  constructor(options: {
+    serverUrl: string
+    timeoutMs?: number
+    proxyEnv?: NodeJS.ProcessEnv
+  }) {
     super()
     this.serverUrl = validateServerUrl(options.serverUrl)
     this.timeoutMs = options.timeoutMs ?? 8_000
     if (!Number.isFinite(this.timeoutMs) || this.timeoutMs < 1)
       throw new CliError("invalid-timeout", "Timeout must be positive.")
+    const proxy = proxyForServer(
+      this.serverUrl,
+      options.proxyEnv ?? process.env
+    )
+    if (proxy) this.proxyAgent = new HttpsProxyAgent(proxy)
     this.socket = io(this.serverUrl, {
+      transportOptions: {
+        websocket: { agent: this.proxyAgent },
+        polling: { agent: this.proxyAgent },
+      },
       autoConnect: false,
       transports: ["websocket", "polling"],
       tryAllTransports: true,
@@ -72,6 +93,7 @@ export class UnoClient extends EventEmitter {
       void this.restoreSeat().catch((cause: unknown) => this.report(cause))
     })
     this.socket.on("disconnect", () => {
+      this.connectionEpoch++
       this.joinedSocketId = null
       this.joining = null
       this.changed("connection")
@@ -123,6 +145,14 @@ export class UnoClient extends EventEmitter {
   status() {
     const gift = this.room?.game?.lastGift
     const trade = this.room?.game?.tradeOffer
+    const canGift = Boolean(
+      gift &&
+      gift.playerId === this.player?.id &&
+      this.isSynchronized() &&
+      !this.uncertainAction &&
+      !this.closed &&
+      (gift.expiresAt === null || gift.expiresAt > Date.now())
+    )
     const remainingMs = (expiresAt: number | null) =>
       expiresAt === null ? null : Math.max(0, expiresAt - Date.now())
     return structuredClone({
@@ -139,10 +169,14 @@ export class UnoClient extends EventEmitter {
               ...gift,
               isMine: gift.playerId === this.player?.id,
               remainingMs: remainingMs(gift.expiresAt),
-              eligibleRecipientIds:
-                gift.playerId === this.player?.id
-                  ? (this.self?.giftTargetPlayerIds ?? [])
-                  : [],
+              actionable: canGift,
+              eligibleCardIds: canGift
+                ? (this.self?.lastGiftCards ?? []).map((card) => card.id)
+                : [],
+              eligibleRecipientIds: canGift
+                ? (this.self?.giftTargetPlayerIds ?? [])
+                : [],
+              skipCommand: canGift ? { action: "gift", giftId: gift.id } : null,
             }
           : null,
         trade: trade
@@ -297,6 +331,13 @@ export class UnoClient extends EventEmitter {
     } catch (cause) {
       return Promise.reject(cause)
     }
+    // Read-only waits never hold the mutation queue. Quit must wake outstanding waits.
+    if (command.action === "wait-for-action") return this.waitForAction(command)
+    if (command.action === "quit") {
+      this.close()
+      return Promise.resolve(this.status())
+    }
+    if (command.action === "status") return Promise.resolve(this.status())
     const task = this.queue.then(() => this.dispatch(command))
     this.queue = task.catch(() => {})
     return task
@@ -353,16 +394,7 @@ export class UnoClient extends EventEmitter {
         )
       let result: CommandResult<CreateRoomResponse>
       try {
-        const response = await fetch(`${this.serverUrl}/rooms`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            playerName: command.name.trim(),
-            sessionId: this.sessionId,
-          }),
-          signal: AbortSignal.timeout(this.timeoutMs),
-        })
-        result = (await response.json()) as CommandResult<CreateRoomResponse>
+        result = await this.createRoom(command.name.trim())
       } catch {
         // No safe way to discover a created room after losing the HTTP reply.
         this.close()
@@ -410,6 +442,12 @@ export class UnoClient extends EventEmitter {
         "stale-version",
         "Room state changed before this command was sent. Inspect status before choosing again."
       )
+    if (command.action === "resolve-roulette") return this.resolveRoulette()
+    await this.mutate(command)
+    return { confirmed: true, state: this.status() }
+  }
+
+  private async mutate(command: CliCommand) {
     this.assertOwnCards(command)
     this.currentAction = command.action
     const room = await this.ack<RoomSnapshot>(
@@ -419,7 +457,179 @@ export class UnoClient extends EventEmitter {
     this.applyRoom(room)
     // An acknowledgement confirms the action even if its private snapshot is delayed.
     await this.waitFor(() => this.isSynchronized() || !this.isJoined())
-    return { confirmed: true, state: this.status() }
+    return room
+  }
+
+  private async createRoom(
+    name: string
+  ): Promise<CommandResult<CreateRoomResponse>> {
+    const url = new URL("/rooms", this.serverUrl)
+    const request = url.protocol === "https:" ? httpsRequest : httpRequest
+    return new Promise((resolve, reject) => {
+      const req = request(
+        url,
+        {
+          method: "POST",
+          agent: this.proxyAgent,
+          headers: { "Content-Type": "application/json" },
+          signal: AbortSignal.timeout(this.timeoutMs),
+        },
+        (response) => {
+          const chunks: Buffer[] = []
+          let bytes = 0
+          response.on("data", (chunk: Buffer) => {
+            bytes += chunk.length
+            if (bytes > 1_048_576) {
+              response.destroy()
+              reject(new Error("Room response too large"))
+              return
+            }
+            chunks.push(chunk)
+          })
+          response.on("error", reject)
+          response.on("end", () => {
+            try {
+              resolve(
+                JSON.parse(
+                  Buffer.concat(chunks).toString()
+                ) as CommandResult<CreateRoomResponse>
+              )
+            } catch {
+              reject(new Error("Invalid room response"))
+            }
+          })
+        }
+      )
+      req.on("error", reject)
+      req.end(JSON.stringify({ playerName: name, sessionId: this.sessionId }))
+    })
+  }
+
+  cancelWaits() {
+    this.waitEpoch++
+    this.emit("change")
+  }
+
+  private actionReasons(afterVersion?: number): string[] {
+    if (this.closed) return ["closed"]
+    if (!this.target) return ["join-required"]
+    if (!this.isJoined()) return ["disconnected"]
+    if (this.uncertainAction) return ["resync-required"]
+    if (!this.isSynchronized()) return []
+    if (afterVersion !== undefined && (this.room?.version ?? 0) <= afterVersion)
+      return []
+    if (this.room?.status === "finished") return ["finished"]
+    const game = this.room?.game
+    if (!game) return []
+    // Gift and trade choices pause ordinary play. Expired choices are never actionable.
+    if (game.lastGift)
+      return this.status().pending.lastGift?.actionable ? ["gift"] : []
+    if (game.tradeOffer)
+      return game.tradeOffer.targetPlayerId === this.player?.id &&
+        (game.tradeOffer.expiresAt === null ||
+          game.tradeOffer.expiresAt > Date.now())
+        ? ["trade-response"]
+        : []
+    const reasons: string[] = []
+    if (this.self?.catchablePlayerIds.length) reasons.push("catch-uno")
+    if (game.turnPlayerId === this.player?.id)
+      reasons.push(game.pendingChoice ? "roulette" : "turn")
+    if (
+      game.players.find((player) => player.playerId === this.player?.id)
+        ?.eliminated
+    )
+      reasons.push("eliminated")
+    return reasons
+  }
+
+  private async waitForAction(
+    command: Extract<CliCommand, { action: "wait-for-action" }>
+  ) {
+    if (this.waitingForAction)
+      throw new CliError(
+        "wait-in-progress",
+        "Only one wait-for-action may be outstanding per seat."
+      )
+    this.waitingForAction = true
+    const epoch = this.waitEpoch
+    try {
+      const woke = await this.waitFor(
+        () =>
+          this.waitEpoch !== epoch ||
+          this.actionReasons(command.afterVersion).length > 0,
+        command.timeoutMs ?? 60_000
+      )
+      return {
+        timedOut: !woke,
+        reasons:
+          this.waitEpoch !== epoch
+            ? ["cancelled"]
+            : this.actionReasons(command.afterVersion),
+        state: this.status(),
+      }
+    } finally {
+      this.waitingForAction = false
+    }
+  }
+
+  private async resolveRoulette() {
+    const initial = this.room!.game?.pendingChoice
+    if (!initial || initial.playerId !== this.player?.id)
+      throw new CliError(
+        "roulette-not-pending",
+        "Your seat has no pending roulette to resolve."
+      )
+    const matchId = this.room!.game!.matchId
+    const discardId = this.room!.game!.topDiscard?.id
+    const epoch = this.connectionEpoch
+    let confirmedDraws = 0
+    const stopped = (stopReason: string, complete = false) => ({
+      complete,
+      confirmedDraws,
+      stopReason,
+      state: this.status(),
+    })
+    for (;;) {
+      if (this.closed || !this.isJoined() || epoch !== this.connectionEpoch)
+        return stopped("disconnected")
+      if (this.uncertainAction) return stopped("outcome-unknown")
+      if (!this.isSynchronized()) return stopped("stale-state")
+      const game = this.room?.game
+      if (game?.matchId !== matchId) return stopped("match-changed")
+      if (
+        game.players.find((player) => player.playerId === this.player?.id)
+          ?.eliminated
+      )
+        return stopped("eliminated", true)
+      if (!game.pendingChoice) return stopped("resolved", true)
+      if (
+        game.topDiscard?.id !== discardId ||
+        game.turnPlayerId !== this.player?.id ||
+        game.pendingChoice.playerId !== initial.playerId ||
+        game.pendingChoice.color !== initial.color
+      )
+        return stopped("turn-changed")
+      if (confirmedDraws >= 128) return stopped("limit-reached")
+      try {
+        // Await both the individual acknowledgement and matching private/public state.
+        const acknowledged = await this.mutate({ action: "roulette" })
+        confirmedDraws++
+        // Inspect the acknowledged episode even if later room updates overtook it.
+        if (
+          acknowledged.game?.players.find(
+            (player) => player.playerId === this.player?.id
+          )?.eliminated
+        )
+          return stopped("eliminated", true)
+        if (!acknowledged.game?.pendingChoice) return stopped("resolved", true)
+      } catch (cause) {
+        if (!(cause instanceof CliError)) throw cause
+        return {
+          ...stopped(cause.code),
+          error: { code: cause.code, message: cause.message },
+        }
+      }
+    }
   }
 
   private assertOwnCards(command: CliCommand) {
@@ -546,6 +756,7 @@ export class UnoClient extends EventEmitter {
     this.closed = true
     this.joinedSocketId = null
     this.socket.disconnect()
+    this.proxyAgent?.destroy()
     this.changed("connection")
   }
 }

@@ -4,15 +4,18 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "tsx src/main.ts",
-    "typecheck": "tsc --noEmit"
+    "start": "node --import tsx src/main.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "node build.mjs"
   },
   "dependencies": {
     "@workspace/game": "workspace:*",
-    "socket.io-client": "4.8.3"
+    "socket.io-client": "4.8.3",
+    "https-proxy-agent": "7.0.6"
   },
   "devDependencies": {
     "@types/node": "^25.1.0",
+    "esbuild": "0.27.7",
     "socket.io": "^4.8.1",
     "tsx": "^4.21.0",
     "typescript": "5.9.3"

@@ -32,6 +32,9 @@ importers:
       '@workspace/game':
         specifier: workspace:*
         version: link:../../packages/game
+      https-proxy-agent:
+        specifier: 7.0.6
+        version: 7.0.6
       socket.io-client:
         specifier: 4.8.3
         version: 4.8.3
@@ -39,6 +42,9 @@ importers:
       '@types/node':
         specifier: ^25.1.0
         version: 25.3.0
+      esbuild:
+        specifier: 0.27.7
+        version: 0.27.7
       socket.io:
         specifier: ^4.8.1
         version: 4.8.3

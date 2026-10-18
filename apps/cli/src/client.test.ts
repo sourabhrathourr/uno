@@ -698,3 +698,238 @@ describe("persistent client against the real room manager", () => {
     expect(a.status().room!.code).toBe(code)
   })
 })
+
+async function roulette(handSize = 2) {
+  const context = await players(true)
+  const { a, b, ai, bi, game, code, browser } = context
+  seed(
+    game,
+    {
+      [ai]: [
+        card("roulette", "wild", { kind: "wild-color-roulette" }),
+        card("spare"),
+      ],
+      [bi]: Array.from({ length: handSize }, (_, i) => card(`b-${i}`)),
+      [browser!.playerId]: [card("c1"), card("c2")],
+    },
+    ai
+  )
+  game.drawPile = [
+    card("first", "blue"),
+    card("match", "green"),
+    card("never-draw", "red"),
+  ]
+  f.publish(code)
+  await expect.poll(() => a.status().self?.hand[0]?.id).toBe("roulette")
+  await a.execute({
+    action: "play",
+    cardIds: ["roulette"],
+    chosenColor: "green",
+    declaredUno: true,
+  })
+  await expect.poll(() => b.status().pending.roulette?.playerId).toBe(bi)
+  await synced(b)
+  return context
+}
+
+it("resolves roulette sequentially, waits for each ack, and stops exactly on the chosen color", async () => {
+  const { b, game } = await roulette()
+  f.controls.delayAckMs = 100
+  const result = b.execute({ action: "resolve-roulette" })
+  await expect
+    .poll(() => f.received.filter((e) => e === "game:drawRouletteCard").length)
+    .toBe(1)
+  // Server snapshots arrive before delayed acknowledgements. They cannot authorize the next reveal.
+  expect(b.status().pending.roulette?.drawnCards).toHaveLength(1)
+  expect(await result).toMatchObject({
+    complete: true,
+    confirmedDraws: 2,
+    stopReason: "resolved",
+  })
+  expect(f.received.filter((e) => e === "game:drawRouletteCard")).toHaveLength(
+    2
+  )
+  expect(game.drawPile.map((c) => c.id)).toEqual(["never-draw"])
+  await expect(b.execute({ action: "resolve-roulette" })).rejects.toMatchObject(
+    { code: "roulette-not-pending" }
+  )
+})
+
+it("stops roulette at mercy elimination and exposes the frozen gift action", async () => {
+  const { b } = await roulette(25)
+  expect(await b.execute({ action: "resolve-roulette" })).toMatchObject({
+    complete: true,
+    confirmedDraws: 1,
+    stopReason: "eliminated",
+  })
+  expect(f.received.filter((e) => e === "game:drawRouletteCard")).toHaveLength(
+    1
+  )
+  expect(b.status().pending.lastGift).toMatchObject({
+    actionable: true,
+    eligibleCardIds: expect.arrayContaining(["b-0", "first"]),
+    skipCommand: { action: "gift" },
+  })
+})
+
+it("does not replay or continue roulette after an unacknowledged reveal, even when state arrived", async () => {
+  const { b } = await roulette()
+  f.controls.dropAckFor = "game:drawRouletteCard"
+  expect(await b.execute({ action: "resolve-roulette" })).toMatchObject({
+    complete: false,
+    confirmedDraws: 0,
+    stopReason: "outcome-unknown",
+    state: { needsResync: true },
+  })
+  expect(f.received.filter((e) => e === "game:drawRouletteCard")).toHaveLength(
+    1
+  )
+  await expect(b.execute({ action: "resolve-roulette" })).rejects.toMatchObject(
+    { code: "resync-required" }
+  )
+  f.controls.dropAckFor = ""
+  await b.execute({ action: "resync" })
+  expect(await b.execute({ action: "resolve-roulette" })).toMatchObject({
+    complete: true,
+    confirmedDraws: 1,
+  })
+  expect(f.received.filter((e) => e === "game:drawRouletteCard")).toHaveLength(
+    2
+  )
+})
+
+it("stops roulette on a disconnect without resuming the macro after reconnection", async () => {
+  const { b } = await roulette()
+  f.controls.dropAckFor = "game:drawRouletteCard"
+  f.controls.disconnectFor = "game:drawRouletteCard"
+  expect(await b.execute({ action: "resolve-roulette" })).toMatchObject({
+    complete: false,
+    confirmedDraws: 0,
+    stopReason: "outcome-unknown",
+  })
+  await expect.poll(() => b.status().joined, { timeout: 4_000 }).toBe(true)
+  expect(f.received.filter((e) => e === "game:drawRouletteCard")).toHaveLength(
+    1
+  )
+  expect(b.status().needsResync).toBe(true)
+})
+
+it("stops after a confirmed roulette reveal if private/public synchronization does not arrive", async () => {
+  const { b } = await roulette()
+  f.controls.holdPrivate = true
+  expect(await b.execute({ action: "resolve-roulette" })).toMatchObject({
+    complete: false,
+    confirmedDraws: 1,
+    stopReason: "stale-state",
+    state: { synchronized: false },
+  })
+  expect(f.received.filter((e) => e === "game:drawRouletteCard")).toHaveLength(
+    1
+  )
+})
+
+it("waits quietly for an actionable turn after a version and leaves mutation/control commands responsive", async () => {
+  const { a, b, ai, bi, code, game } = await players()
+  seed(
+    game,
+    { [ai]: [card("a1"), card("a2")], [bi]: [card("b1"), card("b2")] },
+    bi
+  )
+  f.publish(code)
+  await expect.poll(() => a.status().room?.game?.turnPlayerId).toBe(bi)
+  await synced(a, b)
+  await a.execute({ action: "watch", enabled: false })
+  const notices = vi.fn()
+  a.on("notice", notices)
+  const wait = a.execute({
+    action: "wait-for-action",
+    afterVersion: a.status().room!.version,
+    timeoutMs: 2_000,
+  })
+  await expect(a.execute({ action: "wait-for-action" })).rejects.toMatchObject({
+    code: "wait-in-progress",
+  })
+  expect(await a.execute({ action: "status" })).toMatchObject({
+    watching: false,
+  })
+  await b.execute({ action: "play", cardIds: ["b1"], declaredUno: true })
+  expect(await wait).toMatchObject({
+    timedOut: false,
+    reasons: ["turn"],
+    state: { myTurn: true },
+  })
+  expect(notices).not.toHaveBeenCalled()
+  expect(
+    await a.execute({
+      action: "wait-for-action",
+      afterVersion: a.status().room!.version,
+      timeoutMs: 20,
+    })
+  ).toMatchObject({ timedOut: true, reasons: [] })
+  const pending = a.execute({
+    action: "wait-for-action",
+    afterVersion: a.status().room!.version,
+  })
+  await a.execute({ action: "quit" })
+  expect(await pending).toMatchObject({ timedOut: false, reasons: ["closed"] })
+})
+
+it("returns gift actions immediately and removes actionable IDs at expiry before another snapshot", async () => {
+  const { a, b, giftId } = await pendingGift()
+  expect(await b.execute({ action: "wait-for-action" })).toMatchObject({
+    reasons: ["gift"],
+  })
+  await expect
+    .poll(() => a.status().pending.lastGift?.eligibleCardIds)
+    .toEqual([])
+  const expiresAt = b.status().pending.lastGift!.expiresAt!
+  vi.useFakeTimers({ toFake: ["Date"] })
+  vi.setSystemTime(expiresAt + 1)
+  expect(b.status().pending.lastGift).toMatchObject({
+    id: giftId,
+    remainingMs: 0,
+    actionable: false,
+    eligibleCardIds: [],
+    eligibleRecipientIds: [],
+    skipCommand: null,
+  })
+  expect(
+    await b.execute({ action: "wait-for-action", timeoutMs: 20 })
+  ).toMatchObject({ timedOut: true, reasons: [] })
+})
+
+it("never crosses into a later roulette episode when a completed acknowledgement arrives late", async () => {
+  const { b, bi, code, game } = await roulette()
+  game.drawPile = [
+    card("immediate-match", "green"),
+    card("must-stay", "yellow"),
+  ]
+  f.controls.delayAckMs = 200
+  const result = b.execute({ action: "resolve-roulette" })
+  await expect.poll(() => b.status().pending.roulette).toBeNull()
+  // Model quick intervening opponents while the original draw ack is in flight.
+  game.turnPlayerId = bi
+  game.discardPile.push(
+    card("next-roulette", "wild", { kind: "wild-color-roulette" })
+  )
+  game.pendingChoice = {
+    type: "roulette-draw",
+    playerId: bi,
+    color: "green",
+    drawnCards: [],
+  }
+  f.bumpVersion(code)
+  await expect
+    .poll(() => b.status().room?.game?.topDiscard?.id)
+    .toBe("next-roulette")
+  expect(await result).toMatchObject({
+    complete: true,
+    confirmedDraws: 1,
+    stopReason: "resolved",
+  })
+  expect(f.received.filter((e) => e === "game:drawRouletteCard")).toHaveLength(
+    1
+  )
+  expect(game.drawPile.map((c) => c.id)).toEqual(["must-stay"])
+  expect(b.status().pending.roulette?.drawnCards).toEqual([])
+})

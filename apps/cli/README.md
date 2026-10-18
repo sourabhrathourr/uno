@@ -30,7 +30,7 @@ must be an HTTP(S) origin without credentials, paths, query parameters or fragme
 For raw JSON output without pnpm's command banner, use:
 
 ```sh
-pnpm --filter @workspace/cli exec tsx src/main.ts --server http://localhost:4001
+pnpm --filter @workspace/cli exec node --import tsx src/main.ts --server http://localhost:4001
 ```
 
 Keep the process and stdin open for the duration of play. Each process generates
@@ -48,7 +48,9 @@ SIGTERM disconnects it.
 Send one JSON object per line. Optional string/number `id` values are echoed for
 correlation; they are **not** server idempotency keys. Every input command is a
 new request, so do not resend a mutation just because its reply was missed.
-Commands are serialized. Malformed input produces an error result and the
+Mutations are serialized. Read-only `status`, `wait-for-action`, and `quit` remain
+responsive during another request; `quit` immediately closes the seat and may
+interrupt an in-flight action. Malformed input produces an error result and the
 process remains usable. The line limit is 64 KiB.
 
 ```json
@@ -71,7 +73,9 @@ remain enabled. No voice connections are opened.
 - `self`: this seat's hand and exact card IDs, playable **single** card IDs,
   UNO catches, action flags, frozen gift cards, and eligible trade/gift targets.
 - `pending`: public roulette/trade/gift choices. Gifts include `isMine`,
-  `eligibleRecipientIds` for the donor, and `remainingMs`; trades include
+  `actionable`, `eligibleCardIds`, `eligibleRecipientIds`, a ready-to-send
+  `skipCommand`, and `remainingMs`. Actionable IDs/skip are exposed only for a
+  synchronized donor before expiry, with no uncertain action; trades include
   `remainingMs`. Remaining time is computed when a status/notice is produced,
   not a periodic ticker. Absolute `expiresAt` is authoritative from the server.
 
@@ -81,27 +85,29 @@ not override a pending gift, roulette, or other server rule.
 
 ## Commands
 
-| Action             | Fields                                                      | Behavior                                                                                                    |
-| ------------------ | ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| `help`, `status`   | None                                                        | List actions or read the local latest snapshot.                                                             |
-| `watch`            | `enabled`: boolean                                          | Toggle unsolicited state/connection output.                                                                 |
-| `create`           | `name`                                                      | Create a room and join its host seat using one in-memory session.                                           |
-| `join`             | `code`, `name`                                              | Join a room; cannot change this process to a different room/name.                                           |
-| `ready`            | `ready`: boolean                                            | Set lobby readiness.                                                                                        |
-| `start`, `restart` | None                                                        | Server checks host/crown, readiness and match state. `restart` immediately deals the next match.            |
-| `play`             | `cardIds`; optional play decisions below                    | Submit the entire play atomically.                                                                          |
-| `stage`            | `cardIds`; optional play decisions                          | Optional public preview. An empty list clears staging. Staging does not play cards.                         |
-| `draw`             | None                                                        | Draw one when permitted, including the final draw-card escape during a stack.                               |
-| `pass`             | None                                                        | Pass after drawing. It **does not commit staged cards**. Use `play` to commit.                              |
-| `penalty`          | None                                                        | Take the accumulated draw penalty.                                                                          |
-| `roulette`         | None                                                        | Reveal one roulette card; repeat from the updated pending state until resolved.                             |
-| `catch-uno`        | `targetPlayerId`                                            | Catch a player listed in your `catchablePlayerIds`.                                                         |
-| `trade-offer`      | `cardId`, `targetPlayerId`                                  | Offer your own card to an eligible target.                                                                  |
-| `trade-respond`    | `offerId`, `accept`; `cardId` when accepting                | Accept with your own card, or decline.                                                                      |
-| `trade-cancel`     | `offerId`                                                   | Cancel your own offer.                                                                                      |
-| `gift`             | `giftId`; optionally `cardId` and `targetPlayerId` together | Send a card from your own frozen gift hand, or omit both optional fields to skip.                           |
-| `resync`           | None                                                        | Rejoin the same seat and receive an authoritative public/private snapshot. Clears the unknown-outcome lock. |
-| `quit`             | None                                                        | Disconnect and exit.                                                                                        |
+| Action             | Fields                                                        | Behavior                                                                                                    |
+| ------------------ | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `help`, `status`   | None                                                          | List actions or read the local latest snapshot.                                                             |
+| `watch`            | `enabled`: boolean                                            | Toggle unsolicited state/connection output.                                                                 |
+| `create`           | `name`                                                        | Create a room and join its host seat using one in-memory session.                                           |
+| `join`             | `code`, `name`                                                | Join a room; cannot change this process to a different room/name.                                           |
+| `ready`            | `ready`: boolean                                              | Set lobby readiness.                                                                                        |
+| `start`, `restart` | None                                                          | Server checks host/crown, readiness and match state. `restart` immediately deals the next match.            |
+| `play`             | `cardIds`; optional play decisions below                      | Submit the entire play atomically.                                                                          |
+| `stage`            | `cardIds`; optional play decisions                            | Optional public preview. An empty list clears staging. Staging does not play cards.                         |
+| `draw`             | None                                                          | Draw one when permitted, including the final draw-card escape during a stack.                               |
+| `pass`             | None                                                          | Pass after drawing. It **does not commit staged cards**. Use `play` to commit.                              |
+| `penalty`          | None                                                          | Take the accumulated draw penalty.                                                                          |
+| `resolve-roulette` | None                                                          | Resolve your pending roulette sequentially, awaiting each acknowledgement and synchronized state.           |
+| `wait-for-action`  | Optional `afterVersion`, `timeoutMs` (1–60000, default 60000) | Wait without polling; return actionable reasons and current state, or `timedOut: true`.                     |
+| `roulette`         | None                                                          | Reveal one roulette card; repeat from the updated pending state until resolved.                             |
+| `catch-uno`        | `targetPlayerId`                                              | Catch a player listed in your `catchablePlayerIds`.                                                         |
+| `trade-offer`      | `cardId`, `targetPlayerId`                                    | Offer your own card to an eligible target.                                                                  |
+| `trade-respond`    | `offerId`, `accept`; `cardId` when accepting                  | Accept with your own card, or decline.                                                                      |
+| `trade-cancel`     | `offerId`                                                     | Cancel your own offer.                                                                                      |
+| `gift`             | `giftId`; optionally `cardId` and `targetPlayerId` together   | Send a card from your own frozen gift hand, or omit both optional fields to skip.                           |
+| `resync`           | None                                                          | Rejoin the same seat and receive an authoritative public/private snapshot. Clears the unknown-outcome lock. |
+| `quit`             | None                                                          | Disconnect and exit.                                                                                        |
 
 Play/stage decisions: `chosenColor` (`red`, `green`, `blue`, `yellow`),
 `declaredUno` (boolean), `rotateHands` (boolean), `swapWithPlayerId`.
@@ -178,7 +184,7 @@ Own-hand output is private: do not publish CLI logs to opponents or shared logs.
 | Numbers, same-number groups, legal/illegal color/symbol matching              | Atomic `play`; deterministic CLI tests plus game suites.                                                  |
 | Skip, Skip Everyone, Reverse, grouped actions, two-player Reverse             | `play`; deterministic CLI effect matrix plus existing engine coverage.                                    |
 | Colored +2/+4, wild +4/+6/+10, Reverse +4/+10, cumulative stacks              | `play`/`penalty`; CLI matrix/stack tests and draw-stack/reverse-ten suites.                               |
-| Wild colors and color roulette                                                | `chosenColor` on play; `roulette` one reveal at a time; CLI tests.                                        |
+| Wild colors and color roulette                                                | `chosenColor` on play; `roulette` once or sequential `resolve-roulette`; CLI tests.                       |
 | Discard All extras/top card/action suppression/finish                         | Explicit discard fields; CLI and engine tests.                                                            |
 | Optional single 0 cycle / single 7 swap                                       | Play decisions; CLI tests. Grouped 0/7 does not activate transfers, following the server.                 |
 | Draw once, pass, forbidden power-card finish, final draw-card stack escape    | CLI tests and existing game suites.                                                                       |
@@ -206,7 +212,101 @@ pnpm --filter web typecheck
 
 CLI integration fixtures use real Socket.IO/RoomManager with deterministic local
 hands. Subprocess tests start the actual server entrypoint on an ephemeral local
-port, run the actual CLI, and play alongside a browser-protocol client through a
+port, build/copy the standalone bundle to an isolated temporary directory, launch
+it with Node only, and play alongside a browser-protocol client through a
 complete match. They do not open a browser, read a production hand, request media
 permissions, or contact a live room. There are no required server, web, or mobile
 runtime changes for this CLI.
+
+## Quiet controller loop
+
+Disable watch notices once, then request a bounded event-driven wait:
+
+```json
+{"id":"quiet","action":"watch","enabled":false}
+{"id":"next","action":"wait-for-action","afterVersion":42,"timeoutMs":60000}
+```
+
+`wait-for-action` returns `{timedOut, reasons, state}`. Reasons include `turn`,
+`roulette`, `gift`, `trade-response`, `catch-uno`, `eliminated`, `finished`,
+`join-required`, `disconnected`, `resync-required`, `cancelled` (stdin EOF), and `closed`. It only uses
+public state and this seat's private snapshot. `afterVersion` requires a newer
+room version for gameplay reasons, so pass the version already handled to avoid
+returning the same opportunity repeatedly. Connection/closed/resync reasons
+always wake the wait. Omit `afterVersion` to return an existing opportunity
+immediately. A lobby without gameplay opportunities waits for a change or timeout.
+Only one wait may be outstanding; it does not block mutations, status or quit.
+After a timeout, issue another wait. Timed gift/trade choices pause turn notices;
+expired choices are never reported as actionable. Server updates remain authoritative.
+
+Resolve roulette without a request for each reveal:
+
+```json
+{ "id": "roulette", "action": "resolve-roulette", "expectedVersion": 43 }
+```
+
+This client operation sends the existing `game:drawRouletteCard` API one at a time.
+It stops when the chosen color resolves, the player is eliminated, the turn/match
+changes, the transport disconnects, synchronization is missing, or an outcome is
+uncertain. It never retries or pipelines draws. The result includes `complete`,
+`confirmedDraws`, `stopReason`, and `state`; an interrupted operation has
+`complete: false` even though the JSON command returned a result. An uncertain
+reveal is **not** included in `confirmedDraws` even if a snapshot shows it.
+Inspect the returned state, explicitly `resync` after `outcome-unknown`, and choose
+a fresh command; reconnect alone does not restart the operation. `expectedVersion`
+checks only the initial choice; each later reveal uses acknowledged current state.
+Penalty acceptance still uses `penalty`, and multi-card plays still use `play`.
+These helpers choose no strategy, cards, colors or recipients.
+
+## Portable non-container launch
+
+Build once in a checkout with Node 24 and pinned pnpm 9.15.9:
+
+```sh
+pnpm install --frozen-lockfile --filter uno --filter @workspace/cli...
+pnpm --filter @workspace/cli build
+node apps/cli/dist/uno-cli.cjs --help
+```
+
+Copy **only `apps/cli/dist/uno-cli.cjs`** to a Node 24 cloud machine, then launch:
+
+```sh
+node /opt/uno/uno-cli.cjs --server https://YOUR_GAME_SERVER_ORIGIN
+```
+
+The CommonJS bundle includes Socket.IO and its JavaScript transport dependencies.
+Runtime needs Node 24 built-ins, outbound HTTP(S)/WebSocket access, and an open
+stdin/stdout connection to one controller. No repository, pnpm, tsx, native
+accelerators, browser, container, or extra runtime npm install is needed. The
+build metadata `dist/meta.json` is for inspection, not runtime. `start` also uses
+`node --import tsx` to avoid the tsx executable's helper IPC socket in restricted
+cloud shells; this development path still needs the checkout and dev dependencies.
+
+Use a long-lived worker/VM process connected to a trusted JSONL controller; the
+CLI is not an HTTP service or a serverless function. Keep stdin open and drain
+stdout continuously. EOF, `quit`, SIGINT and SIGTERM terminate the process and
+close the socket; signal/quit wakes pending waits. Run one controller and one
+CLI process per seat, serialize decisions, and wait for replies before choosing
+another mutation. Do not let another controller drive the same seat concurrently.
+Restrict stdout logs: they contain this player's own hand, although no session
+credential is printed. No controller, hosting account, credentials, supervisor,
+or cloud deployment is provisioned by this package.
+
+A transport reconnect within the same process restores its in-memory seat.
+Unknown acknowledgements still require explicit resync and new decisions.
+Process exit/restart loses that session: a supervisor restart starts a **new**
+seat and must not replay old commands or try to migrate an existing browser/Mac
+seat. Start a fresh room/seat on the cloud worker when coordinated with players;
+this package does not transfer live sessions. Validate on a local test server
+before connecting a new cloud seat to a real game.
+
+The launcher honors `HTTPS_PROXY`/`https_proxy` for HTTPS servers,
+`HTTP_PROXY`/`http_proxy` for HTTP servers, and `ALL_PROXY`/`all_proxy` as a
+fallback. Lowercase values take precedence. Both room creation and Socket.IO
+WebSocket/polling use the same HTTP(S) CONNECT agent. `NO_PROXY`/`no_proxy`
+bypasses the proxy for comma/space-separated exact hosts, optional ports,
+leading-dot or `*.` domain suffixes, bracketed IPv6, or `*` for all hosts.
+Use `NO_PROXY=localhost,127.0.0.1,[::1]` for direct local testing when a proxy is
+configured. Proxy credentials stay in the environment and never appear in
+JSONL output; invalid configuration produces a redacted error. TLS certificate
+verification stays enabled. The agent's connections close with the client.
