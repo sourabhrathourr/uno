@@ -30,6 +30,14 @@ export default defineConfig({
       {
         resolve: { alias },
         test: {
+          name: "cli",
+          environment: "node",
+          include: ["apps/cli/src/**/*.test.ts"],
+        },
+      },
+      {
+        resolve: { alias },
+        test: {
           name: "web",
           environment: "jsdom",
           include: ["apps/web/src/**/*.test.{ts,tsx}"],

@@ -1,0 +1,551 @@
+import { randomUUID } from "node:crypto"
+import { EventEmitter } from "node:events"
+import { io } from "socket.io-client"
+import type { Socket } from "socket.io-client"
+import type {
+  ClientToServerEvents,
+  CommandResult,
+  CreateRoomResponse,
+  JoinRoomResponse,
+  Player,
+  PlayerGameSnapshot,
+  RoomSnapshot,
+  ServerToClientEvents,
+} from "@workspace/game"
+import { CliError, COMMANDS, parseCommand } from "./commands"
+import type { CliCommand } from "./commands"
+
+type GameSocket = Socket<ServerToClientEvents, ClientToServerEvents>
+type Target = { code: string; name: string }
+type Ack<T> = (cause: Error | null, result?: CommandResult<T>) => void
+
+export function validateServerUrl(value: string): string {
+  const url = new URL(value)
+  if (
+    !["http:", "https:"].includes(url.protocol) ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    url.pathname !== "/"
+  )
+    throw new CliError(
+      "invalid-server",
+      "Use an http(s) server origin without credentials, query, or path."
+    )
+  return url.origin
+}
+
+/** A single in-memory seat. No voice, arbitrary socket events, or other-hand views. */
+export class UnoClient extends EventEmitter {
+  private readonly socket: GameSocket
+  private readonly sessionId = randomUUID()
+  private readonly serverUrl: string
+  private readonly timeoutMs: number
+  private target: Target | null = null
+  private room: RoomSnapshot | null = null
+  private player: Player | null = null
+  private self: PlayerGameSnapshot | null = null
+  private joinedSocketId: string | null = null
+  private joining: Promise<void> | null = null
+  private joinError: CliError | null = null
+  private queue: Promise<unknown> = Promise.resolve()
+  private closed = false
+  private watching = true
+  private uncertainAction: string | null = null
+
+  constructor(options: { serverUrl: string; timeoutMs?: number }) {
+    super()
+    this.serverUrl = validateServerUrl(options.serverUrl)
+    this.timeoutMs = options.timeoutMs ?? 8_000
+    if (!Number.isFinite(this.timeoutMs) || this.timeoutMs < 1)
+      throw new CliError("invalid-timeout", "Timeout must be positive.")
+    this.socket = io(this.serverUrl, {
+      autoConnect: false,
+      transports: ["websocket", "polling"],
+      tryAllTransports: true,
+      retries: 0,
+      timeout: this.timeoutMs,
+    })
+    this.socket.on("connect", () => {
+      this.changed("connection")
+      void this.restoreSeat().catch((cause: unknown) => this.report(cause))
+    })
+    this.socket.on("disconnect", () => {
+      this.joinedSocketId = null
+      this.joining = null
+      this.changed("connection")
+    })
+    this.socket.on("connect_error", () => {
+      this.emit("notice", {
+        type: "connection-error",
+        message: "Could not connect to the game server; retrying.",
+      })
+    })
+    this.socket.on("room:snapshot", (snapshot) => {
+      if (!this.isJoined() || snapshot.code !== this.target?.code) return
+      this.applyRoom(snapshot)
+    })
+    this.socket.on("game:playerState", (snapshot) => {
+      if (!this.isJoined() || snapshot.playerId !== this.player?.id) return
+      const version = snapshot.roomVersion ?? 0
+      if (
+        version < (this.room?.version ?? 0) ||
+        version < (this.self?.roomVersion ?? 0)
+      )
+        return
+      this.self = structuredClone(snapshot)
+      this.changed("state")
+    })
+    this.socket.on("room:error", (error) =>
+      this.emit("notice", { type: "server-error", error })
+    )
+  }
+
+  private isJoined() {
+    return Boolean(
+      this.socket.connected &&
+      this.joinedSocketId &&
+      this.joinedSocketId === this.socket.id
+    )
+  }
+
+  private isSynchronized() {
+    return (
+      this.isJoined() &&
+      Boolean(this.room) &&
+      (!this.room!.game ||
+        (this.self?.playerId === this.player?.id &&
+          this.self?.roomVersion === this.room!.version))
+    )
+  }
+
+  status() {
+    const gift = this.room?.game?.lastGift
+    const trade = this.room?.game?.tradeOffer
+    const remainingMs = (expiresAt: number | null) =>
+      expiresAt === null ? null : Math.max(0, expiresAt - Date.now())
+    return structuredClone({
+      connected: this.socket.connected,
+      joined: this.isJoined(),
+      synchronized: this.isSynchronized(),
+      closed: this.closed,
+      watching: this.watching,
+      needsResync: this.uncertainAction !== null,
+      uncertainAction: this.uncertainAction,
+      pending: {
+        lastGift: gift
+          ? {
+              ...gift,
+              isMine: gift.playerId === this.player?.id,
+              remainingMs: remainingMs(gift.expiresAt),
+              eligibleRecipientIds:
+                gift.playerId === this.player?.id
+                  ? (this.self?.giftTargetPlayerIds ?? [])
+                  : [],
+            }
+          : null,
+        trade: trade
+          ? { ...trade, remainingMs: remainingMs(trade.expiresAt) }
+          : null,
+        roulette: this.room?.game?.pendingChoice ?? null,
+      },
+      playerId: this.player?.id ?? null,
+      myTurn:
+        this.isSynchronized() &&
+        Boolean(
+          this.player && this.room?.game?.turnPlayerId === this.player.id
+        ),
+      room: this.room,
+      self: this.self,
+    })
+  }
+
+  private changed(type: "connection" | "state") {
+    this.emit("change")
+    if (this.watching) this.emit("notice", { type, state: this.status() })
+  }
+
+  private report(cause: unknown) {
+    const error =
+      cause instanceof CliError
+        ? cause
+        : new CliError("connection-error", "Could not restore the room seat.")
+    this.emit("notice", {
+      type: "client-error",
+      error: { code: error.code, message: error.message },
+    })
+  }
+
+  private applyRoom(room: RoomSnapshot) {
+    if (this.room && room.version < this.room.version) return
+    this.room = structuredClone(room)
+    this.changed("state")
+  }
+
+  private waitFor(
+    predicate: () => boolean,
+    timeoutMs = this.timeoutMs
+  ): Promise<boolean> {
+    if (predicate()) return Promise.resolve(true)
+    return new Promise((resolve) => {
+      const finish = (value: boolean) => {
+        clearTimeout(timer)
+        this.off("change", check)
+        resolve(value)
+      }
+      const check = () => {
+        if (predicate()) finish(true)
+        else if (this.closed) finish(false)
+      }
+      const timer = setTimeout(() => finish(false), timeoutMs)
+      this.on("change", check)
+    })
+  }
+
+  private async restoreSeat() {
+    if (!this.target || !this.socket.connected || this.closed) return
+    if (this.joining) return this.joining
+    const socketId = this.socket.id
+    const target = this.target
+    const attempt = (async () => {
+      const result = await this.ack<JoinRoomResponse>((ack) => {
+        this.socket.timeout(this.timeoutMs).volatile.emit(
+          "room:join",
+          {
+            code: target.code,
+            playerName: target.name,
+            sessionId: this.sessionId,
+          },
+          ack
+        )
+      }, false)
+      if (this.closed || !this.socket.connected || this.socket.id !== socketId)
+        return
+      this.player = structuredClone(result.player)
+      this.room = structuredClone(result.room)
+      this.self =
+        result.playerGame?.playerId === this.player.id
+          ? structuredClone(result.playerGame)
+          : null
+      this.joinedSocketId = socketId ?? null
+      this.changed("state")
+    })()
+    this.joining = attempt
+    try {
+      await attempt
+    } catch (cause) {
+      if (
+        this.joining === attempt &&
+        this.socket.id === socketId &&
+        this.target === target &&
+        cause instanceof CliError
+      ) {
+        this.joinError = cause
+        // A rejected first join did not bind a seat. An unacknowledged join
+        // may have bound one, so retain its target for safe recovery.
+        if (!this.player && cause.code !== "connection-timeout")
+          this.target = null
+        this.changed("connection")
+      }
+      throw cause
+    } finally {
+      if (this.joining === attempt) this.joining = null
+    }
+  }
+
+  private ack<T>(send: (ack: Ack<T>) => void, mutation: boolean): Promise<T> {
+    return new Promise((resolve, reject) => {
+      let complete = false
+      const finish = (result?: CommandResult<T>, disconnected = false) => {
+        if (complete) return
+        complete = true
+        clearTimeout(timer)
+        this.socket.off("disconnect", onDisconnect)
+        if (!result) {
+          if (mutation) this.uncertainAction = this.currentAction
+          this.changed("connection")
+          reject(
+            new CliError(
+              mutation ? "outcome-unknown" : "connection-timeout",
+              mutation
+                ? "No confirmed acknowledgement. The action may have applied. Inspect status and explicitly resync before another mutation; do not replay it blindly."
+                : disconnected
+                  ? "Disconnected before room join completed."
+                  : "Timed out waiting for room join."
+            )
+          )
+        } else if (!result.ok)
+          reject(new CliError(result.error.code, result.error.message))
+        else resolve(result.data)
+      }
+      const onDisconnect = () => finish(undefined, true)
+      const timer = setTimeout(() => finish(), this.timeoutMs)
+      this.socket.once("disconnect", onDisconnect)
+      // Never put mutations in Socket.IO's offline send buffer or retry queue.
+      send((_cause, result) => finish(result))
+    })
+  }
+
+  private currentAction = ""
+
+  /** Calls are serialized, including failures. Unknown outcomes block queued mutations. */
+  execute(input: unknown): Promise<unknown> {
+    let command: CliCommand
+    try {
+      command = parseCommand(input)
+    } catch (cause) {
+      return Promise.reject(cause)
+    }
+    const task = this.queue.then(() => this.dispatch(command))
+    this.queue = task.catch(() => {})
+    return task
+  }
+
+  private async join(code: string, name: string) {
+    const target = { code: code.toUpperCase(), name: name.trim() }
+    if (
+      this.target &&
+      (this.target.code !== target.code || this.target.name !== target.name)
+    )
+      throw new CliError(
+        "seat-locked",
+        "This process owns one seat. Quit and start another process for a different room or name."
+      )
+    this.target ??= target
+    this.joinError = null
+    if (this.socket.connected) await this.restoreSeat()
+    else this.socket.connect()
+    const completed = await this.waitFor(
+      () => this.isJoined() || this.joinError !== null
+    )
+    // Connection establishment can consume part of the outer wait. Finish the
+    // active join attempt before returning, so a resync never reuses its ack.
+    if (!completed && this.joining) await this.joining
+    if (this.joinError) throw this.joinError
+    if (!completed && !this.isJoined())
+      throw new CliError(
+        "join-timeout",
+        "Room join did not complete. Check connection notices, then resync or retry joining the same seat."
+      )
+    return this.status()
+  }
+
+  private async dispatch(command: CliCommand): Promise<unknown> {
+    if (command.action === "help") return { commands: COMMANDS }
+    if (command.action === "status") return this.status()
+    if (command.action === "quit") {
+      this.close()
+      return this.status()
+    }
+    if (this.closed)
+      throw new CliError("closed", "This client has been closed.")
+    if (command.action === "watch") {
+      this.watching = command.enabled
+      return this.status()
+    }
+    if (command.action === "join") return this.join(command.code, command.name)
+    if (command.action === "create") {
+      if (this.target)
+        throw new CliError(
+          "seat-locked",
+          "This process already has a room. Quit to create another."
+        )
+      let result: CommandResult<CreateRoomResponse>
+      try {
+        const response = await fetch(`${this.serverUrl}/rooms`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            playerName: command.name.trim(),
+            sessionId: this.sessionId,
+          }),
+          signal: AbortSignal.timeout(this.timeoutMs),
+        })
+        result = (await response.json()) as CommandResult<CreateRoomResponse>
+      } catch {
+        // No safe way to discover a created room after losing the HTTP reply.
+        this.close()
+        throw new CliError(
+          "create-outcome-unknown",
+          "Room creation was not confirmed. No retry was sent; this client is closed."
+        )
+      }
+      if (!result.ok)
+        throw new CliError(result.error.code, result.error.message)
+      return this.join(result.data.room.code, command.name)
+    }
+    if (command.action === "resync") {
+      if (!this.target)
+        throw new CliError("not-joined", "Join or create a room first.")
+      this.joinedSocketId = null
+      await this.join(this.target.code, this.target.name)
+      this.uncertainAction = null
+      this.changed("state")
+      return this.status()
+    }
+    if (!this.isJoined())
+      throw new CliError(
+        "not-connected",
+        "Wait for the seat to reconnect, or resync. Commands are not buffered offline."
+      )
+    if (this.uncertainAction)
+      throw new CliError(
+        "resync-required",
+        "The previous action has an unknown outcome. Inspect status and explicitly resync first."
+      )
+    if (
+      !this.isSynchronized() &&
+      !(await this.waitFor(() => this.isSynchronized()))
+    )
+      throw new CliError(
+        "stale-state",
+        "Private and public snapshots are not synchronized. Resync first."
+      )
+    if (
+      command.expectedVersion !== undefined &&
+      command.expectedVersion !== this.room?.version
+    )
+      throw new CliError(
+        "stale-version",
+        "Room state changed before this command was sent. Inspect status before choosing again."
+      )
+    this.assertOwnCards(command)
+    this.currentAction = command.action
+    const room = await this.ack<RoomSnapshot>(
+      (ack) => this.sendCommand(command, ack),
+      true
+    )
+    this.applyRoom(room)
+    // An acknowledgement confirms the action even if its private snapshot is delayed.
+    await this.waitFor(() => this.isSynchronized() || !this.isJoined())
+    return { confirmed: true, state: this.status() }
+  }
+
+  private assertOwnCards(command: CliCommand) {
+    const handIds = new Set((this.self?.hand ?? []).map((card) => card.id))
+    if (command.action === "gift") {
+      const giftIds = new Set(
+        (this.self?.lastGiftCards ?? []).map((card) => card.id)
+      )
+      if (command.cardId && !giftIds.has(command.cardId))
+        throw new CliError(
+          "card-not-owned",
+          "Choose a card from your own frozen gift hand."
+        )
+      return
+    }
+    const cards =
+      command.action === "play"
+        ? [...command.cardIds, ...(command.discardCardIds ?? [])]
+        : command.action === "stage"
+          ? command.cardIds
+          : command.action === "trade-offer" ||
+              command.action === "trade-respond"
+            ? command.cardId
+              ? [command.cardId]
+              : []
+            : []
+    if (cards.some((id) => !handIds.has(id)))
+      throw new CliError(
+        "card-not-owned",
+        "Choose card IDs from your own current hand."
+      )
+  }
+
+  private sendCommand(command: CliCommand, ack: Ack<RoomSnapshot>) {
+    const socket = this.socket.timeout(this.timeoutMs).volatile
+    switch (command.action) {
+      case "ready":
+        socket.emit("room:setReady", { ready: command.ready }, ack)
+        break
+      case "start":
+        socket.emit("room:start", ack)
+        break
+      case "restart":
+        socket.emit("room:restart", ack)
+        break
+      case "play": {
+        const {
+          action: _action,
+          id: _id,
+          expectedVersion: _version,
+          ...input
+        } = command
+        socket.emit("game:playCards", input, ack)
+        break
+      }
+      case "stage": {
+        const {
+          action: _action,
+          id: _id,
+          expectedVersion: _version,
+          ...input
+        } = command
+        socket.emit("game:stageCards", input, ack)
+        break
+      }
+      case "draw":
+        socket.emit("game:drawOne", ack)
+        break
+      case "pass":
+        socket.emit("game:endTurn", ack)
+        break
+      case "penalty":
+        socket.emit("game:takeDrawPenalty", ack)
+        break
+      case "roulette":
+        socket.emit("game:drawRouletteCard", ack)
+        break
+      case "catch-uno":
+        socket.emit(
+          "game:catchUno",
+          { targetPlayerId: command.targetPlayerId },
+          ack
+        )
+        break
+      case "trade-offer":
+        socket.emit(
+          "game:offerBlindTrade",
+          { cardId: command.cardId, targetPlayerId: command.targetPlayerId },
+          ack
+        )
+        break
+      case "trade-respond":
+        socket.emit(
+          "game:respondBlindTrade",
+          {
+            offerId: command.offerId,
+            accept: command.accept,
+            cardId: command.cardId,
+          },
+          ack
+        )
+        break
+      case "trade-cancel":
+        socket.emit("game:cancelBlindTrade", { offerId: command.offerId }, ack)
+        break
+      case "gift":
+        socket.emit(
+          "game:resolveLastGift",
+          {
+            giftId: command.giftId,
+            cardId: command.cardId,
+            targetPlayerId: command.targetPlayerId,
+          },
+          ack
+        )
+        break
+      default:
+        throw new CliError("unknown-action", "Unsupported gameplay action.")
+    }
+  }
+
+  close() {
+    if (this.closed) return
+    this.closed = true
+    this.joinedSocketId = null
+    this.socket.disconnect()
+    this.changed("connection")
+  }
+}

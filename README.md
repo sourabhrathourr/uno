@@ -6,8 +6,13 @@ This is the foundation for a realtime UNO No Mercy app.
 
 - `apps/web`: TanStack Start frontend.
 - `apps/server`: single Node.js + Socket.IO authoritative game server.
+- `apps/cli`: persistent JSON Lines game client for terminal tools and bots. See [CLI usage and gameplay coverage](apps/cli/README.md).
 - `packages/game`: shared game/domain types and room protocol.
 - `packages/ui`: shared React UI components, including the UNO card components.
+
+Web builds use Nitro: local Node builds emit `.output`, while Vercel builds emit
+the Build Output API in `.vercel/output`, including the SSR function and routing.
+Turbo caches both directories so cache hits restore the complete deployment.
 
 ## Local development
 

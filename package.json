@@ -9,6 +9,7 @@
     "format": "turbo format",
     "test": "vitest run",
     "test:watch": "vitest",
+    "cli": "pnpm --filter @workspace/cli start",
     "typecheck": "turbo typecheck"
   },
   "devDependencies": {
