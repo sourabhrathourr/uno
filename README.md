@@ -119,8 +119,10 @@ Desktop keyboard controls are available while a game is open:
 | Escape     | Close the top panel, or clear the selection          |
 | ?          | Show the compact shortcut guide                      |
 
-Game shortcuts require your turn and synchronized state. They pause in text
-fields, IME composition, dialogs, repeated keys and modifier/browser shortcuts.
-Tab and Shift+Tab retain normal focus navigation. Pending actions block duplicate
-submissions; an uncertain acknowledgement requires refreshing the seat. Mobile
-keeps its touch controls. The browser title shows whose turn it is.
+Space, D and Enter require your turn and synchronized state. Hand navigation,
+chat, Escape and the guide remain available off turn. Shortcuts pause in text
+fields, IME composition, dialogs and held repeats; browser modifier combinations
+are preserved. Tab and Shift+Tab retain normal focus navigation. Pending actions
+block duplicate submissions; an uncertain acknowledgement requires refreshing
+the seat. Mobile keeps its touch controls. The browser title shows whose turn
+it is.
