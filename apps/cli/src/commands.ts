@@ -137,5 +137,13 @@ export function parseCommand(input: unknown): CliCommand {
     if (!Object.hasOwn(data, key))
       throw new CliError("invalid-command", `Missing field: ${key}.`)
   }
+  if (
+    data.action === "gift" &&
+    Object.hasOwn(data, "cardId") !== Object.hasOwn(data, "targetPlayerId")
+  )
+    throw new CliError(
+      "invalid-command",
+      "Send cardId and targetPlayerId together, or omit both to skip."
+    )
   return structuredClone(data) as CliCommand
 }

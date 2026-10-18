@@ -21,6 +21,23 @@ describe("CLI command boundary", () => {
   ])("rejects malformed or unavailable command %j", (input) => {
     expect(() => parseCommand(input)).toThrow()
   })
+  it.each([{ cardId: "card" }, { targetPlayerId: "recipient" }])(
+    "rejects a partial gift %j before dispatch",
+    (fields) => {
+      expect(() =>
+        parseCommand({ action: "gift", giftId: "gift", ...fields })
+      ).toThrowError(expect.objectContaining({ code: "invalid-command" }))
+    }
+  )
+  it.each([{}, { cardId: "card", targetPlayerId: "recipient" }])(
+    "accepts a complete gift or explicit skip %j",
+    (fields) => {
+      const input = { action: "gift", giftId: "gift", ...fields }
+      const parsed = parseCommand(input)
+      expect(parsed).toEqual(input)
+      expect(parsed).not.toBe(input)
+    }
+  )
   it("keeps complete atomic play decisions without accepting extra fields", () => {
     const input = {
       id: 4,

@@ -97,7 +97,7 @@ describe("persistent client against the real room manager", () => {
     const host = f.client(700)
     await host.execute({ action: "create", name: "Host" })
     const code = host.status().room!.code
-    const a = f.client(150)
+    const a = f.client(700)
     f.controls.dropAckFor = "room:join"
     await expect(
       a.execute({ action: "join", code, name: "Recover me" })
