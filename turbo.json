@@ -6,7 +6,7 @@
       "dependsOn": ["^build"],
       "env": ["VITE_SOCKET_URL", "EXPO_PUBLIC_SOCKET_URL"],
       "inputs": ["$TURBO_DEFAULT$", ".env*"],
-      "outputs": [".output/**"]
+      "outputs": [".output/**", ".vercel/output/**"]
     },
     "lint": {
       "dependsOn": ["^lint"]

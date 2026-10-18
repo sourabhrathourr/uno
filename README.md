@@ -10,6 +10,10 @@ This is the foundation for a realtime UNO No Mercy app.
 - `packages/game`: shared game/domain types and room protocol.
 - `packages/ui`: shared React UI components, including the UNO card components.
 
+Web builds use Nitro: local Node builds emit `.output`, while Vercel builds emit
+the Build Output API in `.vercel/output`, including the SSR function and routing.
+Turbo caches both directories so cache hits restore the complete deployment.
+
 ## Local development
 
 Run both the web app and Socket.IO server from the repo root:
