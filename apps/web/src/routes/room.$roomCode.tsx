@@ -2715,20 +2715,33 @@ function GameTable({
                             ? "Pass turn"
                             : "End turn"}
                       </Button>
-                      <span className="hidden text-[10px] text-white/45 lg:inline">
-                        D: draw / take penalty · Enter: play / pass{" "}
-                        <button
-                          type="button"
-                          onClick={() => setShortcutGuideOpen(true)}
-                          className="underline"
-                          aria-keyshortcuts="Shift+/"
-                        >
-                          Shortcuts (?)
-                        </button>
-                      </span>
                     </div>
                   )}
                 </div>
+
+                {!isSelfEliminated && (
+                  <div className="mt-1 hidden items-center justify-end gap-1.5 text-[11px] leading-5 text-white/45 lg:flex">
+                    <span>
+                      <kbd className="font-sans text-white/65">D</kbd>{" "}
+                      {playerGame?.canTakeDrawPenalty ? "Take penalty" : "Draw"}
+                    </span>
+                    <span aria-hidden="true">·</span>
+                    <span>
+                      <kbd className="font-sans text-white/65">Enter</kbd>{" "}
+                      {canPassTurn ? "Pass" : "Play / pass"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShortcutGuideOpen(true)}
+                      className="inline-flex size-5 items-center justify-center rounded-full text-white/60 transition-colors hover:bg-white/10 hover:text-white/85 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/70"
+                      aria-label="Show keyboard shortcuts"
+                      aria-keyshortcuts="Shift+/"
+                      title="Keyboard shortcuts (?)"
+                    >
+                      ?
+                    </button>
+                  </div>
+                )}
 
                 {isSelfEliminated &&
                   game?.stagedPlay?.playerId === spectatingPlayerId && (
