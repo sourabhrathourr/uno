@@ -30,7 +30,12 @@ export async function fixture() {
   const clients: UnoClient[] = []
   const browsers: ReturnType<typeof connectBrowser>[] = []
   const received: string[] = []
-  const controls = { dropAckFor: "", delayAckMs: 0 }
+  const controls = {
+    dropAckFor: "",
+    delayAckMs: 0,
+    holdPrivate: false,
+    disconnectFor: "",
+  }
 
   function publish(code: string, room?: RoomSnapshot) {
     const result = manager.getRoom(code)
@@ -40,7 +45,7 @@ export async function fixture() {
     for (const socket of io.sockets.sockets.values()) {
       if (socket.data.roomCode !== code) continue
       const state = manager.getPlayerGame(code, socket.data.playerId)
-      if (state) socket.emit("game:playerState", state)
+      if (state && !controls.holdPrivate) socket.emit("game:playerState", state)
     }
   }
   io.on("connection", (socket) => {
@@ -81,6 +86,7 @@ export async function fixture() {
         else ack(result)
       }
       if (result.ok) publish(result.data.code, result.data)
+      if (controls.disconnectFor === event) socket.conn.close()
     }
     socket.on("room:setReady", (input, ack) =>
       run(
@@ -146,7 +152,7 @@ export async function fixture() {
   await once(http, "listening")
   const url = `http://127.0.0.1:${(http.address() as { port: number }).port}`
   function client(timeoutMs = 1_000) {
-    const next = new UnoClient({ serverUrl: url, timeoutMs })
+    const next = new UnoClient({ serverUrl: url, timeoutMs, proxyEnv: {} })
     clients.push(next)
     return next
   }
@@ -183,6 +189,13 @@ export async function fixture() {
     browser,
     publish,
     game,
+    bumpVersion(code: string) {
+      const room = (
+        manager as unknown as { rooms: Map<string, { version: number }> }
+      ).rooms.get(code)!
+      room.version++
+      publish(code)
+    },
     async close() {
       clients.forEach((client) => client.close())
       browsers.forEach((socket) => socket.disconnect())

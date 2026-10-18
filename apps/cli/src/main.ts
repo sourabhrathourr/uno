@@ -44,6 +44,7 @@ async function main() {
   client.on("notice", write)
   const input = createInterface({ input: process.stdin, crlfDelay: Infinity })
   input.pause()
+  const pending = new Set<Promise<void>>()
   let stopping = false
   const stop = () => {
     if (stopping) return
@@ -119,8 +120,13 @@ async function main() {
         })
         continue
       }
-      await run(value)
+      // The client serializes mutations; keep stdin responsive while a wait is pending.
+      const task = run(value)
+      pending.add(task)
+      void task.finally(() => pending.delete(task))
     }
+    if (!stopping) client.cancelWaits()
+    await Promise.all(pending)
   } finally {
     stop()
     process.off("SIGINT", stop)
