@@ -1,3 +1,8 @@
+import {
+  CHAT_REACTIONS,
+  type ChatTypingPlayer,
+  type ReactToChatMessageInput,
+} from "@workspace/game"
 import { randomBytes, randomUUID } from "node:crypto"
 
 import {
@@ -66,6 +71,12 @@ import {
 } from "@workspace/game"
 
 type ManagedRoom = RoomSnapshot & {
+  chatTyping: Map<
+    string,
+    { expiresAt: number; timer: ReturnType<typeof setTimeout> }
+  >
+  lastReactionAt: Map<string, number>
+  lastTypingAt: Map<string, number>
   gameState: GameState | null
   matchStartedAt: string | null
   matchFinishedAt: string | null
@@ -93,6 +104,7 @@ type ResolvedGif = {
 type RoomManagerOptions = {
   resolveGif?: (provider: GifProvider, id: string) => ResolvedGif | null
   onRoomUpdated?: (code: string, room: RoomSnapshot) => void
+  onChatTypingUpdated?: (code: string, players: ChatTypingPlayer[]) => void
   onRoomExpired?: (code: string) => void
 }
 
@@ -113,12 +125,14 @@ export class RoomManager {
   >()
   private readonly resolveGif?: RoomManagerOptions["resolveGif"]
   private readonly onRoomUpdated?: RoomManagerOptions["onRoomUpdated"]
+  private readonly onChatTypingUpdated?: RoomManagerOptions["onChatTypingUpdated"]
   private readonly onRoomExpired?: RoomManagerOptions["onRoomExpired"]
 
   constructor(options: RoomManagerOptions = {}) {
     this.resolveGif = options.resolveGif
     this.onRoomUpdated = options.onRoomUpdated
     this.onRoomExpired = options.onRoomExpired
+    this.onChatTypingUpdated = options.onChatTypingUpdated
   }
 
   createRoom(input: CreateRoomRequest): CommandResult<CreateRoomResponse> {
@@ -163,6 +177,9 @@ export class RoomManager {
       houseRules,
       game: null,
       gameState: null,
+      chatTyping: new Map(),
+      lastReactionAt: new Map(),
+      lastTypingAt: new Map(),
       matchStartedAt: null,
       matchFinishedAt: null,
       version: 1,
@@ -532,6 +549,8 @@ export class RoomManager {
       return fail("player-not-found", "You are not seated in this room.")
     }
 
+    // A send attempt ends composition even if content/rate validation rejects it.
+    this.clearChatTyping(room, playerId)
     const nowMs = Date.now()
     const lastSentAt = room.lastChatAtByPlayerId.get(playerId) ?? 0
     if (nowMs - lastSentAt < CHAT_RATE_LIMIT_MS) {
@@ -592,6 +611,20 @@ export class RoomManager {
       )
     }
 
+    if (
+      input.replyToMessageId !== undefined &&
+      (channel !== "public" ||
+        typeof input.replyToMessageId !== "string" ||
+        !room.chatMessages.some(
+          (message) =>
+            message.id === input.replyToMessageId &&
+            message.channel === "public"
+        ))
+    )
+      return fail(
+        "reply-not-found",
+        "Reply to a public message still in this room."
+      )
     const now = new Date(nowMs).toISOString()
     const message: ChatMessage = {
       id: randomUUID(),
@@ -604,6 +637,7 @@ export class RoomManager {
       body: prepared.data.body,
       mentionPlayerIds,
       label: prepared.data.label,
+      replyToMessageId: input.replyToMessageId,
       createdAt: now,
     }
 
@@ -611,9 +645,115 @@ export class RoomManager {
       -CHAT_HISTORY_LIMIT
     )
     room.lastChatAtByPlayerId.set(playerId, nowMs)
+    this.clearChatTyping(room, playerId)
     touch(room, now)
 
     return ok(snapshot(room))
+  }
+
+  reactToChatMessage(
+    code: string,
+    playerId: string,
+    input: ReactToChatMessageInput
+  ): CommandResult<RoomSnapshot> {
+    const room = this.getManagedRoom(code)
+    if (!room) return fail("room-not-found", "That room code does not exist.")
+    if (!findPlayer(room, playerId)?.connected)
+      return fail("player-not-found", "Join this room before reacting.")
+    if (
+      !input ||
+      typeof input.messageId !== "string" ||
+      typeof input.active !== "boolean" ||
+      !CHAT_REACTIONS.includes(input.emoji as (typeof CHAT_REACTIONS)[number])
+    )
+      return fail(
+        "invalid-chat-reaction",
+        "Choose a supported reaction and active state."
+      )
+    const message = room.chatMessages.find(
+      (message) =>
+        message.id === input.messageId && message.channel === "public"
+    )
+    if (!message)
+      return fail(
+        "message-not-found",
+        "Choose a public message still in this room."
+      )
+    const reactions = message.reactions ?? []
+    const existing = reactions.find(
+      (reaction) => reaction.emoji === input.emoji
+    )
+    if (Boolean(existing?.playerIds.includes(playerId)) === input.active)
+      return ok(snapshot(room))
+    const now = Date.now()
+    if (now - (room.lastReactionAt.get(playerId) ?? 0) < 300)
+      return fail("reaction-too-fast", "Give reactions a beat.")
+    if (
+      input.active &&
+      reactions.filter((reaction) => reaction.playerIds.includes(playerId))
+        .length >= 3
+    )
+      return fail("reaction-limit", "Use up to three reactions per message.")
+    if (input.active) {
+      if (existing) existing.playerIds.push(playerId)
+      else reactions.push({ emoji: input.emoji, playerIds: [playerId] })
+    } else if (existing)
+      existing.playerIds = existing.playerIds.filter((id) => id !== playerId)
+    message.reactions = reactions.filter(
+      (reaction) => reaction.playerIds.length
+    )
+    room.lastReactionAt.set(playerId, now)
+    touch(room)
+    return ok(snapshot(room))
+  }
+
+  getChatTyping(code: string): ChatTypingPlayer[] {
+    const room = this.getManagedRoom(code)
+    return room
+      ? [...room.chatTyping]
+          .filter(([, state]) => state.expiresAt > Date.now())
+          .map(([playerId, state]) => ({
+            playerId,
+            expiresAt: state.expiresAt,
+          }))
+      : []
+  }
+
+  setChatTyping(
+    code: string,
+    playerId: string,
+    typing: boolean
+  ): CommandResult<null> {
+    const room = this.getManagedRoom(code)
+    if (!room) return fail("room-not-found", "That room code does not exist.")
+    if (!findPlayer(room, playerId)?.connected)
+      return fail("player-not-found", "Join this room before typing.")
+    if (typeof typing !== "boolean")
+      return fail("invalid-typing", "Send a typing boolean.")
+    if (!typing) {
+      this.clearChatTyping(room, playerId)
+      return ok(null)
+    }
+    const current = room.chatTyping.get(playerId)
+    // At most one refresh/broadcast per second, with a three-second lease.
+    if (Date.now() - (room.lastTypingAt.get(playerId) ?? -Infinity) < 1_000)
+      return ok(null)
+    room.lastTypingAt.set(playerId, Date.now())
+    if (current) clearTimeout(current.timer)
+    const expiresAt = Date.now() + 3_000
+    const timer = setTimeout(() => this.clearChatTyping(room, playerId), 3_000)
+    timer.unref?.()
+    room.chatTyping.set(playerId, { expiresAt, timer })
+    this.onChatTypingUpdated?.(room.code, this.getChatTyping(room.code))
+    return ok(null)
+  }
+
+  private clearChatTyping(room: ManagedRoom, playerId: string) {
+    const current = room.chatTyping.get(playerId)
+    if (!current) return
+    clearTimeout(current.timer)
+    room.chatTyping.delete(playerId)
+    this.onChatTypingUpdated?.(room.code, this.getChatTyping(room.code))
   }
 
   startVoteKick(
@@ -1159,6 +1299,7 @@ export class RoomManager {
     if (connectionIds.size > 0) return snapshot(room)
 
     room.connectionIdsByPlayerId.delete(playerId)
+    this.clearChatTyping(room, playerId)
 
     const player = findPlayer(room, playerId)
     if (player) {
@@ -1301,6 +1442,8 @@ export class RoomManager {
       clearTimeout(timer)
     }
     room.voteKickTimersById.clear()
+    for (const state of room.chatTyping.values()) clearTimeout(state.timer)
+    room.chatTyping.clear()
     this.rooms.delete(code)
     this.onRoomExpired?.(code)
   }
@@ -1658,6 +1801,10 @@ function cloneChatMessage(message: ChatMessage): ChatMessage {
   return {
     ...message,
     mentionPlayerIds: [...message.mentionPlayerIds],
+    reactions: message.reactions?.map((reaction) => ({
+      ...reaction,
+      playerIds: [...reaction.playerIds],
+    })),
     voteKick: message.voteKick
       ? projectVoteKickPoll(message.voteKick)
       : undefined,

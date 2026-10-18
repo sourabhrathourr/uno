@@ -13,6 +13,7 @@ export type SendChatMessageInput = {
   body: string
   gifProvider?: GifProvider
   mentionPlayerIds?: string[]
+  replyToMessageId?: string
 }
 
 export type ChatMessage = {
@@ -25,6 +26,8 @@ export type ChatMessage = {
   kind: ChatMessageKind
   body: string
   mentionPlayerIds: string[]
+  replyToMessageId?: string
+  reactions?: ChatReaction[]
   label?: string
   voteKick?: VoteKickPoll
   createdAt: string
@@ -124,3 +127,13 @@ export const CHAT_GIFS = [
     url: "https://media.giphy.com/media/111ebonMs90YLu/giphy.gif",
   },
 ] as const satisfies readonly ChatGifPreset[]
+
+export const CHAT_REACTIONS = ["👍", "❤️", "😂", "🔥", "😮", "😢"] as const
+export type ChatReaction = { emoji: string; playerIds: string[] }
+export type ReactToChatMessageInput = {
+  messageId: string
+  emoji: string
+  active: boolean
+}
+export type ChatTypingPlayer = { playerId: string; expiresAt: number }
+export type SetChatTypingInput = { typing: boolean }
