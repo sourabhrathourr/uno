@@ -933,3 +933,24 @@ it("never crosses into a later roulette episode when a completed acknowledgement
   expect(game.drawPile.map((c) => c.id)).toEqual(["must-stay"])
   expect(b.status().pending.roulette?.drawnCards).toEqual([])
 })
+
+it("quit cancels room creation without allowing a late response to reopen the seat", async () => {
+  f.controls.createDelayMs = 100
+  const client = f.client(700)
+  const creating = client.execute({ action: "create", name: "Closing host" })
+  // Capture the rejection immediately so it cannot become an unhandled promise.
+  const outcome = creating.then(
+    () => null,
+    (cause) => cause
+  )
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  await client.execute({ action: "quit" })
+  expect(await outcome).toMatchObject({ code: "create-outcome-unknown" })
+  await new Promise((resolve) => setTimeout(resolve, 150))
+  expect(client.status()).toMatchObject({
+    closed: true,
+    connected: false,
+    joined: false,
+  })
+  expect(f.received).not.toContain("room:join")
+})

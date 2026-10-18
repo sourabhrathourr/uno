@@ -20,6 +20,10 @@ export async function fixture() {
   const http = createServer(async (req, res) => {
     const chunks: Buffer[] = []
     for await (const chunk of req) chunks.push(Buffer.from(chunk))
+    if (controls.createDelayMs)
+      await new Promise((resolve) =>
+        setTimeout(resolve, controls.createDelayMs)
+      )
     const result = manager.createRoom(
       JSON.parse(Buffer.concat(chunks).toString())
     )
@@ -31,6 +35,7 @@ export async function fixture() {
   const browsers: ReturnType<typeof connectBrowser>[] = []
   const received: string[] = []
   const controls = {
+    createDelayMs: 0,
     dropAckFor: "",
     delayAckMs: 0,
     holdPrivate: false,
