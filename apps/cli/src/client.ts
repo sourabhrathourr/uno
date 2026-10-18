@@ -44,6 +44,7 @@ export function validateServerUrl(value: string): string {
 export class UnoClient extends EventEmitter {
   private readonly socket: GameSocket
   private readonly sessionId = randomUUID()
+  private readonly lifetime = new AbortController()
   private readonly serverUrl: string
   private readonly timeoutMs: number
   private readonly proxyAgent?: HttpsProxyAgent<string>
@@ -344,6 +345,8 @@ export class UnoClient extends EventEmitter {
   }
 
   private async join(code: string, name: string) {
+    if (this.closed)
+      throw new CliError("closed", "This client has been closed.")
     const target = { code: code.toUpperCase(), name: name.trim() }
     if (
       this.target &&
@@ -472,7 +475,10 @@ export class UnoClient extends EventEmitter {
           method: "POST",
           agent: this.proxyAgent,
           headers: { "Content-Type": "application/json" },
-          signal: AbortSignal.timeout(this.timeoutMs),
+          signal: AbortSignal.any([
+            this.lifetime.signal,
+            AbortSignal.timeout(this.timeoutMs),
+          ]),
         },
         (response) => {
           const chunks: Buffer[] = []
@@ -754,6 +760,7 @@ export class UnoClient extends EventEmitter {
   close() {
     if (this.closed) return
     this.closed = true
+    this.lifetime.abort()
     this.joinedSocketId = null
     this.socket.disconnect()
     this.proxyAgent?.destroy()
