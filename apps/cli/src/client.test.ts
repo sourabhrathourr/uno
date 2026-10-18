@@ -734,13 +734,20 @@ async function roulette(handSize = 2) {
 
 it("resolves roulette sequentially, waits for each ack, and stops exactly on the chosen color", async () => {
   const { b, game } = await roulette()
-  f.controls.delayAckMs = 100
+  f.controls.holdAckFor = "game:drawRouletteCard"
   const result = b.execute({ action: "resolve-roulette" })
   await expect
-    .poll(() => f.received.filter((e) => e === "game:drawRouletteCard").length)
+    .poll(() => b.status().pending.roulette?.drawnCards.length)
     .toBe(1)
-  // Server snapshots arrive before delayed acknowledgements. They cannot authorize the next reveal.
-  expect(b.status().pending.roulette?.drawnCards).toHaveLength(1)
+  await synced(b)
+  expect(f.received.filter((e) => e === "game:drawRouletteCard")).toHaveLength(
+    1
+  )
+  expect(f.heldAcks).toHaveLength(1)
+  f.releaseAck()
+  await expect.poll(() => b.status().pending.roulette).toBeNull()
+  expect(f.heldAcks).toHaveLength(1)
+  f.releaseAck()
   expect(await result).toMatchObject({
     complete: true,
     confirmedDraws: 2,

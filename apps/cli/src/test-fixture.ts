@@ -16,6 +16,8 @@ import { UnoClient } from "./client"
 export async function fixture() {
   const manager = new RoomManager({
     onRoomUpdated: (code, room) => publish(code, room),
+    onChatTypingUpdated: (code, players) =>
+      io.to(code).emit("room:chatTyping", players),
   })
   const http = createServer(async (req, res) => {
     const chunks: Buffer[] = []
@@ -37,11 +39,13 @@ export async function fixture() {
   const controls = {
     createDelayMs: 0,
     dropAckFor: "",
+    holdAckFor: "",
     delayAckMs: 0,
     holdPrivate: false,
     disconnectFor: "",
   }
 
+  const heldAcks: Array<() => void> = []
   function publish(code: string, room?: RoomSnapshot) {
     const result = manager.getRoom(code)
     if (!room && !result.ok) throw new Error("Missing test room")
@@ -75,6 +79,7 @@ export async function fixture() {
             ...joined.data,
             room,
             playerGame: manager.getPlayerGame(code, joined.data.player.id),
+            chatTyping: manager.getChatTyping(code),
           },
         })
       publish(code, room)
@@ -86,13 +91,37 @@ export async function fixture() {
     ) {
       const result = command(socket.data.roomCode, socket.data.playerId)
       if (controls.dropAckFor !== event) {
-        if (controls.delayAckMs)
+        if (controls.holdAckFor === event) heldAcks.push(() => ack(result))
+        else if (controls.delayAckMs)
           setTimeout(() => ack(result), controls.delayAckMs)
         else ack(result)
       }
       if (result.ok) publish(result.data.code, result.data)
       if (controls.disconnectFor === event) socket.conn.close()
     }
+    socket.on("room:sendChatMessage", (input, ack) =>
+      run(
+        "room:sendChatMessage",
+        (code, id) => manager.sendChatMessage(code, id, input),
+        ack
+      )
+    )
+    socket.on("room:reactToChatMessage", (input, ack) =>
+      run(
+        "room:reactToChatMessage",
+        (code, id) => manager.reactToChatMessage(code, id, input),
+        ack
+      )
+    )
+    socket.on("room:setChatTyping", (input, ack) =>
+      ack(
+        manager.setChatTyping(
+          socket.data.roomCode,
+          socket.data.playerId,
+          input.typing
+        )
+      )
+    )
     socket.on("room:setReady", (input, ack) =>
       run(
         "room:setReady",
@@ -190,6 +219,8 @@ export async function fixture() {
     io,
     controls,
     received,
+    heldAcks,
+    releaseAck: () => heldAcks.shift()?.(),
     client,
     browser,
     publish,

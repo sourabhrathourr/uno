@@ -7,6 +7,7 @@ import { HttpsProxyAgent } from "https-proxy-agent"
 import { proxyForServer } from "./proxy"
 import type { Socket } from "socket.io-client"
 import type {
+  ChatTypingPlayer,
   ClientToServerEvents,
   CommandResult,
   CreateRoomResponse,
@@ -62,6 +63,24 @@ export class UnoClient extends EventEmitter {
   private connectionEpoch = 0
   private waitingForAction = false
   private waitEpoch = 0
+  private chatWatching = true
+  private seenChat: Set<string> | null = null
+  private mentions = new Set<string>()
+  private typingPlayers: ChatTypingPlayer[] = []
+  private macroActive = false
+  private priorityChat: Array<{
+    command: CliCommand
+    queuedAt: number
+    resolve: (value: unknown) => void
+    reject: (cause: unknown) => void
+  }> = []
+  private metrics: Array<{
+    action: string
+    queueMs?: number
+    ackMs?: number
+    syncMs?: number
+    totalMs?: number
+  }> = []
 
   constructor(options: {
     serverUrl: string
@@ -95,9 +114,22 @@ export class UnoClient extends EventEmitter {
     })
     this.socket.on("disconnect", () => {
       this.connectionEpoch++
+      this.typingPlayers = []
       this.joinedSocketId = null
       this.joining = null
       this.changed("connection")
+    })
+    this.socket.on("room:chatTyping", (players) => {
+      if (!this.isJoined()) return
+      const ids = new Set(this.room?.players.map((player) => player.id))
+      this.typingPlayers = players.filter(
+        (player) => ids.has(player.playerId) && player.expiresAt > Date.now()
+      )
+      if (this.chatWatching)
+        this.emit("notice", {
+          type: "chat-typing",
+          players: structuredClone(this.typingPlayers),
+        })
     })
     this.socket.on("connect_error", () => {
       this.emit("notice", {
@@ -162,6 +194,13 @@ export class UnoClient extends EventEmitter {
       synchronized: this.isSynchronized(),
       closed: this.closed,
       watching: this.watching,
+      chat: {
+        watching: this.chatWatching,
+        pendingMentionIds: [...this.mentions],
+        typing: this.typingPlayers.filter(
+          (player) => player.expiresAt > Date.now()
+        ),
+      },
       needsResync: this.uncertainAction !== null,
       uncertainAction: this.uncertainAction,
       pending: {
@@ -215,7 +254,55 @@ export class UnoClient extends EventEmitter {
   private applyRoom(room: RoomSnapshot) {
     if (this.room && room.version < this.room.version) return
     this.room = structuredClone(room)
+    this.observeChat()
     this.changed("state")
+  }
+
+  private observeChat() {
+    const messages = this.room?.chatMessages ?? []
+    if (!this.seenChat) {
+      this.seenChat = new Set(messages.map((message) => message.id))
+      return
+    }
+    for (const message of messages) {
+      if (this.seenChat.has(message.id)) continue
+      this.seenChat.add(message.id)
+      const mentioned =
+        message.playerId !== this.player?.id &&
+        message.mentionPlayerIds.includes(this.player?.id ?? "")
+      if (mentioned) this.mentions.add(message.id)
+      if (this.chatWatching)
+        this.emit("notice", {
+          type: "chat-message",
+          message: structuredClone(message),
+          mentioned,
+        })
+    }
+    const retained = new Set(messages.map((message) => message.id))
+    this.seenChat = retained
+    this.mentions = new Set([...this.mentions].filter((id) => retained.has(id)))
+  }
+
+  private readChat(command: Extract<CliCommand, { action: "chat-read" }>) {
+    const all = this.room?.chatMessages ?? []
+    const index = command.afterMessageId
+      ? all.findIndex((message) => message.id === command.afterMessageId)
+      : -1
+    const gap = Boolean(command.afterMessageId && index < 0)
+    const messages = (
+      command.afterMessageId && index >= 0 ? all.slice(index + 1) : all
+    ).slice(0, command.limit ?? 100)
+    for (const message of messages) this.mentions.delete(message.id)
+    return structuredClone({
+      messages,
+      gap,
+      nextMessageId: messages.at(-1)?.id ?? command.afterMessageId ?? null,
+    })
+  }
+
+  private recordMetric(value: (typeof this.metrics)[number]) {
+    this.metrics.push(value)
+    if (this.metrics.length > 100) this.metrics.shift()
   }
 
   private waitFor(
@@ -264,6 +351,8 @@ export class UnoClient extends EventEmitter {
           ? structuredClone(result.playerGame)
           : null
       this.joinedSocketId = socketId ?? null
+      this.typingPlayers = structuredClone(result.chatTyping ?? [])
+      this.observeChat()
       this.changed("state")
     })()
     this.joining = attempt
@@ -339,7 +428,43 @@ export class UnoClient extends EventEmitter {
       return Promise.resolve(this.status())
     }
     if (command.action === "status") return Promise.resolve(this.status())
-    const task = this.queue.then(() => this.dispatch(command))
+    if (command.action === "metrics")
+      return Promise.resolve({ samples: structuredClone(this.metrics) })
+    if (command.action === "chat-read")
+      return Promise.resolve(this.readChat(command))
+    if (command.action === "chat-watch") {
+      this.chatWatching = command.enabled
+      return Promise.resolve(this.status())
+    }
+    const queuedAt = performance.now()
+    const run = async () => {
+      const startedAt = performance.now()
+      try {
+        return await this.dispatch(command)
+      } finally {
+        this.recordMetric({
+          action: command.action,
+          queueMs: startedAt - queuedAt,
+          totalMs: performance.now() - queuedAt,
+        })
+      }
+    }
+    if (
+      this.macroActive &&
+      ["chat-send", "chat-react", "chat-typing"].includes(command.action)
+    ) {
+      if (this.priorityChat.length >= 4)
+        return Promise.reject(
+          new CliError(
+            "chat-busy",
+            "Wait for pending chat requests before sending more."
+          )
+        )
+      return new Promise((resolve, reject) =>
+        this.priorityChat.push({ command, queuedAt, resolve, reject })
+      )
+    }
+    const task = this.queue.then(run)
     this.queue = task.catch(() => {})
     return task
   }
@@ -445,7 +570,34 @@ export class UnoClient extends EventEmitter {
         "stale-version",
         "Room state changed before this command was sent. Inspect status before choosing again."
       )
-    if (command.action === "resolve-roulette") return this.resolveRoulette()
+    if (command.action === "chat-typing") {
+      await this.ack<null>(
+        (ack) =>
+          this.socket
+            .timeout(this.timeoutMs)
+            .volatile.emit(
+              "room:setChatTyping",
+              { typing: command.typing },
+              ack
+            ),
+        false
+      )
+      return { confirmed: true }
+    }
+    if (
+      command.action === "resolve-roulette" ||
+      command.action === "stage-play"
+    ) {
+      this.macroActive = true
+      try {
+        return command.action === "stage-play"
+          ? await this.stagePlay(command)
+          : await this.resolveRoulette()
+      } finally {
+        this.macroActive = false
+        while (this.priorityChat.length) await this.drainChat()
+      }
+    }
     await this.mutate(command)
     return { confirmed: true, state: this.status() }
   }
@@ -453,14 +605,89 @@ export class UnoClient extends EventEmitter {
   private async mutate(command: CliCommand) {
     this.assertOwnCards(command)
     this.currentAction = command.action
+    const sentAt = performance.now()
     const room = await this.ack<RoomSnapshot>(
       (ack) => this.sendCommand(command, ack),
       true
     )
+    const ackAt = performance.now()
     this.applyRoom(room)
     // An acknowledgement confirms the action even if its private snapshot is delayed.
     await this.waitFor(() => this.isSynchronized() || !this.isJoined())
+    this.recordMetric({
+      action: command.action,
+      ackMs: ackAt - sentAt,
+      syncMs: performance.now() - ackAt,
+    })
     return room
+  }
+
+  private async drainChat() {
+    const task = this.priorityChat.shift()
+    if (!task) return
+    const startedAt = performance.now()
+    try {
+      task.resolve(await this.dispatch(task.command))
+    } catch (cause) {
+      task.reject(cause)
+    } finally {
+      this.recordMetric({
+        action: task.command.action,
+        queueMs: startedAt - task.queuedAt,
+        totalMs: performance.now() - task.queuedAt,
+      })
+    }
+  }
+
+  private async stagePlay(
+    command: Extract<CliCommand, { action: "stage-play" }>
+  ) {
+    const {
+      action: _action,
+      id: _id,
+      expectedVersion: _version,
+      previewMs = 180,
+      ...play
+    } = command
+    const stage = {
+      action: "stage" as const,
+      cardIds: [...play.cardIds, ...(play.discardCardIds ?? [])],
+      chosenColor: play.chosenColor,
+      declaredUno: play.declaredUno,
+      rotateHands: play.rotateHands,
+      swapWithPlayerId: play.swapWithPlayerId,
+    }
+    const epoch = this.connectionEpoch
+    const staged = await this.mutate(stage)
+    if (
+      !this.isSynchronized() ||
+      !this.isJoined() ||
+      epoch !== this.connectionEpoch
+    )
+      throw new CliError(
+        "stage-interrupted",
+        "Staging was acknowledged, but commit was not sent. Inspect status and resync before choosing again."
+      )
+    await this.waitFor(() => !this.isJoined() || this.closed, previewMs)
+    const game = this.room?.game
+    if (
+      !this.isSynchronized() ||
+      !this.isJoined() ||
+      epoch !== this.connectionEpoch ||
+      !game ||
+      game.turnPlayerId !== this.player?.id ||
+      game.matchId !== staged.game?.matchId ||
+      game.stagedPlay?.playerId !== this.player?.id ||
+      game.stagedPlay.cards.map((card) => card.id).join() !==
+        stage.cardIds.join()
+    )
+      throw new CliError(
+        "stage-changed",
+        "The staged selection changed; commit was not sent."
+      )
+    // One bounded presentation pause; no per-card requests or extra controller roundtrip.
+    await this.mutate({ action: "play", ...play })
+    return { confirmed: true, staged: true, state: this.status() }
   }
 
   private async createRoom(
@@ -522,6 +749,7 @@ export class UnoClient extends EventEmitter {
     if (!this.isJoined()) return ["disconnected"]
     if (this.uncertainAction) return ["resync-required"]
     if (!this.isSynchronized()) return []
+    if (this.mentions.size) return ["mention"]
     if (afterVersion !== undefined && (this.room?.version ?? 0) <= afterVersion)
       return []
     if (this.room?.status === "finished") return ["finished"]
@@ -596,6 +824,7 @@ export class UnoClient extends EventEmitter {
       state: this.status(),
     })
     for (;;) {
+      await this.drainChat()
       if (this.closed || !this.isJoined() || epoch !== this.connectionEpoch)
         return stopped("disconnected")
       if (this.uncertainAction) return stopped("outcome-unknown")
@@ -652,7 +881,7 @@ export class UnoClient extends EventEmitter {
       return
     }
     const cards =
-      command.action === "play"
+      command.action === "play" || command.action === "stage-play"
         ? [...command.cardIds, ...(command.discardCardIds ?? [])]
         : command.action === "stage"
           ? command.cardIds
@@ -672,6 +901,30 @@ export class UnoClient extends EventEmitter {
   private sendCommand(command: CliCommand, ack: Ack<RoomSnapshot>) {
     const socket = this.socket.timeout(this.timeoutMs).volatile
     switch (command.action) {
+      case "chat-send":
+        socket.emit(
+          "room:sendChatMessage",
+          {
+            channel: "public",
+            kind: "text",
+            body: command.body,
+            mentionPlayerIds: command.mentionPlayerIds,
+            replyToMessageId: command.replyToMessageId,
+          },
+          ack
+        )
+        break
+      case "chat-react":
+        socket.emit(
+          "room:reactToChatMessage",
+          {
+            messageId: command.messageId,
+            emoji: command.emoji,
+            active: command.active,
+          },
+          ack
+        )
+        break
       case "ready":
         socket.emit("room:setReady", { ready: command.ready }, ack)
         break

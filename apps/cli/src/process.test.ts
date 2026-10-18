@@ -337,3 +337,98 @@ it("cancels a pending wait on stdin EOF and closes without waiting for its deadl
   })
   expect(await exited).toBe(0)
 }, 20_000)
+
+it("round-trips public replies, reactions, mentions and typing through the real server with the portable CLI", async () => {
+  const a = cli(["--create", "--name", "Host"])
+  const initial = (await a.send({ action: "status" })).data
+  const code = initial.room.code
+  const ai = initial.playerId
+  const b = cli(["--room", code, "--name", "Guest"])
+  const bi = (await b.send({ action: "status" })).data.playerId
+  expect((await a.send({ action: "chat-typing", typing: true })).ok).toBe(true)
+  await expect
+    .poll(() =>
+      b.messages.some(
+        (m) =>
+          m.type === "chat-typing" &&
+          m.players.some((p: any) => p.playerId === ai)
+      )
+    )
+    .toBe(true)
+  const sent = await a.send({
+    action: "chat-send",
+    body: "@Guest hello",
+    mentionPlayerIds: [bi],
+  })
+  expect(sent.ok).toBe(true)
+  const original = sent.data.state.room.chatMessages.at(-1)
+  await expect
+    .poll(
+      () =>
+        b.messages.filter(
+          (m) =>
+            m.type === "chat-message" &&
+            m.message.id === original.id &&
+            m.mentioned
+        ).length
+    )
+    .toBe(1)
+  expect((await b.send({ action: "chat-read" })).data.messages.at(-1).id).toBe(
+    original.id
+  )
+  const reply = await b.send({
+    action: "chat-send",
+    body: "Reply",
+    replyToMessageId: original.id,
+  })
+  expect(reply.ok).toBe(true)
+  expect(reply.data.state.room.chatMessages.at(-1).replyToMessageId).toBe(
+    original.id
+  )
+  const reaction = await a.send({
+    action: "chat-react",
+    messageId: original.id,
+    emoji: "👍",
+    active: true,
+  })
+  expect(reaction.ok).toBe(true)
+  expect(
+    reaction.data.state.room.chatMessages.find((m: any) => m.id === original.id)
+      .reactions
+  ).toEqual([{ emoji: "👍", playerIds: [ai] }])
+  expect(
+    (
+      await a.send({ action: "chat-read", afterMessageId: original.id })
+    ).data.messages.at(-1).body
+  ).toBe("Reply")
+  await b.send({ action: "resync" })
+  expect(
+    b.messages.filter(
+      (m) => m.type === "chat-message" && m.message.id === original.id
+    )
+  ).toHaveLength(1)
+  const other = cli(["--create", "--name", "Other room"])
+  await other.send({ action: "status" })
+  expect(
+    (
+      await other.send({
+        action: "chat-react",
+        messageId: original.id,
+        emoji: "👍",
+        active: true,
+      })
+    ).error.code
+  ).toBe("message-not-found")
+  expect(
+    (
+      await other.send({
+        action: "chat-send",
+        body: "Cross-room reply",
+        replyToMessageId: original.id,
+      })
+    ).error.code
+  ).toBe("reply-not-found")
+  await a.send({ action: "quit" })
+  await b.send({ action: "quit" })
+  await other.send({ action: "quit" })
+}, 30_000)

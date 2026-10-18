@@ -4,8 +4,12 @@ export type {
   AnalysisRoomSummary,
   AnalysisRoomsResponse,
 } from "./analysis"
-export { CHAT_EMOJIS, CHAT_GIFS, CHAT_PRESETS } from "./chat"
+export { CHAT_EMOJIS, CHAT_GIFS, CHAT_PRESETS, CHAT_REACTIONS } from "./chat"
 export type {
+  ChatReaction,
+  ReactToChatMessageInput,
+  ChatTypingPlayer,
+  SetChatTypingInput,
   ChatGifPreset,
   ChatChannel,
   ChatMessage,

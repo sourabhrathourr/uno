@@ -43,6 +43,7 @@ import { Checkbox } from "@workspace/ui/components/checkbox"
 import { UnoCard } from "@workspace/ui/components/uno-card"
 import type {
   Card,
+  CommandResult,
   ChatChannel,
   ChatMessage,
   GameError,
@@ -76,6 +77,14 @@ import {
   SupportRequestInbox,
   availableSupportCandidates,
 } from "@/components/support-experience"
+import { ShortcutGuide } from "@/components/shortcut-guide"
+import { useReadingScroll } from "@/components/use-reading-scroll"
+import { installGameShortcuts } from "@/lib/game-shortcuts"
+import {
+  PublicMessageActions,
+  ReplyPreview,
+  usePublicChatControls,
+} from "@/components/public-chat-controls"
 import { useChannelChat } from "@/components/use-channel-chat"
 
 import { getGameSocket, getRoomPreview } from "@/lib/realtime"
@@ -120,6 +129,14 @@ function RoomPage() {
   const [playerName, setPlayerName] = useState(getSavedPlayerName)
   const [connected, setConnected] = useState(false)
   const [joining, setJoining] = useState(false)
+  const [gameActionPending, setGameActionPending] = useState(false)
+  const [gameActionBlocked, setGameActionBlocked] = useState(false)
+  const gameActionLock = useRef(false)
+  const gameActionVersion = useRef<number | null>(null)
+  const gameActionToken = useRef(0)
+  const gameActionTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined
+  )
   const [loadingPreview, setLoadingPreview] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [errorNonce, setErrorNonce] = useState(0)
@@ -209,6 +226,12 @@ function RoomPage() {
     result: JoinRoomResponse,
     socketId: string | undefined
   ) {
+    gameActionToken.current++
+    gameActionLock.current = false
+    gameActionVersion.current = null
+    clearTimeout(gameActionTimer.current)
+    setGameActionPending(false)
+    setGameActionBlocked(false)
     setJoinedSocketId(socketId ?? null)
     saveActiveRoomCode(result.room.code)
     applyPlayer(result.player)
@@ -713,17 +736,34 @@ function RoomPage() {
     )
   }
 
-  function sendChatMessage(input: SendChatMessageInput) {
-    if (!socket) return
+  function sendChatMessage(input: SendChatMessageInput): Promise<boolean> {
+    if (!socket?.connected) return Promise.resolve(false)
     setError(null)
-    socket.emit("room:sendChatMessage", input, (result) => {
-      if (!result.ok) {
-        applyCommandError(result.error)
-        return
-      }
-
-      applyRoomSnapshot(result.data)
-    })
+    return new Promise((resolve) =>
+      socket
+        .timeout(8_000)
+        .volatile.emit("room:sendChatMessage", input, (cause, result) => {
+          if (cause) {
+            setError(
+              "Message outcome is unconfirmed. Check chat before sending again."
+            )
+            resolve(false)
+            return
+          }
+          if (!result?.ok) {
+            applyCommandError(
+              result?.error ?? {
+                code: "chat-failed",
+                message: "Could not send message.",
+              }
+            )
+            resolve(false)
+            return
+          }
+          applyRoomSnapshot(result.data)
+          resolve(true)
+        })
+    )
   }
 
   function startVoteKick(targetPlayerId: string) {
@@ -780,82 +820,107 @@ function RoomPage() {
     })
   }
 
-  function playCards(input: PlayCardsInput) {
-    if (!socket || !isActiveTurnPlayer()) return
+  function runGameAction(
+    send: (
+      ack: (cause: Error | null, result?: CommandResult<RoomSnapshot>) => void
+    ) => void
+  ) {
+    if (
+      !socket?.connected ||
+      gameActionLock.current ||
+      !isActiveTurnPlayer() ||
+      playerGameRoomVersionRef.current !== roomRef.current?.version
+    )
+      return false
+    gameActionLock.current = true
+    setGameActionPending(true)
     setError(null)
-    socket.emit("game:playCards", input, (result) => {
+    const token = ++gameActionToken.current
+    const unlock = () => {
+      clearTimeout(gameActionTimer.current)
+      gameActionLock.current = false
+      gameActionVersion.current = null
+      setGameActionPending(false)
+    }
+    const uncertain = () => {
+      setGameActionPending(false)
+      setGameActionBlocked(true)
+      setError(
+        "Action outcome is unconfirmed. Refresh your seat before choosing again."
+      )
+    }
+    gameActionTimer.current = setTimeout(() => {
+      if (token === gameActionToken.current && gameActionLock.current)
+        uncertain()
+    }, 8_000)
+    send((cause, result) => {
+      if (token !== gameActionToken.current) return
+      if (cause || !result) {
+        uncertain()
+        return
+      }
       if (!result.ok) {
+        unlock()
         applyCommandError(result.error)
         return
       }
-
+      gameActionVersion.current = result.data.version
       applyRoomSnapshot(result.data)
+      if (playerGameRoomVersionRef.current >= result.data.version) unlock()
     })
+    return true
   }
 
+  useEffect(() => {
+    if (
+      gameActionVersion.current !== null &&
+      (playerGame?.roomVersion ?? 0) >= gameActionVersion.current
+    ) {
+      clearTimeout(gameActionTimer.current)
+      gameActionLock.current = false
+      gameActionVersion.current = null
+      setGameActionPending(false)
+      setGameActionBlocked(false)
+    }
+  }, [playerGame?.roomVersion])
+  useEffect(() => () => clearTimeout(gameActionTimer.current), [])
+
+  function playCards(input: PlayCardsInput) {
+    return runGameAction((ack) =>
+      socket!.timeout(8_000).volatile.emit("game:playCards", input, ack)
+    )
+  }
   function stageCards(input: StageCardsInput) {
-    if (!socket || !isActiveTurnPlayer()) return
+    if (!socket?.connected || gameActionLock.current || !isActiveTurnPlayer())
+      return
     socket.emit("game:stageCards", input, (result) => {
       if (!result.ok) {
         applyCommandError(result.error)
         return
       }
-
       setError(null)
       applyRoomSnapshot(result.data)
     })
   }
-
   function drawCard() {
-    if (!socket || !isActiveTurnPlayer()) return
-    setError(null)
-    socket.emit("game:drawOne", (result) => {
-      if (!result.ok) {
-        applyCommandError(result.error)
-        return
-      }
-
-      applyRoomSnapshot(result.data)
-    })
+    runGameAction((ack) =>
+      socket!.timeout(8_000).volatile.emit("game:drawOne", ack)
+    )
   }
-
   function endTurn() {
-    if (!socket || !isActiveTurnPlayer()) return
-    setError(null)
-    socket.emit("game:endTurn", (result) => {
-      if (!result.ok) {
-        applyCommandError(result.error)
-        return
-      }
-
-      applyRoomSnapshot(result.data)
-    })
+    runGameAction((ack) =>
+      socket!.timeout(8_000).volatile.emit("game:endTurn", ack)
+    )
   }
-
   function takePenalty() {
-    if (!socket || !isActiveTurnPlayer()) return
-    setError(null)
-    socket.emit("game:takeDrawPenalty", (result) => {
-      if (!result.ok) {
-        applyCommandError(result.error)
-        return
-      }
-
-      applyRoomSnapshot(result.data)
-    })
+    runGameAction((ack) =>
+      socket!.timeout(8_000).volatile.emit("game:takeDrawPenalty", ack)
+    )
   }
-
   function drawRouletteCard() {
-    if (!socket || !isActiveTurnPlayer()) return
-    setError(null)
-    socket.emit("game:drawRouletteCard", (result) => {
-      if (!result.ok) {
-        applyCommandError(result.error)
-        return
-      }
-
-      applyRoomSnapshot(result.data)
-    })
+    runGameAction((ack) =>
+      socket!.timeout(8_000).volatile.emit("game:drawRouletteCard", ack)
+    )
   }
 
   function catchUno(targetPlayerId: string) {
@@ -879,14 +944,44 @@ function RoomPage() {
     await copyTextToClipboard(inviteUrl.toString())
   }
 
+  useEffect(() => {
+    const turn = room?.players.find(
+      (candidate) => candidate.id === room.game?.turnPlayerId
+    )?.name
+    document.title =
+      room?.status === "playing" && turn
+        ? `${room.game?.turnPlayerId === player?.id ? "Your turn" : `${turn}'s turn`} · UNO`
+        : "UNO No Mercy"
+    return () => {
+      document.title = "UNO No Mercy"
+    }
+  }, [room?.status, room?.game?.turnPlayerId, room?.players, player?.id])
+
   const audioOutputs = (
-    <VoiceAudioOutputs
-      streamsByPlayerId={voice.remoteStreamsByPlayerId}
-      connectionIssues={voice.connectionIssues}
-      playerNames={Object.fromEntries(
-        (room?.players ?? []).map((player) => [player.id, player.name])
+    <>
+      {gameActionBlocked && (
+        <div
+          role="alert"
+          className="fixed top-3 left-1/2 z-[200] -translate-x-1/2 rounded-lg border border-yellow-200/30 bg-neutral-950 p-3 text-sm text-white"
+        >
+          Refresh your seat to confirm the last action.{" "}
+          <button
+            type="button"
+            className="ml-2 rounded bg-white px-2 py-1 text-black"
+            onClick={() => joinRoom()}
+          >
+            Refresh seat
+          </button>
+        </div>
       )}
-    />
+      <VoiceAudioOutputs
+        streamsByPlayerId={voice.remoteStreamsByPlayerId}
+        connectionIssues={voice.connectionIssues}
+        playerNames={Object.fromEntries(
+          (room?.players ?? []).map((player) => [player.id, player.name])
+        )}
+      />
+    </>
   )
 
   if (!player) {
@@ -930,6 +1025,8 @@ function RoomPage() {
       <>
         {audioOutputs}
         <GameTable
+          shortcutsEnabled={!showIntro}
+          actionPending={gameActionPending || gameActionBlocked}
           room={room}
           player={player}
           playerGame={playerGame?.playerId === player.id ? playerGame : null}
@@ -973,6 +1070,7 @@ function RoomPage() {
     <>
       {audioOutputs}
       <LobbyWaitingRoom
+        socket={socket}
         room={room}
         player={player}
         roomCode={normalizedRoomCode}
@@ -993,6 +1091,8 @@ function RoomPage() {
 }
 
 function GameTable({
+  shortcutsEnabled = true,
+  actionPending = false,
   room,
   player,
   playerGame,
@@ -1019,13 +1119,15 @@ function GameTable({
   voice,
   socket,
 }: {
+  shortcutsEnabled?: boolean
+  actionPending?: boolean
   room: RoomSnapshot
   player: Player
   playerGame: PlayerGameSnapshot | null
   playerSocial: PlayerSocialSnapshot | null
   error: string | null
   onCopyInvite: () => Promise<void>
-  onPlayCards: (input: PlayCardsInput) => void
+  onPlayCards: (input: PlayCardsInput) => void | boolean
   onStageCards: (input: StageCardsInput) => void
   onDrawCard: () => void
   onEndTurn: () => void
@@ -1037,7 +1139,7 @@ function GameTable({
   onRequestSupport: (supportedPlayerId: string) => void
   onRespondSupportRequest: (supporterPlayerId: string, approve: boolean) => void
   onSendAvatarEmojiReaction: (input: SendAvatarEmojiReactionInput) => void
-  onSendChatMessage: (input: SendChatMessageInput) => void
+  onSendChatMessage: (input: SendChatMessageInput) => void | Promise<boolean>
   onStartVoteKick: (targetPlayerId: string) => void
   onCastVoteKick: (voteKickId: string, choice: VoteKickChoice) => void
   onRestartGame: () => void
@@ -1067,6 +1169,7 @@ function GameTable({
     string | null
   >(null)
   const [nextMatchPanelOpen, setNextMatchPanelOpen] = useState(false)
+  const [shortcutGuideOpen, setShortcutGuideOpen] = useState(false)
   const [chatCollapsed, setChatCollapsed] = useState(readStoredChatCollapsed)
   const [directionPulseKey, setDirectionPulseKey] = useState(0)
   const [directionPulseOn, setDirectionPulseOn] = useState(false)
@@ -1228,7 +1331,8 @@ function GameTable({
   const rouletteTargetName = rouletteChoice
     ? getPlayerName(room, rouletteChoice.playerId)
     : null
-  const canDrawRoulette = Boolean(rouletteChoice?.playerId === player.id)
+  const canDrawRoulette =
+    !actionPending && Boolean(rouletteChoice?.playerId === player.id)
   const needsColor = selectedCards.some((card) => card.color === "wild")
   const remainingAfterSelectedCards =
     (playerGame?.hand.length ?? 0) - selectedCards.length
@@ -1265,6 +1369,8 @@ function GameTable({
     selectedCardsCanPlay &&
     remainingAfterPlay === 1
   const canSubmitPlay =
+    !actionPending &&
+    playerGame?.roomVersion === room.version &&
     Boolean(isMyTurn) &&
     pendingPlayedCardIds.length === 0 &&
     selectedCardsCanPlay &&
@@ -1272,6 +1378,8 @@ function GameTable({
     (!needsColor || Boolean(chosenColor)) &&
     (!needsSwap || Boolean(swapWithPlayerId))
   const canPassTurn =
+    !actionPending &&
+    playerGame?.roomVersion === room.version &&
     Boolean(isMyTurn) &&
     pendingPlayedCardIds.length === 0 &&
     Boolean(playerGame?.canEndTurn) &&
@@ -1307,6 +1415,7 @@ function GameTable({
       ? "roulette"
       : "stage"
   const canEditTableStaged =
+    !actionPending &&
     tableStagedMode === "stage" &&
     tableStagedPlayerId === player.id &&
     Boolean(isMyTurn) &&
@@ -1534,7 +1643,7 @@ function GameTable({
       card,
       selectedCards,
       playableCardIds,
-      Boolean(isMyTurn),
+      Boolean(isMyTurn) && !actionPending,
       drawStack
     )
   }
@@ -1607,8 +1716,7 @@ function GameTable({
       ? [discardActionCard.id]
       : selectedCardIds
     const discardExtraCardIds = discardExtraCards.map((card) => card.id)
-    setPendingPlayedCardIds(selectedCardIds)
-    onPlayCards({
+    const accepted = onPlayCards({
       cardIds: playedCardIds,
       declaredUno: canDeclareUno && declaredUno,
       chosenColor: chosenColor ?? undefined,
@@ -1621,6 +1729,7 @@ function GameTable({
       swapWithPlayerId: needsSwap ? swapWithPlayerId : undefined,
       rotateHands: canChooseRotate && wantsRotate ? true : undefined,
     })
+    if (accepted !== false) setPendingPlayedCardIds(selectedCardIds)
   }
 
   function handleEndTurnButton() {
@@ -1657,6 +1766,115 @@ function GameTable({
     onCatchUno(targetPlayerId)
   }
 
+  useEffect(
+    () =>
+      installGameShortcuts(() => ({
+        scopeEnabled:
+          shortcutsEnabled &&
+          !narrowViewport &&
+          Boolean(socket?.connected) &&
+          room.status === "playing",
+        navigate: (direction) => {
+          const buttons = [
+            ...document.querySelectorAll<HTMLButtonElement>("[data-hand-card]"),
+          ].filter((button) => button.getClientRects().length > 0)
+          const unique = [
+            ...new Map(
+              buttons.map((button) => [button.dataset.handCard, button])
+            ).values(),
+          ]
+          const order = playerGame?.hand.map((card) => card.id) ?? []
+          unique.sort(
+            (a, b) =>
+              order.indexOf(a.dataset.handCard ?? "") -
+              order.indexOf(b.dataset.handCard ?? "")
+          )
+          const current = unique.findIndex(
+            (button) => button === document.activeElement
+          )
+          unique[
+            current < 0
+              ? direction > 0
+                ? 0
+                : unique.length - 1
+              : (current + direction + unique.length) % unique.length
+          ]?.focus()
+        },
+        toggleFocused: () => {
+          const id =
+            document.activeElement?.closest<HTMLElement>("[data-hand-card]")
+              ?.dataset.handCard
+          const card = playerGame?.hand.find((candidate) => candidate.id === id)
+          if (!card) return
+          toggleSelected(card)
+          requestAnimationFrame(() =>
+            [
+              ...document.querySelectorAll<HTMLButtonElement>(
+                "[data-hand-card]"
+              ),
+            ]
+              .find(
+                (button) =>
+                  button.dataset.handCard === id &&
+                  button.getClientRects().length > 0
+              )
+              ?.focus()
+          )
+        },
+        focusChat: () => {
+          setChatCollapsed(false)
+          requestAnimationFrame(() =>
+            [
+              ...document.querySelectorAll<HTMLTextAreaElement>(
+                "textarea[data-chat-composer]"
+              ),
+            ]
+              .find((node) => node.getClientRects().length > 0)
+              ?.focus()
+          )
+        },
+        showGuide: () => setShortcutGuideOpen(true),
+        escape: () => {
+          if (!chatCollapsed) setChatCollapsed(true)
+          else if (!actionPending) setSelectedCardIds([])
+        },
+        enabled:
+          shortcutsEnabled &&
+          !narrowViewport &&
+          Boolean(socket?.connected) &&
+          room.status === "playing" &&
+          Boolean(isMyTurn) &&
+          playerGame?.roomVersion === room.version,
+        pending: actionPending,
+        canDraw: Boolean(playerGame?.canDraw) && !rouletteChoice,
+        canTakePenalty: Boolean(playerGame?.canTakeDrawPenalty),
+        canSubmit: canSubmitPlay,
+        canPass: canPassTurn,
+        draw: handleDrawCard,
+        takePenalty: handleTakePenalty,
+        submit: submitPlay,
+        pass: handleEndTurnButton,
+      })),
+    [
+      shortcutsEnabled,
+      narrowViewport,
+      chatCollapsed,
+      socket?.connected,
+      room.status,
+      room.version,
+      playerGame,
+      isMyTurn,
+      actionPending,
+      canSubmitPlay,
+      canPassTurn,
+      selectedCardIds.join(":"),
+      chosenColor,
+      declaredUno,
+      swapWithPlayerId,
+      wantsRotate,
+    ]
+  )
+
   const tableStatusTitle =
     gameFinished && firstWinner
       ? `${firstWinner.name} won this match`
@@ -1673,6 +1891,9 @@ function GameTable({
   if (narrowViewport) {
     return (
       <>
+        {shortcutGuideOpen && (
+          <ShortcutGuide onClose={() => setShortcutGuideOpen(false)} />
+        )}
         <main className="h-dvh overflow-hidden bg-[#070604] text-white antialiased">
           {celebratingWinner && (
             <FirstPlaceCelebration playerName={celebratingWinner.name} />
@@ -1737,6 +1958,7 @@ function GameTable({
                 <VoiceToggleButton voice={voice} compact />
                 <CopyInviteButton iconOnly onCopy={onCopyInvite} />
                 <MobileChatSheet
+                  socket={socket}
                   messages={room.chatMessages}
                   squadMessages={playerSocial?.squadChatMessages}
                   squadPlayerId={playerSocial?.squadPlayerId}
@@ -1797,7 +2019,11 @@ function GameTable({
                   selfPlayerId={player.id}
                   crownPlayerId={crownPlayerId}
                   voiceStates={voice.voiceStates}
-                  canTakeDrawPenalty={Boolean(playerGame?.canTakeDrawPenalty)}
+                  canTakeDrawPenalty={
+                    !actionPending &&
+                    playerGame?.roomVersion === room.version &&
+                    Boolean(playerGame?.canTakeDrawPenalty)
+                  }
                   onTakeDrawPenalty={handleTakePenalty}
                   spectatingPlayerId={spectatingPlayerId}
                   supportCandidatePlayerIds={spectatablePlayerIds}
@@ -1886,7 +2112,11 @@ function GameTable({
                         }
                       >
                         <DeckStack
-                          canDraw={Boolean(playerGame?.canDraw)}
+                          canDraw={
+                            !actionPending &&
+                            playerGame?.roomVersion === room.version &&
+                            Boolean(playerGame?.canDraw)
+                          }
                           alreadyDrawn={Boolean(playerGame?.canEndTurn)}
                           drawPileCount={game?.drawPileCount ?? 0}
                           size="sm"
@@ -2026,10 +2256,17 @@ function GameTable({
                       type="button"
                       size="sm"
                       disabled={!canUseEndTurnButton}
+                      aria-busy={actionPending}
+                      aria-keyshortcuts="Enter"
+                      title="Enter: submit selected cards or pass after drawing"
                       onClick={handleEndTurnButton}
                       className="h-8 bg-white px-3 text-neutral-950 hover:bg-white/85"
                     >
-                      {canPassTurn ? "Pass" : "End"}
+                      {actionPending
+                        ? "Sending…"
+                        : canPassTurn
+                          ? "Pass"
+                          : "End"}
                     </Button>
                   </div>
                 )}
@@ -2140,6 +2377,9 @@ function GameTable({
 
   return (
     <>
+      {shortcutGuideOpen && (
+        <ShortcutGuide onClose={() => setShortcutGuideOpen(false)} />
+      )}
       <main className="h-dvh overflow-hidden bg-[#070604] text-white antialiased">
         {celebratingWinner && (
           <FirstPlaceCelebration playerName={celebratingWinner.name} />
@@ -2225,7 +2465,11 @@ function GameTable({
                   game={game}
                   selfPlayerId={player.id}
                   crownPlayerId={crownPlayerId}
-                  canTakeDrawPenalty={Boolean(playerGame?.canTakeDrawPenalty)}
+                  canTakeDrawPenalty={
+                    !actionPending &&
+                    playerGame?.roomVersion === room.version &&
+                    Boolean(playerGame?.canTakeDrawPenalty)
+                  }
                   onTakeDrawPenalty={handleTakePenalty}
                   compact={compactSurface}
                   voiceStates={voice.voiceStates}
@@ -2308,7 +2552,11 @@ function GameTable({
                     <div className="flex min-h-0 flex-col items-center justify-center gap-2 sm:gap-4">
                       <div className="flex flex-wrap items-center justify-center gap-3 sm:gap-8 lg:gap-12">
                         <DeckStack
-                          canDraw={Boolean(playerGame?.canDraw)}
+                          canDraw={
+                            !actionPending &&
+                            playerGame?.roomVersion === room.version &&
+                            Boolean(playerGame?.canDraw)
+                          }
                           alreadyDrawn={Boolean(playerGame?.canEndTurn)}
                           drawPileCount={game?.drawPileCount ?? 0}
                           size={tableCardSize}
@@ -2455,11 +2703,29 @@ function GameTable({
                         type="button"
                         size="sm"
                         disabled={!canUseEndTurnButton}
+                        aria-busy={actionPending}
+                        aria-keyshortcuts="Enter"
+                        title="Enter: submit selected cards or pass after drawing"
                         onClick={handleEndTurnButton}
                         className="bg-white text-neutral-950 hover:bg-white/85"
                       >
-                        {canPassTurn ? "Pass turn" : "End turn"}
+                        {actionPending
+                          ? "Sending…"
+                          : canPassTurn
+                            ? "Pass turn"
+                            : "End turn"}
                       </Button>
+                      <span className="hidden text-[10px] text-white/45 lg:inline">
+                        D: draw / take penalty · Enter: play / pass{" "}
+                        <button
+                          type="button"
+                          onClick={() => setShortcutGuideOpen(true)}
+                          className="underline"
+                          aria-keyshortcuts="Shift+/"
+                        >
+                          Shortcuts (?)
+                        </button>
+                      </span>
                     </div>
                   )}
                 </div>
@@ -2518,6 +2784,7 @@ function GameTable({
             </div>
 
             <TableChatPanel
+              socket={socket}
               messages={room.chatMessages}
               squadMessages={playerSocial?.squadChatMessages}
               squadPlayerId={playerSocial?.squadPlayerId}
@@ -3525,6 +3792,7 @@ function deckDrawFlightFromEvent(event: GameEvent): DeckDrawFlightState | null {
 }
 
 function TableChatPanel({
+  socket,
   room,
   messages,
   squadMessages = [],
@@ -3540,6 +3808,7 @@ function TableChatPanel({
   onCastVoteKick,
   onKickSupporter,
 }: {
+  socket?: GameSocket | null
   room: RoomSnapshot | null
   messages: Array<ChatMessage>
   squadMessages?: Array<ChatMessage>
@@ -3550,12 +3819,21 @@ function TableChatPanel({
   error: string | null
   collapsed?: boolean
   onToggleCollapsed?: () => void
-  onSendMessage: (input: SendChatMessageInput) => void
+  onSendMessage: (input: SendChatMessageInput) => void | Promise<boolean>
   onStartVoteKick?: (targetPlayerId: string) => void
   onCastVoteKick?: (voteKickId: string, choice: VoteKickChoice) => void
   onKickSupporter?: (supporterPlayerId: string) => void
 }) {
+  const publicChat = usePublicChatControls(
+    socket,
+    room?.code ?? "",
+    players,
+    selfPlayerId
+  )
   const {
+    replyToMessageId,
+    setReplyToMessageId,
+    sending,
     applyMention,
     changeText,
     channel,
@@ -3580,7 +3858,13 @@ function TableChatPanel({
     // Collapsed means nobody is reading, so unread piles up until reopened.
     isReading: !collapsed,
     onSendMessage,
+    onTyping: publicChat.onTyping,
+    onComposeEnd: publicChat.endCompose,
   })
+
+  useEffect(() => {
+    if (collapsed) publicChat.onTyping(false)
+  }, [collapsed])
 
   if (collapsed) {
     return (
@@ -3659,6 +3943,8 @@ function TableChatPanel({
 
       <ChatMessageList
         messages={channelMessages}
+        onReply={channel === "public" ? setReplyToMessageId : undefined}
+        onReact={channel === "public" ? publicChat.react : undefined}
         selfPlayerId={selfPlayerId}
         players={players}
         roomCode={room?.code ?? ""}
@@ -3671,7 +3957,30 @@ function TableChatPanel({
         className="mt-2 rounded-lg border border-red-400/20 bg-red-500/10 px-3 py-2 text-xs text-red-100 shadow-[0_12px_26px_rgba(0,0,0,0.22)]"
       />
 
+      {channel === "public" && replyToMessageId && (
+        <ReplyPreview
+          message={messages.find((message) => message.id === replyToMessageId)}
+          unavailable={
+            !messages.some((message) => message.id === replyToMessageId)
+          }
+          onCancel={() => setReplyToMessageId(null)}
+        />
+      )}
+      {publicChat.error && (
+        <p role="alert" className="text-xs text-red-200">
+          {publicChat.error}
+        </p>
+      )}
+      {channel === "public" && publicChat.typingNames.length > 0 && (
+        <p
+          role="status"
+          className="animate-pulse text-xs text-white/60 motion-reduce:animate-none"
+        >
+          {publicChat.typingNames.join(", ")} typing…
+        </p>
+      )}
       <ChatComposer
+        sending={sending}
         text={text}
         tray={tray}
         roomCode={room?.code ?? ""}
@@ -3695,6 +4004,7 @@ function TableChatPanel({
 }
 
 function MobileChatSheet({
+  socket,
   room,
   messages,
   squadMessages = [],
@@ -3708,6 +4018,7 @@ function MobileChatSheet({
   onCastVoteKick,
   onKickSupporter,
 }: {
+  socket?: GameSocket | null
   room: RoomSnapshot | null
   messages: Array<ChatMessage>
   squadMessages?: Array<ChatMessage>
@@ -3716,14 +4027,23 @@ function MobileChatSheet({
   squadMemberIds?: Array<string>
   selfPlayerId: string
   error: string | null
-  onSendMessage: (input: SendChatMessageInput) => void
+  onSendMessage: (input: SendChatMessageInput) => void | Promise<boolean>
   onStartVoteKick?: (targetPlayerId: string) => void
   onCastVoteKick?: (voteKickId: string, choice: VoteKickChoice) => void
   onKickSupporter?: (supporterPlayerId: string) => void
 }) {
+  const publicChat = usePublicChatControls(
+    socket,
+    room?.code ?? "",
+    players,
+    selfPlayerId
+  )
   const [open, setOpen] = useState(false)
   const haptic = useWebHaptics()
   const {
+    replyToMessageId,
+    setReplyToMessageId,
+    sending,
     applyMention,
     changeText,
     channel,
@@ -3749,6 +4069,8 @@ function MobileChatSheet({
     isReading: open,
     onBeforeSend: () => haptic.trigger("light"),
     onSendMessage,
+    onTyping: publicChat.onTyping,
+    onComposeEnd: publicChat.endCompose,
   })
 
   function openChat() {
@@ -3757,7 +4079,10 @@ function MobileChatSheet({
   }
 
   useEffect(() => {
-    if (!open) return
+    if (!open) {
+      publicChat.onTyping(false)
+      return
+    }
     if (typeof document === "undefined") return
 
     const previousOverflow = document.body.style.overflow
@@ -3859,6 +4184,8 @@ function MobileChatSheet({
 
               <ChatMessageList
                 messages={channelMessages}
+                onReply={channel === "public" ? setReplyToMessageId : undefined}
+                onReact={channel === "public" ? publicChat.react : undefined}
                 selfPlayerId={selfPlayerId}
                 players={players}
                 roomCode={room?.code ?? ""}
@@ -3873,7 +4200,34 @@ function MobileChatSheet({
               />
 
               <div className="shrink-0 border-t border-white/10 p-3 pb-[calc(env(safe-area-inset-bottom)+0.75rem)]">
+                {channel === "public" && replyToMessageId && (
+                  <ReplyPreview
+                    message={messages.find(
+                      (message) => message.id === replyToMessageId
+                    )}
+                    unavailable={
+                      !messages.some(
+                        (message) => message.id === replyToMessageId
+                      )
+                    }
+                    onCancel={() => setReplyToMessageId(null)}
+                  />
+                )}
+                {publicChat.error && (
+                  <p role="alert" className="text-xs text-red-200">
+                    {publicChat.error}
+                  </p>
+                )}
+                {channel === "public" && publicChat.typingNames.length > 0 && (
+                  <p
+                    role="status"
+                    className="animate-pulse text-xs text-white/60 motion-reduce:animate-none"
+                  >
+                    {publicChat.typingNames.join(", ")} typing…
+                  </p>
+                )}
                 <ChatComposer
+                  sending={sending}
                   text={text}
                   tray={tray}
                   comfortable
@@ -4318,6 +4672,8 @@ function ChatChannelTabs({
 }
 
 function ChatMessageList({
+  onReply,
+  onReact,
   messages,
   selfPlayerId,
   players,
@@ -4326,6 +4682,8 @@ function ChatMessageList({
   emptyVariant = "panel",
   className,
 }: {
+  onReply?: (id: string) => void
+  onReact?: (message: ChatMessage, emoji: string) => void
   messages: Array<ChatMessage>
   selfPlayerId: string
   players: Array<Player>
@@ -4334,14 +4692,9 @@ function ChatMessageList({
   emptyVariant?: "panel" | "sheet"
   className?: string
 }) {
-  const listRef = useRef<HTMLDivElement | null>(null)
-
-  useEffect(() => {
-    const list = listRef.current
-    if (!list) return
-    list.scrollTo({ top: list.scrollHeight, behavior: "smooth" })
-  }, [messages.length])
-
+  const { listRef, onScroll, unread, latest } = useReadingScroll(
+    messages.map((message) => message.id)
+  )
   const emptyState =
     emptyVariant === "sheet" ? (
       <div className="relative isolate flex min-h-[280px] flex-1 flex-col items-center justify-center overflow-hidden rounded-2xl border border-white/10 bg-[#0d0c0a] px-5 py-8 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.055),inset_0_0_0_1px_rgba(255,255,255,0.025)]">
@@ -4388,31 +4741,66 @@ function ChatMessageList({
     )
 
   return (
-    <div
-      ref={listRef}
-      className={
-        "uno-scrollbar flex min-h-0 flex-col gap-2 overflow-y-auto " +
-        (className ?? "")
-      }
-    >
-      {messages.length === 0
-        ? emptyState
-        : messages.map((message) => (
-            <ChatMessageBubble
-              key={message.id}
-              message={message}
-              isSelf={message.playerId === selfPlayerId}
-              selfPlayerId={selfPlayerId}
-              players={players}
-              roomCode={roomCode}
-              onVoteKick={onVoteKick}
-            />
-          ))}
+    <div className={"flex min-h-0 flex-col " + (className ?? "")}>
+      <div
+        ref={listRef}
+        onScroll={onScroll}
+        role="log"
+        aria-label="Chat messages"
+        className={
+          "uno-scrollbar flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto"
+        }
+      >
+        {messages.length === 0
+          ? emptyState
+          : messages.map((message) => (
+              <div key={message.id}>
+                {message.replyToMessageId && (
+                  <ReplyPreview
+                    message={messages.find(
+                      (parent) => parent.id === message.replyToMessageId
+                    )}
+                    unavailable={
+                      !messages.some(
+                        (parent) => parent.id === message.replyToMessageId
+                      )
+                    }
+                  />
+                )}
+                <ChatMessageBubble
+                  message={message}
+                  isSelf={message.playerId === selfPlayerId}
+                  selfPlayerId={selfPlayerId}
+                  players={players}
+                  roomCode={roomCode}
+                  onVoteKick={onVoteKick}
+                />
+                {message.channel === "public" && onReply && onReact && (
+                  <PublicMessageActions
+                    message={message}
+                    selfId={selfPlayerId}
+                    onReply={onReply}
+                    onReact={onReact}
+                  />
+                )}
+              </div>
+            ))}
+      </div>
+      {unread > 0 && (
+        <button
+          type="button"
+          onClick={latest}
+          className="mt-1 self-center rounded-full border border-yellow-200/30 bg-neutral-900 px-3 py-1 text-xs text-yellow-100"
+        >
+          {unread} new {unread === 1 ? "message" : "messages"} ↓
+        </button>
+      )}
     </div>
   )
 }
 
 function ChatComposer({
+  sending = false,
   text,
   tray,
   roomCode = "",
@@ -4428,6 +4816,7 @@ function ChatComposer({
   onSend,
   onSendText,
 }: {
+  sending?: boolean
   text: string
   tray: ChatTray | null
   roomCode?: string
@@ -4592,6 +4981,11 @@ function ChatComposer({
             onKeyUp={syncCaretFromTextarea}
             onSelect={syncCaretFromTextarea}
             onKeyDown={(event) => {
+              if (
+                event.nativeEvent.isComposing ||
+                event.nativeEvent.keyCode === 229
+              )
+                return
               if (mentionOpen && mentionMatches.length > 0) {
                 if (event.key === "ArrowDown") {
                   event.preventDefault()
@@ -4623,12 +5017,22 @@ function ChatComposer({
                 }
               }
 
-              if (event.key !== "Enter" || event.shiftKey) return
+              if (
+                event.key !== "Enter" ||
+                event.shiftKey ||
+                event.nativeEvent.isComposing ||
+                event.repeat ||
+                event.ctrlKey ||
+                event.altKey ||
+                event.metaKey
+              )
+                return
               event.preventDefault()
               onSendText()
             }}
+            data-chat-composer
             rows={comfortable ? 2 : 1}
-            maxLength={250}
+            maxLength={240}
             placeholder={comfortable ? "Talk your trash..." : "Talk..."}
             enterKeyHint="send"
             className={
@@ -4641,12 +5045,13 @@ function ChatComposer({
           <button
             type="button"
             onClick={onSendText}
-            disabled={!text.trim()}
+            disabled={sending || !text.trim()}
             className={
               "grid shrink-0 place-items-center rounded-lg bg-white text-neutral-950 shadow-[0_10px_24px_rgba(0,0,0,0.24)] transition-[background-color,opacity,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] hover:bg-white/86 active:scale-[0.96] disabled:cursor-not-allowed disabled:opacity-40 " +
               (comfortable ? "size-12" : "size-9")
             }
-            aria-label="Send message"
+            aria-label={sending ? "Sending message" : "Send message"}
+            aria-busy={sending}
           >
             <SendHorizontal
               className={comfortable ? "size-4" : "size-3.5"}
@@ -6268,9 +6673,7 @@ function isDiscardFirstStage(
   if (!discardCard || discardCard.face.kind !== "discard-color") return false
   if (!playableCardIds.includes(discardCard.id)) return false
 
-  return cards
-    .slice(1)
-    .every((card) => card.color === discardCard.color)
+  return cards.slice(1).every((card) => card.color === discardCard.color)
 }
 
 function canStackDrawCards(
@@ -6695,6 +7098,7 @@ function TableStagedPlay({
                     card={card}
                     size="sm"
                     static={!canEdit}
+                    handCardId={canEdit ? card.id : undefined}
                     onClick={canEdit ? () => onCardClick(card) : undefined}
                     ariaLabel={
                       isRoulette ? "Revealed pickup card" : "Staged card"
@@ -7225,6 +7629,7 @@ function FannedGameHand({
               >
                 <UnoCard
                   card={card}
+                  handCardId={card.id}
                   size={cardSize}
                   raised={dragging}
                   onPointerDown={(event) =>
@@ -7234,11 +7639,6 @@ function FannedGameHand({
                   onPointerUp={(event) => endPointerDrag(event, card)}
                   onPointerCancel={cancelPointerDrag}
                   onClick={draggable ? () => handleCardClick(card) : undefined}
-                  ariaLabel={
-                    playable
-                      ? "Playable card in your hand"
-                      : "Card in your hand"
-                  }
                   className={
                     highlighted
                       ? "cursor-grab touch-none shadow-[0_0_0_2px_rgba(255,255,255,0.34),0_14px_30px_rgba(255,255,255,0.12)] active:cursor-grabbing"
@@ -8151,6 +8551,7 @@ function PlayerRow({
 }
 
 function LobbyWaitingRoom({
+  socket,
   room,
   player,
   roomCode,
@@ -8166,6 +8567,7 @@ function LobbyWaitingRoom({
   onCastVoteKick,
   voice,
 }: {
+  socket?: GameSocket | null
   room: RoomSnapshot | null
   player: Player
   roomCode: string
@@ -8176,7 +8578,7 @@ function LobbyWaitingRoom({
   onReady: (ready: boolean) => void
   onStart: () => void
   onCopyInvite: () => Promise<void>
-  onSendChatMessage: (input: SendChatMessageInput) => void
+  onSendChatMessage: (input: SendChatMessageInput) => void | Promise<boolean>
   onStartVoteKick: (targetPlayerId: string) => void
   onCastVoteKick: (voteKickId: string, choice: VoteKickChoice) => void
   voice: RoomVoiceController
@@ -8223,6 +8625,7 @@ function LobbyWaitingRoom({
             <StatusDot connected={connected} />
             <div className="lg:hidden">
               <MobileChatSheet
+                socket={socket}
                 messages={messages}
                 players={players}
                 selfPlayerId={player.id}
@@ -8257,6 +8660,7 @@ function LobbyWaitingRoom({
           />
 
           <TableChatPanel
+            socket={socket}
             messages={messages}
             players={players}
             selfPlayerId={player.id}

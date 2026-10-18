@@ -96,5 +96,33 @@ This will place the ui components in the `packages/ui/src/components` directory.
 To use the components in your app, import them from the `ui` package.
 
 ```tsx
-import { Button } from "@workspace/ui/components/button";
+import { Button } from "@workspace/ui/components/button"
 ```
+
+### Public chat and desktop controls
+
+Public room messages support replies, emoji reactions, and transient typing
+indicators. Replies keep their message ID; if the original leaves the room's
+in-memory history, the quote is shown as unavailable. Closing chat preserves the
+current draft/reply target. Incoming messages preserve your reading position;
+use the new-messages button to return to the latest messages.
+
+Desktop keyboard controls are available while a game is open:
+
+| Key        | Action                                               |
+| ---------- | ---------------------------------------------------- |
+| Arrow keys | Move focus through your hand, including staged cards |
+| Space      | Stage or unstage the focused card when legal         |
+| D          | Draw, or accept the active draw penalty              |
+| Enter      | Submit a legal selection, or pass after drawing      |
+| C          | Open and focus chat                                  |
+| Escape     | Close the top panel, or clear the selection          |
+| ?          | Show the compact shortcut guide                      |
+
+Space, D and Enter require your turn and synchronized state. Hand navigation,
+chat, Escape and the guide remain available off turn. Shortcuts pause in text
+fields, IME composition, dialogs and held repeats; browser modifier combinations
+are preserved. Tab and Shift+Tab retain normal focus navigation. Pending actions
+block duplicate submissions; an uncertain acknowledgement requires refreshing
+the seat. Mobile keeps its touch controls. The browser title shows whose turn
+it is.

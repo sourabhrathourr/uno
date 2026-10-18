@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 
 import type {
   ChatChannel,
@@ -22,6 +22,8 @@ export function useChannelChat({
   isReading,
   onBeforeSend,
   onSendMessage,
+  onTyping,
+  onComposeEnd,
 }: {
   messages: Array<ChatMessage>
   squadMessages: Array<ChatMessage>
@@ -31,9 +33,15 @@ export function useChannelChat({
   selfPlayerId: string
   isReading: boolean
   onBeforeSend?: () => void
-  onSendMessage: (input: SendChatMessageInput) => void
+  onSendMessage: (input: SendChatMessageInput) => void | Promise<boolean>
+  onTyping?: (typing: boolean) => void
+  onComposeEnd?: () => void
 }) {
   const [text, setText] = useState("")
+  const [replyToMessageId, setReplyTarget] = useState<string | null>(null)
+  const [sending, setSending] = useState(false)
+  const sendingRef = useRef(false)
+  const draftRevision = useRef(0)
   const [tray, setTray] = useState<ChatTray | null>(null)
   const [channel, setChannel] = useState<ChatChannel>("public")
   const [mentionPlayerIds, setMentionPlayerIds] = useState<Array<string>>([])
@@ -75,22 +83,48 @@ export function useChannelChat({
     if (isReading) markChannelRead()
   }, [isReading, markChannelRead])
 
-  function send(input: SendChatMessageInput) {
+  async function send(input: SendChatMessageInput) {
+    if (sendingRef.current) return false
+    sendingRef.current = true
+    setSending(true)
+    onComposeEnd?.()
     playFx("buttonSoft", { volume: 0.36 })
     onBeforeSend?.()
-    onSendMessage({ ...input, channel })
+    try {
+      return (await onSendMessage({ ...input, channel })) !== false
+    } catch {
+      return false
+    } finally {
+      sendingRef.current = false
+      setSending(false)
+    }
   }
 
-  function sendText() {
+  async function sendText() {
     const body = text.trim()
     if (!body) return
-    send({ kind: "text", body, mentionPlayerIds })
+    const reply = channel === "public" ? replyToMessageId : null
+    const revision = draftRevision.current
+    const sent = await send({
+      kind: "text",
+      body,
+      mentionPlayerIds,
+      ...(reply ? { replyToMessageId: reply } : {}),
+    })
+    if (!sent || revision !== draftRevision.current) return
     setText("")
     setMentionPlayerIds([])
+    setReplyTarget(null)
   }
 
+  function setReplyToMessageId(id: string | null) {
+    draftRevision.current++
+    setReplyTarget(id)
+  }
   function changeText(value: string) {
+    draftRevision.current++
     setText(value)
+    onTyping?.(channel === "public" && value.trim().length > 0)
     setMentionPlayerIds((current) =>
       current.filter((playerId) => {
         const mentioned = players.find((candidate) => candidate.id === playerId)
@@ -103,10 +137,12 @@ export function useChannelChat({
     mentioned: Player,
     range: { start: number; end: number }
   ) {
+    draftRevision.current++
     const before = text.slice(0, range.start)
     const after = text.slice(range.end)
     const next = `${before}@${mentioned.name} ${after}`
     setText(next)
+    onTyping?.(channel === "public")
     setMentionPlayerIds((current) =>
       Array.from(new Set([...current, mentioned.id]))
     )
@@ -131,6 +167,9 @@ export function useChannelChat({
 
   return {
     applyMention,
+    replyToMessageId,
+    setReplyToMessageId,
+    sending,
     changeText,
     channel,
     channelMessages,

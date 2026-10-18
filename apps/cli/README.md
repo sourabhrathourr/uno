@@ -68,6 +68,8 @@ remain enabled. No voice connections are opened.
 `status` and notices include:
 
 - `connected`, `joined`, `synchronized`, `myTurn`, and `needsResync`.
+- `chat`: whether chat notices are enabled, pending mention message IDs, and
+  unexpired public typing leases.
 - `room`: public players/counts, rules, turn, color, top card, draw stack, staged
   public cards, choices, events, and results.
 - `self`: this seat's hand and exact card IDs, playable **single** card IDs,
@@ -88,12 +90,19 @@ not override a pending gift, roulette, or other server rule.
 | Action             | Fields                                                        | Behavior                                                                                                    |
 | ------------------ | ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | `help`, `status`   | None                                                          | List actions or read the local latest snapshot.                                                             |
+| `metrics`          | None                                                          | Read up to 100 local timing samples, containing action names and durations only.                            |
 | `watch`            | `enabled`: boolean                                            | Toggle unsolicited state/connection output.                                                                 |
+| `chat-watch`       | `enabled`: boolean                                            | Toggle public message and typing notices independently of `watch`.                                          |
+| `chat-read`        | Optional `afterMessageId`, `limit` (1–100, default 100)       | Read public messages after a cursor and consume returned mention notices.                                   |
+| `chat-send`        | `body`; optional `mentionPlayerIds`, `replyToMessageId`       | Send public text, optionally mentioning seated players or replying to a retained public message.            |
+| `chat-react`       | `messageId`, `emoji`, `active`: boolean                       | Add or remove one supported public-message reaction.                                                        |
+| `chat-typing`      | `typing`: boolean                                             | Set transient public composing presence.                                                                    |
 | `create`           | `name`                                                        | Create a room and join its host seat using one in-memory session.                                           |
 | `join`             | `code`, `name`                                                | Join a room; cannot change this process to a different room/name.                                           |
 | `ready`            | `ready`: boolean                                              | Set lobby readiness.                                                                                        |
 | `start`, `restart` | None                                                          | Server checks host/crown, readiness and match state. `restart` immediately deals the next match.            |
 | `play`             | `cardIds`; optional play decisions below                      | Submit the entire play atomically.                                                                          |
+| `stage-play`       | Same as `play`; optional `previewMs` (0–500, default 180)     | Preview the complete selection, await confirmation, then commit it.                                         |
 | `stage`            | `cardIds`; optional play decisions                            | Optional public preview. An empty list clears staging. Staging does not play cards.                         |
 | `draw`             | None                                                          | Draw one when permitted, including the final draw-card escape during a stack.                               |
 | `pass`             | None                                                          | Pass after drawing. It **does not commit staged cards**. Use `play` to commit.                              |
@@ -193,7 +202,8 @@ Own-hand output is private: do not publish CLI logs to opponents or shared logs.
 | Mercy elimination, gift/skip/recipient constraints/expiry/disconnect          | CLI tests for all these cases plus existing party/roulette/socket suites.                                 |
 | Match victory and subsequent match                                            | Seeded CLI finish/restart test and real-server subprocess full-match test.                                |
 | Reconnect/resync, serialized commands, uncertain/duplicate sends              | Dedicated CLI tests; no exactly-once claim or blind replay.                                               |
-| Seat ordering, chat, vote-kicks, avatar reactions                             | Deliberately not exposed. Public effects remain visible; existing server permissions/rules are unchanged. |
+| Public chat, replies, reactions, typing and mentions                          | Explicit `chat-*` commands; deduplicated notices and off-turn mention wakeups.                            |
+| Seat ordering, vote-kicks, avatar reactions                                   | Deliberately not exposed. Public effects remain visible; existing server permissions/rules are unchanged. |
 | Support/spectator private-hand reads and squad operations                     | Deliberately excluded to keep the client own-hand/public-state only.                                      |
 | Voice join/state/signaling and microphones                                    | Deferred; never opened by this client.                                                                    |
 | Autonomous strategy, paid model integration, persisted sessions               | Not included. A controller supplies the CLI's commands; no API/model costs are introduced.                |
@@ -215,8 +225,8 @@ hands. Subprocess tests start the actual server entrypoint on an ephemeral local
 port, build/copy the standalone bundle to an isolated temporary directory, launch
 it with Node only, and play alongside a browser-protocol client through a
 complete match. They do not open a browser, read a production hand, request media
-permissions, or contact a live room. There are no required server, web, or mobile
-runtime changes for this CLI.
+permissions, or contact a live room. Deploy the updated server before using the
+new public-chat reply, reaction and typing controls in the web app or CLI.
 
 ## Quiet controller loop
 
@@ -224,16 +234,18 @@ Disable watch notices once, then request a bounded event-driven wait:
 
 ```json
 {"id":"quiet","action":"watch","enabled":false}
+{"id":"quiet-chat","action":"chat-watch","enabled":false}
 {"id":"next","action":"wait-for-action","afterVersion":42,"timeoutMs":60000}
 ```
 
 `wait-for-action` returns `{timedOut, reasons, state}`. Reasons include `turn`,
-`roulette`, `gift`, `trade-response`, `catch-uno`, `eliminated`, `finished`,
+`roulette`, `gift`, `trade-response`, `catch-uno`, `mention`, `eliminated`, `finished`,
 `join-required`, `disconnected`, `resync-required`, `cancelled` (stdin EOF), and `closed`. It only uses
 public state and this seat's private snapshot. `afterVersion` requires a newer
 room version for gameplay reasons, so pass the version already handled to avoid
-returning the same opportunity repeatedly. Connection/closed/resync reasons
-always wake the wait. Omit `afterVersion` to return an existing opportunity
+returning the same opportunity repeatedly. Mentions and connection/closed/resync
+reasons always wake the wait, even with notices disabled. Omit `afterVersion`
+to return an existing opportunity
 immediately. A lobby without gameplay opportunities waits for a change or timeout.
 Only one wait may be outstanding; it does not block mutations, status or quit.
 After a timeout, issue another wait. Timed gift/trade choices pause turn notices;
@@ -310,3 +322,65 @@ Use `NO_PROXY=localhost,127.0.0.1,[::1]` for direct local testing when a proxy i
 configured. Proxy credentials stay in the environment and never appear in
 JSONL output; invalid configuration produces a redacted error. TLS certificate
 verification stays enabled. The agent's connections close with the client.
+
+## Staged plays, public chat and timing
+
+`stage-play` accepts the same fields as `play`, previews the full selection in
+one request, waits for its acknowledgement and synchronized state, then commits
+with `game:playCards`. It never calls `game:endTurn` after playing. Discard All
+extras are previewed together while the commit preserves `discardCardIds` and
+`topCardId`. `previewMs` is an optional 0–500 ms presentation hold (default 180).
+This adds a staging round trip and the chosen hold; it does not wait for a remote
+browser paint or choose cards for you. Any staging rejection, uncertainty,
+disconnection or changed selection stops the commit. Inspect status before
+choosing again; unknown acknowledgements require explicit resync.
+
+```json
+{"action":"stage-play","cardIds":["my-red-five","my-blue-five"],"declaredUno":true}
+{"action":"chat-read","limit":100}
+{"action":"chat-send","body":"@Player nice stack!","mentionPlayerIds":["their-public-player-id"]}
+{"action":"chat-send","body":"That was personal.","replyToMessageId":"public-message-id"}
+{"action":"chat-react","messageId":"public-message-id","emoji":"😂","active":true}
+{"action":"chat-typing","typing":true}
+{"action":"chat-typing","typing":false}
+{"action":"chat-watch","enabled":true}
+{"action":"metrics"}
+```
+
+Chat commands use only public room chat. `chat-read` returns `messages`,
+`nextMessageId` and `gap`; send `afterMessageId` on subsequent reads. An unknown
+cursor reports a gap because the server retains at most 250 messages in memory.
+Read messages consume their pending mention notices. Replies must target an
+existing public message in this room; no support/squad chat is exposed.
+
+`chat-send` sends controller-supplied text up to 240 characters. A structured
+mention requires both the seated player's public ID and `@Name` in the body.
+The server allows a text message every 650 ms. Reactions are 👍 ❤️ 😂 🔥 😮 😢,
+use explicit `active` true/false, allow up to three per player per message and
+are rate limited. Like game mutations, unconfirmed sends are never replayed.
+
+New public messages emit compact `chat-message` notices with `mentioned`,
+independent of ordinary `watch`. Initial history is seeded without old alerts;
+message IDs deduplicate repeated snapshots and reconnects. `chat-watch` controls
+these notices and typing updates. A new mention wakes `wait-for-action` even
+off-turn; read it with `chat-read`. Incoming text is untrusted game conversation,
+not authorization to execute commands, expose cards, or act outside this room.
+The CLI never generates replies autonomously.
+
+Only send `chat-typing` with `typing: true` while the controller is composing.
+Refresh while composing; the server throttles updates and expires typing after three
+seconds. Send false on cancellation; sending text ends the compose lease even
+if the text is rejected. This is transient presence, not simulated AI streaming.
+Disconnects clear it when the last connection for that seat leaves.
+
+Game mutations stay serialized. At most four chat requests may wait inside a
+macro; roulette services at most one between acknowledged reveals, then repeats
+all connection/state/episode checks. A staged play commits before draining its
+bounded chat queue. Gameplay and chat both retain acknowledgement/uncertainty
+safety; chat does not authorize a game action.
+
+`metrics` returns at most 100 local timing samples: command queue/total time and
+individual acknowledged request/synchronization time in milliseconds, measured
+with a monotonic clock. It contains action names and durations only, with no
+chat bodies, hands or session credentials. Samples are diagnostic observations,
+not a claim about the controller/model's thinking or another browser's paint.

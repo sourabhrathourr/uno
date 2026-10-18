@@ -40,7 +40,13 @@ export type CastVoteKickInput = {
   voteKickId: string
   choice: VoteKickChoice
 }
-import type { PlayerSocialSnapshot, SendChatMessageInput } from "./chat"
+import type {
+  PlayerSocialSnapshot,
+  SendChatMessageInput,
+  ReactToChatMessageInput,
+  ChatTypingPlayer,
+  SetChatTypingInput,
+} from "./chat"
 import type { HouseRules, Player, RoomSnapshot } from "./rooms"
 
 export type GameError = {
@@ -75,6 +81,7 @@ export type JoinRoomResponse = {
   isNewPlayer: boolean
   playerGame?: PlayerGameSnapshot | null
   playerSocial?: PlayerSocialSnapshot | null
+  chatTyping?: ChatTypingPlayer[]
 }
 
 export type ReadyInput = {
@@ -170,6 +177,17 @@ export type ClientToServerEvents = {
     input: SendChatMessageInput,
     ack: (result: CommandResult<RoomSnapshot>) => void
   ) => void
+  "room:reactToChatMessage": (
+    input: ReactToChatMessageInput,
+    ack: (result: CommandResult<RoomSnapshot>) => void
+  ) => void
+  "room:getChatTyping": (
+    ack: (result: CommandResult<ChatTypingPlayer[]>) => void
+  ) => void
+  "room:setChatTyping": (
+    input: SetChatTypingInput,
+    ack: (result: CommandResult<null>) => void
+  ) => void
   "room:startVoteKick": (
     input: StartVoteKickInput,
     ack: (result: CommandResult<RoomSnapshot>) => void
@@ -254,6 +272,7 @@ export type ClientToServerEvents = {
 export type ServerToClientEvents = {
   "room:snapshot": (snapshot: RoomSnapshot) => void
   "game:playerState": (snapshot: PlayerGameSnapshot) => void
+  "room:chatTyping": (players: ChatTypingPlayer[]) => void
   "room:playerSocial": (snapshot: PlayerSocialSnapshot) => void
   "room:event": (event: RoomEvent) => void
   "voice:unavailable": (error: GameError) => void

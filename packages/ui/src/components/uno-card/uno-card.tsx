@@ -12,6 +12,7 @@ import type { CSSProperties, MouseEvent, PointerEvent } from "react"
 import type { Card, CardSize } from "./types"
 
 type Props = {
+  handCardId?: string
   card: Card
   size?: CardSize
   /** Renders the back instead of the face. */
@@ -40,6 +41,7 @@ type Props = {
  * Animations are interruptible CSS transitions on transform only.
  */
 export function UnoCard({
+  handCardId,
   card,
   size = "md",
   faceDown = false,
@@ -86,6 +88,7 @@ export function UnoCard({
   return (
     <button
       type="button"
+      data-hand-card={handCardId}
       aria-label={ariaLabel ?? labelFor(card, faceDown)}
       onClick={isInteractive ? onClick : undefined}
       onPointerDown={onPointerDown}

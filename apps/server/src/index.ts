@@ -53,6 +53,8 @@ const rooms = new RoomManager({
     void emitRoomState(code, room)
   },
   onRoomExpired: clearExpiredRoomRuntimeState,
+  onChatTypingUpdated: (code, players) =>
+    io.to(code).emit("room:chatTyping", players),
 })
 
 const httpServer = createServer(async (req, res) => {
@@ -218,8 +220,10 @@ io.on("connection", (socket) => {
         isNewPlayer: result.data.isNewPlayer,
         playerGame,
         playerSocial,
+        chatTyping: rooms.getChatTyping(room.code),
       },
     })
+    socket.emit("room:chatTyping", rooms.getChatTyping(room.code))
     void emitRoomState(room.code, room)
 
     if (result.data.isNewPlayer) {
@@ -317,6 +321,36 @@ io.on("connection", (socket) => {
     )
     ack(result)
     if (result.ok) void emitRoomState(result.data.code, result.data)
+  })
+
+  socket.on("room:reactToChatMessage", (input, ack) => {
+    const result = withJoinedPlayer(socket.data, (code, playerId) =>
+      rooms.reactToChatMessage(code, playerId, input)
+    )
+    ack(result)
+    if (result.ok) void emitRoomState(result.data.code, result.data)
+  })
+  socket.on("room:getChatTyping", (ack) => {
+    const { roomCode, playerId } = socket.data
+    if (!roomCode || !playerId) {
+      ack({
+        ok: false,
+        error: { code: "not-joined", message: "Join a room first." },
+      })
+      return
+    }
+    ack({ ok: true, data: rooms.getChatTyping(roomCode) })
+  })
+  socket.on("room:setChatTyping", (input, ack) => {
+    const { roomCode, playerId } = socket.data
+    if (!roomCode || !playerId) {
+      ack({
+        ok: false,
+        error: { code: "not-joined", message: "Join a room first." },
+      })
+      return
+    }
+    ack(rooms.setChatTyping(roomCode, playerId, input?.typing))
   })
 
   socket.on("room:startVoteKick", (input, ack) => {
