@@ -394,6 +394,44 @@ it("hydrates current typing leases on initial mount", async () => {
   expect(h.get().typingNames).toEqual(["B"])
 })
 
+it.each([
+  { source: "initial getter", skewMs: -86_400_000 },
+  { source: "initial getter", skewMs: 86_400_000 },
+  { source: "live update", skewMs: -86_400_000 },
+  { source: "live update", skewMs: 86_400_000 },
+])(
+  "expires typing locally after receipt despite server clock skew: $source $skewMs",
+  async ({ source, skewMs }) => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_700_000_000_000)
+    const remote = { playerId: "b", expiresAt: Date.now() + skewMs }
+    const h = await publicHarness(source === "initial getter" ? [remote] : [])
+    if (source === "live update")
+      await act(() => h.receive("room:chatTyping", [remote]))
+    expect(h.get().typingNames).toEqual(["B"])
+    await act(() => vi.advanceTimersByTime(2999))
+    expect(h.get().typingNames).toEqual(["B"])
+    await act(() => vi.advanceTimersByTime(2))
+    expect(h.get().typingNames).toEqual([])
+  }
+)
+
+it("refreshes the local typing lease on receipt and honors a server clear immediately", async () => {
+  vi.useFakeTimers()
+  vi.setSystemTime(1_700_000_000_000)
+  const h = await publicHarness()
+  const remote = { playerId: "b", expiresAt: 1 }
+  await act(() => h.receive("room:chatTyping", [remote]))
+  await act(() => vi.advanceTimersByTime(2500))
+  await act(() => h.receive("room:chatTyping", [remote]))
+  await act(() => vi.advanceTimersByTime(1000))
+  expect(h.get().typingNames).toEqual(["B"])
+  await act(() => h.receive("room:chatTyping", []))
+  expect(h.get().typingNames).toEqual([])
+  await act(() => vi.advanceTimersByTime(3001))
+  expect(h.get().typingNames).toEqual([])
+})
+
 it("ending composition for send cancels idle and cleanup packets without sending typing-stop", async () => {
   vi.useFakeTimers()
   const h = await publicHarness()
@@ -555,7 +593,7 @@ it("filters typing to room peers, expires remote leases, and cleans up disconnec
     ])
   )
   expect(h.get().typingNames).toEqual(["B"])
-  await act(() => vi.advanceTimersByTime(501))
+  await act(() => vi.advanceTimersByTime(3001))
   expect(h.get().typingNames).toEqual([])
   await act(() => h.get().onTyping(true))
   h.socket.connected = false
@@ -653,3 +691,46 @@ it("preserves reading position on new messages and jumps only on request or when
   expect(list.scrollTop).toBe(1000)
   expect(current.unread).toBe(0)
 })
+
+it.each([
+  { channel: "populated", replacement: ["squad-first", "squad-second"] },
+  { channel: "empty", replacement: [] as string[] },
+])(
+  "resets scroll and unread when switching to a fully replaced $channel channel",
+  async ({ replacement }) => {
+    mountRoot()
+    let ids = ["public-first"]
+    let current!: ReturnType<typeof useReadingScroll>
+    function Harness() {
+      current = useReadingScroll(ids)
+      return <div data-list ref={current.listRef} onScroll={current.onScroll} />
+    }
+    const render = () => root!.render(<Harness />)
+    await act(render)
+    const list = document.querySelector<HTMLDivElement>("[data-list]")!
+    Object.defineProperties(list, {
+      scrollHeight: { configurable: true, value: 1000 },
+      clientHeight: { configurable: true, value: 200 },
+    })
+    list.scrollTop = 200
+    await act(() => list.dispatchEvent(new Event("scroll", { bubbles: true })))
+    await act(() => {
+      ids = [...ids, "public-second"]
+      render()
+    })
+    expect(list.scrollTop).toBe(200)
+    expect(current.unread).toBe(1)
+    await act(() => {
+      ids = replacement
+      render()
+    })
+    expect(list.scrollTop).toBe(1000)
+    expect(current.unread).toBe(0)
+    await act(() => {
+      ids = [...ids, "new-channel-message"]
+      render()
+    })
+    expect(list.scrollTop).toBe(1000)
+    expect(current.unread).toBe(0)
+  }
+)

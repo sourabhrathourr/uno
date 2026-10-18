@@ -121,10 +121,7 @@ export class UnoClient extends EventEmitter {
     })
     this.socket.on("room:chatTyping", (players) => {
       if (!this.isJoined()) return
-      const ids = new Set(this.room?.players.map((player) => player.id))
-      this.typingPlayers = players.filter(
-        (player) => ids.has(player.playerId) && player.expiresAt > Date.now()
-      )
+      this.applyChatTyping(players)
       if (this.chatWatching)
         this.emit("notice", {
           type: "chat-typing",
@@ -258,6 +255,15 @@ export class UnoClient extends EventEmitter {
     this.changed("state")
   }
 
+  private applyChatTyping(players: ChatTypingPlayer[]) {
+    const ids = new Set(this.room?.players.map((player) => player.id))
+    // Server wall-clock timestamps cannot be compared to this device's clock.
+    const expiresAt = Date.now() + 3_000
+    this.typingPlayers = players
+      .filter((player) => ids.has(player.playerId))
+      .map((player) => ({ playerId: player.playerId, expiresAt }))
+  }
+
   private observeChat() {
     const messages = this.room?.chatMessages ?? []
     if (!this.seenChat) {
@@ -351,7 +357,7 @@ export class UnoClient extends EventEmitter {
           ? structuredClone(result.playerGame)
           : null
       this.joinedSocketId = socketId ?? null
-      this.typingPlayers = structuredClone(result.chatTyping ?? [])
+      this.applyChatTyping(result.chatTyping ?? [])
       this.observeChat()
       this.changed("state")
     })()
@@ -749,9 +755,13 @@ export class UnoClient extends EventEmitter {
     if (!this.isJoined()) return ["disconnected"]
     if (this.uncertainAction) return ["resync-required"]
     if (!this.isSynchronized()) return []
-    if (this.mentions.size) return ["mention"]
+    const mentions = this.mentions.size ? ["mention"] : []
     if (afterVersion !== undefined && (this.room?.version ?? 0) <= afterVersion)
-      return []
+      return mentions
+    return [...mentions, ...this.gameplayReasons()]
+  }
+
+  private gameplayReasons(): string[] {
     if (this.room?.status === "finished") return ["finished"]
     const game = this.room?.game
     if (!game) return []
