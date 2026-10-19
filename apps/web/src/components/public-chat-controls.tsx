@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react"
-import { CHAT_REACTIONS } from "@workspace/game"
 import type { ChatMessage, ChatTypingPlayer, Player } from "@workspace/game"
 import type { GameSocket } from "@/lib/realtime"
 
@@ -125,91 +124,64 @@ export function usePublicChatControls(
   }
 }
 
-export function PublicMessageActions({
-  message,
-  selfId,
-  onReply,
-  onReact,
-}: {
-  message: ChatMessage
-  selfId: string
-  onReply: (id: string) => void
-  onReact: (message: ChatMessage, emoji: string) => void
-}) {
-  return (
-    <div
-      className={`mt-1 flex flex-wrap items-center gap-1 text-[11px] text-white/60 ${message.playerId === selfId ? "justify-end" : ""}`}
-    >
-      <button
-        type="button"
-        className="rounded px-1.5 py-1 hover:bg-white/10 focus-visible:outline"
-        aria-label={`Reply to ${message.playerName}'s message`}
-        onClick={() => onReply(message.id)}
-      >
-        Reply
-      </button>
-      {(message.reactions ?? []).map((reaction) => (
-        <button
-          key={reaction.emoji}
-          type="button"
-          aria-label={`${reaction.emoji} reaction, ${reaction.playerIds.length}`}
-          aria-pressed={reaction.playerIds.includes(selfId)}
-          onClick={() => onReact(message, reaction.emoji)}
-          className="rounded-full border border-white/15 px-1.5 py-0.5 aria-pressed:border-yellow-200 aria-pressed:text-yellow-100"
-        >
-          {reaction.emoji} {reaction.playerIds.length}
-        </button>
-      ))}
-      <details className="relative">
-        <summary
-          className="cursor-pointer rounded px-1.5 py-1 hover:bg-white/10"
-          aria-label="Add a reaction"
-        >
-          React
-        </summary>
-        <div className="relative z-10 flex gap-1 rounded-lg border border-white/15 bg-neutral-900 p-1">
-          {CHAT_REACTIONS.map((emoji) => (
-            <button
-              key={emoji}
-              type="button"
-              aria-label={`React ${emoji}`}
-              onClick={(event) => {
-                onReact(message, emoji)
-                event.currentTarget.closest("details")?.removeAttribute("open")
-              }}
-              className="rounded p-1 hover:bg-white/10"
-            >
-              {emoji}
-            </button>
-          ))}
-        </div>
-      </details>
-    </div>
-  )
-}
+export { PublicMessageActions, PublicMessageReactions } from "./message-actions"
 
 export function ReplyPreview({
   message,
   unavailable = false,
   onCancel,
+  onNavigate,
+  isSelf = false,
 }: {
   message?: ChatMessage
   unavailable?: boolean
   onCancel?: () => void
+  onNavigate?: () => void
+  isSelf?: boolean
 }) {
-  return (
-    <div className="mb-1 flex items-center gap-2 rounded-lg border-l-2 border-yellow-200/60 bg-white/5 px-2 py-1 text-xs text-white/65">
-      <span className="min-w-0 flex-1 truncate">
-        {unavailable
-          ? "Original message is no longer available"
-          : `${message?.playerName ?? "Player"}: ${message?.kind === "gif" ? "GIF" : (message?.body.slice(0, 100) ?? "Message")}`}
+  const missing = unavailable || !message
+  const content = (
+    <>
+      <span
+        className={`block truncate text-xs font-semibold ${isSelf ? "text-amber-900" : "text-yellow-100"}`}
+      >
+        {missing
+          ? "Original message unavailable"
+          : `${onCancel ? "Replying to " : "↪ "}${message.playerName}`}
       </span>
+      <span
+        className={`mt-0.5 line-clamp-2 text-xs leading-5 [overflow-wrap:anywhere] whitespace-pre-wrap ${isSelf ? "text-neutral-700" : "text-white/75"}`}
+      >
+        {missing
+          ? "Original message is no longer available"
+          : message.kind === "gif"
+            ? (message.label ?? "GIF")
+            : message.body}
+      </span>
+    </>
+  )
+  const quoteClass = `min-w-0 flex-1 rounded-lg border-l-[3px] px-2.5 py-2 text-left ${isSelf ? "border-amber-700/60 bg-black/[0.065]" : "border-yellow-200/60 bg-black/25"}`
+  return (
+    <div className="mb-2 flex min-w-0 items-center gap-1.5">
+      {!missing && onNavigate ? (
+        <button
+          type="button"
+          onClick={onNavigate}
+          aria-label={`Go to original message from ${message.playerName}`}
+          title="Go to original message"
+          className={`${quoteClass} cursor-pointer hover:brightness-125 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-yellow-400`}
+        >
+          {content}
+        </button>
+      ) : (
+        <div className={quoteClass}>{content}</div>
+      )}
       {onCancel && (
         <button
           type="button"
           aria-label="Cancel reply"
           onClick={onCancel}
-          className="rounded px-2 py-1 hover:bg-white/10"
+          className="shrink-0 rounded p-2 text-white/65 hover:bg-white/10 focus-visible:outline-2 focus-visible:outline-yellow-200"
         >
           ×
         </button>

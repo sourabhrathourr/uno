@@ -86,6 +86,7 @@ import { useReadingScroll } from "@/components/use-reading-scroll"
 import { installGameShortcuts } from "@/lib/game-shortcuts"
 import {
   PublicMessageActions,
+  PublicMessageReactions,
   ReplyPreview,
   usePublicChatControls,
 } from "@/components/public-chat-controls"
@@ -4733,9 +4734,36 @@ function ChatMessageList({
   emptyVariant?: "panel" | "sheet"
   className?: string
 }) {
-  const { listRef, onScroll, unread, latest } = useReadingScroll(
+  const { listRef, onScroll, unread, latest, reveal } = useReadingScroll(
     messages.map((message) => message.id)
   )
+  const messageNodes = useRef(new Map<string, HTMLDivElement>())
+  const highlightTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined
+  )
+  const [highlighted, setHighlighted] = useState<string | null>(null)
+  const [navigationNotice, setNavigationNotice] = useState("")
+  useEffect(() => () => clearTimeout(highlightTimer.current), [])
+  useEffect(() => {
+    if (
+      highlighted &&
+      !messages.some((message) => message.id === highlighted)
+    ) {
+      clearTimeout(highlightTimer.current)
+      setHighlighted(null)
+    }
+  }, [highlighted, messages])
+  function goToMessage(id: string) {
+    const node = messageNodes.current.get(id)
+    if (!node || !reveal(node)) {
+      setNavigationNotice("Original message is no longer available")
+      return
+    }
+    setNavigationNotice("")
+    clearTimeout(highlightTimer.current)
+    setHighlighted(id)
+    highlightTimer.current = setTimeout(() => setHighlighted(null), 2000)
+  }
   const emptyState =
     emptyVariant === "sheet" ? (
       <div className="relative isolate flex min-h-[280px] flex-1 flex-col items-center justify-center overflow-hidden rounded-2xl border border-white/10 bg-[#0d0c0a] px-5 py-8 text-center shadow-[inset_0_1px_0_rgba(255,255,255,0.055),inset_0_0_0_1px_rgba(255,255,255,0.025)]">
@@ -4795,19 +4823,19 @@ function ChatMessageList({
         {messages.length === 0
           ? emptyState
           : messages.map((message) => (
-              <div key={message.id}>
-                {message.replyToMessageId && (
-                  <ReplyPreview
-                    message={messages.find(
-                      (parent) => parent.id === message.replyToMessageId
-                    )}
-                    unavailable={
-                      !messages.some(
-                        (parent) => parent.id === message.replyToMessageId
-                      )
-                    }
-                  />
-                )}
+              <div
+                key={message.id}
+                ref={(node) => {
+                  if (node) messageNodes.current.set(message.id, node)
+                  else messageNodes.current.delete(message.id)
+                }}
+                data-chat-message={message.id}
+                data-highlighted={highlighted === message.id || undefined}
+                role="article"
+                tabIndex={-1}
+                aria-label={`Message from ${message.playerName}: ${message.kind === "gif" ? "GIF" : message.body.slice(0, 120)}`}
+                className={`group/message min-w-0 rounded-xl p-1 transition-colors focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-yellow-200 motion-reduce:transition-none ${highlighted === message.id ? "bg-yellow-200/15 outline-2 -outline-offset-2 outline-yellow-200/60" : ""}`}
+              >
                 <ChatMessageBubble
                   message={message}
                   isSelf={message.playerId === selfPlayerId}
@@ -4815,18 +4843,49 @@ function ChatMessageList({
                   players={players}
                   roomCode={roomCode}
                   onVoteKick={onVoteKick}
+                  replyPreview={
+                    message.replyToMessageId ? (
+                      <ReplyPreview
+                        message={messages.find(
+                          (parent) => parent.id === message.replyToMessageId
+                        )}
+                        unavailable={
+                          !messages.some(
+                            (parent) => parent.id === message.replyToMessageId
+                          )
+                        }
+                        onNavigate={() =>
+                          goToMessage(message.replyToMessageId!)
+                        }
+                        isSelf={message.playerId === selfPlayerId}
+                      />
+                    ) : undefined
+                  }
+                  actions={
+                    message.channel === "public" && onReply && onReact ? (
+                      <PublicMessageActions
+                        message={message}
+                        selfId={selfPlayerId}
+                        onReply={onReply}
+                        onReact={onReact}
+                      />
+                    ) : undefined
+                  }
                 />
-                {message.channel === "public" && onReply && onReact && (
-                  <PublicMessageActions
+                {message.channel === "public" && onReact && (
+                  <PublicMessageReactions
                     message={message}
                     selfId={selfPlayerId}
-                    onReply={onReply}
+                    players={players}
                     onReact={onReact}
                   />
                 )}
               </div>
             ))}
       </div>
+      <span role="status" className="sr-only">
+        {navigationNotice}
+      </span>
       {unread > 0 && (
         <button
           type="button"
@@ -5432,6 +5491,8 @@ function ChatMessageBubble({
   players,
   roomCode,
   onVoteKick,
+  replyPreview,
+  actions,
 }: {
   message: ChatMessage
   isSelf: boolean
@@ -5439,12 +5500,19 @@ function ChatMessageBubble({
   players: Array<Player>
   roomCode: string
   onVoteKick?: (voteKickId: string, choice: VoteKickChoice) => void
+  replyPreview?: ReactNode
+  actions?: ReactNode
 }) {
   if (message.kind === "vote-kick" && message.voteKick) {
     return (
-      <div className={"flex " + (isSelf ? "justify-end" : "justify-start")}>
-        <div className="w-[240px] max-w-[94%]">
+      <div
+        className={
+          "flex items-start gap-1.5 " + (isSelf ? "flex-row-reverse" : "")
+        }
+      >
+        <div className="w-[240px] max-w-[calc(100%-2.25rem)] min-w-0">
           <ChatMessageMeta message={message} isSelf={isSelf} />
+          {replyPreview}
           <VoteKickPollBubble
             poll={message.voteKick}
             players={players}
@@ -5453,15 +5521,21 @@ function ChatMessageBubble({
             onVote={onVoteKick}
           />
         </div>
+        {actions}
       </div>
     )
   }
 
   if (message.kind === "gif") {
     return (
-      <div className={"flex " + (isSelf ? "justify-end" : "justify-start")}>
-        <div className="w-[180px] max-w-[88%]">
+      <div
+        className={
+          "flex items-start gap-1.5 " + (isSelf ? "flex-row-reverse" : "")
+        }
+      >
+        <div className="w-[180px] max-w-[calc(100%-2.25rem)] min-w-0">
           <ChatMessageMeta message={message} isSelf={isSelf} />
+          {replyPreview}
           <div
             role="img"
             aria-label={`${isSelf ? "You" : message.playerName} sent ${message.label ?? "a GIF reaction"}`}
@@ -5475,13 +5549,23 @@ function ChatMessageBubble({
             />
           </div>
         </div>
+        {actions}
       </div>
     )
   }
 
   return (
-    <div className={"flex " + (isSelf ? "justify-end" : "justify-start")}>
-      <div className={"max-w-[88%] " + (isSelf ? "items-end" : "items-start")}>
+    <div
+      className={
+        "flex items-start gap-1.5 " + (isSelf ? "flex-row-reverse" : "")
+      }
+    >
+      <div
+        className={
+          "max-w-[calc(100%-2.25rem)] min-w-0 " +
+          (isSelf ? "items-end" : "items-start")
+        }
+      >
         <ChatMessageMeta message={message} isSelf={isSelf} />
         <div
           className={
@@ -5491,10 +5575,11 @@ function ChatMessageBubble({
               : "rounded-bl-md bg-white/[0.085] text-white/82 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.07),0_10px_24px_rgba(0,0,0,0.22)]")
           }
         >
+          {replyPreview}
           {message.kind === "emoji" ? (
             <p className="text-3xl leading-none">{message.body}</p>
           ) : (
-            <div className="text-sm text-pretty">
+            <div className="text-sm text-pretty [overflow-wrap:anywhere]">
               <ChatMessageBody
                 body={message.body}
                 mentionPlayerIds={message.mentionPlayerIds}
@@ -5506,6 +5591,7 @@ function ChatMessageBubble({
           )}
         </div>
       </div>
+      {actions}
     </div>
   )
 }

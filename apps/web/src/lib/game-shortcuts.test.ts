@@ -237,6 +237,20 @@ it.each([
   noActions()
 })
 
+it("leaves reading and navigation keys with a focused quoted message in chat", () => {
+  state.canDraw = state.canSubmit = true
+  const log = document.createElement("div")
+  log.setAttribute("role", "log")
+  const original = document.createElement("article")
+  original.tabIndex = -1
+  log.append(original)
+  document.body.append(log)
+  original.focus()
+  for (const key of ["ArrowDown", "ArrowUp", " ", "Enter", "d", "c", "?"])
+    expect(press(key, {}, original).defaultPrevented).toBe(false)
+  noActions()
+})
+
 it("allows keys from ordinary non-editable content", () => {
   state.canDraw = true
   const element = document.createElement("div")
