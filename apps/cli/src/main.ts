@@ -15,7 +15,8 @@ Example: {"id":2,"action":"ready","ready":true}
 Example: {"id":3,"action":"play","cardIds":["your-card-id"],"declaredUno":true}
 Actions: ${COMMANDS.join(", ")}
 
-No voice, spectator/support access, automatic strategy, or saved/browser sessions.
+Squad chat and support views follow the website's membership/eligibility rules.
+No voice, unrestricted spectating, automatic strategy, or saved/browser sessions.
 See apps/cli/README.md for all commands and reconnect/unknown-outcome handling.
 `
 

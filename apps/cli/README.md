@@ -3,6 +3,8 @@
 A persistent JSON Lines client for the existing UNO No Mercy server. It opens one
 ordinary player seat, receives public room state and its own hand, and submits
 commands through the same typed Socket.IO protocol used by the web/mobile apps.
+Eligible inactive players can join a squad, read its private chat, and explicitly
+request the supported player's read-only hand through the website's support flow.
 It does not choose moves autonomously. A terminal tool or bot can use it without
 screen coordinates, card animations, or multiple staging clicks.
 
@@ -70,6 +72,9 @@ remain enabled. No voice connections are opened.
 - `connected`, `joined`, `synchronized`, `myTurn`, and `needsResync`.
 - `chat`: whether chat notices are enabled, pending mention message IDs, and
   unexpired public typing leases.
+- `squadChat`: availability, opt-in notice preference, and separate pending
+  mention IDs. `support`: membership, eligible targets and approval requests.
+  Neither includes squad message bodies or the supported player's hand.
 - `room`: public players/counts, rules, turn, color, top card, draw stack, staged
   public cards, choices, events, and results.
 - `self`: this seat's hand and exact card IDs, playable **single** card IDs,
@@ -87,38 +92,44 @@ not override a pending gift, roulette, or other server rule.
 
 ## Commands
 
-| Action             | Fields                                                        | Behavior                                                                                                                                                      |
-| ------------------ | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `help`, `status`   | None                                                          | List actions or read the local latest snapshot.                                                                                                               |
-| `metrics`          | None                                                          | Read up to 100 local timing samples, containing action names and durations only.                                                                              |
-| `watch`            | `enabled`: boolean                                            | Toggle unsolicited state/connection output.                                                                                                                   |
-| `chat-watch`       | `enabled`: boolean                                            | Toggle public message and typing notices independently of `watch`.                                                                                            |
-| `chat-read`        | Optional `afterMessageId`, `limit` (1–100, default 100)       | Read public messages after a cursor and consume returned mention notices.                                                                                     |
-| `chat-send`        | `body`; optional `mentionPlayerIds`, `replyToMessageId`       | Send public text, optionally mentioning seated players or replying to a retained public message.                                                              |
-| `chat-react`       | `messageId`, `emoji`, `active`: boolean                       | Add or remove one supported public-message reaction.                                                                                                          |
-| `chat-typing`      | `typing`: boolean                                             | Set transient public composing presence.                                                                                                                      |
-| `vote-read`        | Optional `voteKickId`                                         | Read the active vote, or a retained public poll by ID, with deadline, counts, eligibility and your choice.                                                    |
-| `vote-cast`        | `voteKickId`, `choice`: `yes` or `no`                         | Cast an explicit vote through the existing server API. Never starts a vote or chooses automatically.                                                          |
-| `create`           | `name`                                                        | Create a room and join its host seat using one in-memory session.                                                                                             |
-| `join`             | `code`, `name`                                                | Join a room; cannot change this process to a different room/name.                                                                                             |
-| `ready`            | `ready`: boolean                                              | Set lobby readiness.                                                                                                                                          |
-| `start`, `restart` | None                                                          | Server checks host/crown and match state. `start` checks readiness; `restart` immediately deals to retained seats without rechecking readiness or connection. |
-| `play`             | `cardIds`; optional play decisions below                      | Submit the entire play atomically.                                                                                                                            |
-| `stage-play`       | Same as `play`; optional `previewMs` (0–500, default 180)     | Preview the complete selection, await confirmation, then commit it.                                                                                           |
-| `stage`            | `cardIds`; optional play decisions                            | Optional public preview. An empty list clears staging. Staging does not play cards.                                                                           |
-| `draw`             | None                                                          | Draw one when permitted, including the final draw-card escape during a stack.                                                                                 |
-| `pass`             | None                                                          | Pass after drawing. It **does not commit staged cards**. Use `play` to commit.                                                                                |
-| `penalty`          | None                                                          | Take the accumulated draw penalty.                                                                                                                            |
-| `resolve-roulette` | None                                                          | Resolve your pending roulette sequentially, awaiting each acknowledgement and synchronized state.                                                             |
-| `wait-for-action`  | Optional `afterVersion`, `timeoutMs` (1–60000, default 60000) | Wait without polling; return actionable reasons and current state, or `timedOut: true`.                                                                       |
-| `roulette`         | None                                                          | Reveal one roulette card; repeat from the updated pending state until resolved.                                                                               |
-| `catch-uno`        | `targetPlayerId`                                              | Catch a player listed in your `catchablePlayerIds`.                                                                                                           |
-| `trade-offer`      | `cardId`, `targetPlayerId`                                    | Offer your own card to an eligible target.                                                                                                                    |
-| `trade-respond`    | `offerId`, `accept`; `cardId` when accepting                  | Accept with your own card, or decline.                                                                                                                        |
-| `trade-cancel`     | `offerId`                                                     | Cancel your own offer.                                                                                                                                        |
-| `gift`             | `giftId`; optionally `cardId` and `targetPlayerId` together   | Send a card from your own frozen gift hand, or omit both optional fields to skip.                                                                             |
-| `resync`           | None                                                          | Rejoin the same seat and receive an authoritative public/private snapshot. Clears the unknown-outcome lock.                                                   |
-| `quit`             | None                                                          | Disconnect and exit.                                                                                                                                          |
+| Action             | Fields                                                             | Behavior                                                                                                                                                      |
+| ------------------ | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `help`, `status`   | None                                                               | List actions or read the local latest snapshot.                                                                                                               |
+| `metrics`          | None                                                               | Read up to 100 local timing samples, containing action names and durations only.                                                                              |
+| `watch`            | `enabled`: boolean                                                 | Toggle unsolicited state/connection output.                                                                                                                   |
+| `chat-watch`       | `enabled`: boolean; optional `channel`: `public` or `squad`        | Toggle notices for that channel independently of `watch`; squad notices default off.                                                                          |
+| `chat-read`        | Optional `channel`, `afterMessageId`, `limit` (1–100, default 100) | Read that channel after its own cursor and consume returned mention notices.                                                                                  |
+| `chat-send`        | `body`; optional `channel`, `mentionPlayerIds`, `replyToMessageId` | Send text; replies are public only. Omitted channel means `public`.                                                                                           |
+| `chat-react`       | `messageId`, `emoji`, `active`: boolean                            | Add or remove one supported public-message reaction.                                                                                                          |
+| `chat-typing`      | `typing`: boolean                                                  | Set transient public composing presence.                                                                                                                      |
+| `support-read`     | None                                                               | Read local squad membership, candidates, incoming requests and your outgoing request.                                                                         |
+| `support-join`     | `supportedPlayerId`                                                | Join an eligible active player's squad.                                                                                                                       |
+| `support-request`  | `supportedPlayerId`                                                | Request approval to rejoin a squad that kicked you.                                                                                                           |
+| `support-respond`  | `supporterPlayerId`, `approve`: boolean                            | Approve or decline a request to join your squad.                                                                                                              |
+| `support-kick`     | `supporterPlayerId`                                                | Remove a supporter from your own squad.                                                                                                                       |
+| `support-view`     | None                                                               | Explicitly fetch your linked player's read-only hand; never replaces `self` or grants gameplay control.                                                       |
+| `vote-read`        | Optional `voteKickId`                                              | Read the active vote, or a retained public poll by ID, with deadline, counts, eligibility and your choice.                                                    |
+| `vote-cast`        | `voteKickId`, `choice`: `yes` or `no`                              | Cast an explicit vote through the existing server API. Never starts a vote or chooses automatically.                                                          |
+| `create`           | `name`                                                             | Create a room and join its host seat using one in-memory session.                                                                                             |
+| `join`             | `code`, `name`                                                     | Join a room; cannot change this process to a different room/name.                                                                                             |
+| `ready`            | `ready`: boolean                                                   | Set lobby readiness.                                                                                                                                          |
+| `start`, `restart` | None                                                               | Server checks host/crown and match state. `start` checks readiness; `restart` immediately deals to retained seats without rechecking readiness or connection. |
+| `play`             | `cardIds`; optional play decisions below                           | Submit the entire play atomically.                                                                                                                            |
+| `stage-play`       | Same as `play`; optional `previewMs` (0–500, default 180)          | Preview the complete selection, await confirmation, then commit it.                                                                                           |
+| `stage`            | `cardIds`; optional play decisions                                 | Optional public preview. An empty list clears staging. Staging does not play cards.                                                                           |
+| `draw`             | None                                                               | Draw one when permitted, including the final draw-card escape during a stack.                                                                                 |
+| `pass`             | None                                                               | Pass after drawing. It **does not commit staged cards**. Use `play` to commit.                                                                                |
+| `penalty`          | None                                                               | Take the accumulated draw penalty.                                                                                                                            |
+| `resolve-roulette` | None                                                               | Resolve your pending roulette sequentially, awaiting each acknowledgement and synchronized state.                                                             |
+| `wait-for-action`  | Optional `afterVersion`, `timeoutMs` (1–60000, default 60000)      | Wait without polling; return actionable reasons and current state, or `timedOut: true`.                                                                       |
+| `roulette`         | None                                                               | Reveal one roulette card; repeat from the updated pending state until resolved.                                                                               |
+| `catch-uno`        | `targetPlayerId`                                                   | Catch a player listed in your `catchablePlayerIds`.                                                                                                           |
+| `trade-offer`      | `cardId`, `targetPlayerId`                                         | Offer your own card to an eligible target.                                                                                                                    |
+| `trade-respond`    | `offerId`, `accept`; `cardId` when accepting                       | Accept with your own card, or decline.                                                                                                                        |
+| `trade-cancel`     | `offerId`                                                          | Cancel your own offer.                                                                                                                                        |
+| `gift`             | `giftId`; optionally `cardId` and `targetPlayerId` together        | Send a card from your own frozen gift hand, or omit both optional fields to skip.                                                                             |
+| `resync`           | None                                                               | Rejoin the same seat and receive an authoritative public/private snapshot. Clears the unknown-outcome lock.                                                   |
+| `quit`             | None                                                               | Disconnect and exit.                                                                                                                                          |
 
 Play/stage decisions: `chosenColor` (`red`, `green`, `blue`, `yellow`),
 `declaredUno` (boolean), `rotateHands` (boolean), `swapWithPlayerId`.
@@ -190,10 +201,48 @@ be false. Never replay a move solely because the old hand remains visible.
 mutation is sent. A mismatch returns `stale-version`. This is a local stale-choice
 check, **not** an atomic server compare-and-swap or exactly-once guarantee.
 
-This client exposes no raw socket events, spectator/support views, squad chat,
-other-player sessions or analysis endpoints. This is a client-side allowlist;
+This client exposes typed support commands but no raw socket events, unrestricted
+spectator views, other-player sessions or analysis endpoints. This is a client-side allowlist;
 it does not add a server-enforced bot role or change other clients' permissions.
-Own-hand output is private: do not publish CLI logs to opponents or shared logs.
+Hands and squad chat are private: keep their CLI output within the authorized squad.
+
+## Squads and support
+
+The server permits inactive seats (including waiting, eliminated and finished
+players) to support an active player while a match is running. Resolve your own
+pending last gift first. A supporter cannot switch targets while their current
+target remains active. The active target can kick supporters; a kicked player
+must request rejoin approval, and only that target can approve or decline.
+Commands use public player IDs and always recheck the existing server rules.
+
+```json
+{"action":"support-read"}
+{"action":"support-join","supportedPlayerId":"active-player-id"}
+{"action":"support-view"}
+{"action":"chat-read","channel":"squad"}
+{"action":"chat-send","channel":"squad","body":"Save the blue card."}
+{"action":"chat-watch","channel":"squad","enabled":true}
+{"action":"support-kick","supporterPlayerId":"supporter-id"}
+{"action":"support-request","supportedPlayerId":"active-player-id"}
+{"action":"support-respond","supporterPlayerId":"supporter-id","approve":true}
+```
+
+`support-view` returns `{readOnly: true, playerId, roomVersion, matchId, hand}`.
+It fetches only the hand authorized by the current support link. A connection,
+room version, match or membership change during the request rejects the result;
+ask again from fresh state. `roomVersion` records the local public state at request
+time; the existing server can omit a version on its support response. Target hands are never cached in status or notices,
+and their card IDs cannot be played, traded or gifted from this seat. A failed
+read does not set the mutation's unknown-outcome lock.
+
+Squad history, cursors and mentions are separate from public chat. Squad notices
+are off until explicitly enabled; `watch` and public `chat-watch` do not enable
+them. Enabling squad notices also lets a new squad mention wake `wait-for-action`
+with `squad-mention`; read that channel to consume it. Initial/reconnected history
+does not emit old alerts. Disconnect, resync, kick, membership change and match
+end/restart clear local private history; an authorized join response restores
+current server history. Squad replies, reactions and typing are unsupported by
+the existing server, so these controls remain public only.
 
 ## Gameplay coverage and deliberate exclusions
 
@@ -214,8 +263,10 @@ Own-hand output is private: do not publish CLI logs to opponents or shared logs.
 | Match victory and subsequent match                                            | Seeded CLI finish/restart test and real-server subprocess full-match test.                                |
 | Reconnect/resync, serialized commands, uncertain/duplicate sends              | Dedicated CLI tests; no exactly-once claim or blind replay.                                               |
 | Public chat, replies, reactions, typing and mentions                          | Explicit `chat-*` commands; deduplicated notices and off-turn mention wakeups.                            |
-| Seat ordering, vote-kicks, avatar reactions                                   | Deliberately not exposed. Public effects remain visible; existing server permissions/rules are unchanged. |
-| Support/spectator private-hand reads and squad operations                     | Deliberately excluded to keep the client own-hand/public-state only.                                      |
+| Vote-kick participation                                                       | Explicit `vote-read`/`vote-cast`; deadline, eligibility, duplicate choice and unknown-outcome tests.      |
+| Seat ordering, starting vote-kicks, avatar reactions                          | Deliberately not exposed. Public effects remain visible; existing server permissions/rules are unchanged. |
+| Squad membership, approval, kick, private chat and read-only support hands    | Typed commands; privacy/lifecycle/last-gift tests and portable CLI real-server interoperability.          |
+| Unrestricted spectator hand reads                                             | Deliberately excluded; support reads require the website's actual support link.                           |
 | Voice join/state/signaling and microphones                                    | Deferred; never opened by this client.                                                                    |
 | Autonomous strategy, paid model integration, persisted sessions               | Not included. A controller supplies the CLI's commands; no API/model costs are introduced.                |
 
@@ -234,9 +285,9 @@ pnpm --filter web typecheck
 CLI integration fixtures use real Socket.IO/RoomManager with deterministic local
 hands. Subprocess tests start the actual server entrypoint on an ephemeral local
 port, build/copy the standalone bundle to an isolated temporary directory, launch
-it with Node only, and play alongside a browser-protocol client through a
-complete match. They do not open a browser, read a production hand, request media
-permissions, or contact a live room. Deploy the updated server before using the
+it with Node only, and play alongside a browser-protocol client through a complete
+match and squad lifecycle/chat. They do not open a browser, read a production hand,
+request media permissions, or contact a live room. Deploy the updated server before using the
 new public-chat reply, reaction and typing controls in the web app or CLI.
 
 ## Quiet controller loop
@@ -250,9 +301,9 @@ Disable watch notices once, then request a bounded event-driven wait:
 ```
 
 `wait-for-action` returns `{timedOut, reasons, state}`. Reasons include `turn`,
-`roulette`, `gift`, `trade-response`, `catch-uno`, `mention`, `eliminated`, `finished`,
+`roulette`, `gift`, `trade-response`, `catch-uno`, `mention`, opt-in `squad-mention`, `eliminated`, `finished`,
 `join-required`, `disconnected`, `resync-required`, `cancelled` (stdin EOF), and `closed`. It only uses
-public state and this seat's private snapshot. `afterVersion` requires a newer
+public state and this seat's authorized private snapshots. `afterVersion` requires a newer
 room version for gameplay reasons, so pass the version already handled to avoid
 returning the same opportunity repeatedly. Mentions and connection/closed/resync
 reasons always wake the wait, even with notices disabled. Omit `afterVersion`
@@ -358,11 +409,12 @@ choosing again; unknown acknowledgements require explicit resync.
 {"action":"metrics"}
 ```
 
-Chat commands use only public room chat. `chat-read` returns `messages`,
+Chat commands default to public room chat; select `channel: "squad"` explicitly
+for squad read/send/watch. `chat-read` returns `messages`,
 `nextMessageId` and `gap`; send `afterMessageId` on subsequent reads. An unknown
 cursor reports a gap because the server retains at most 250 messages in memory.
 Read messages consume their pending mention notices. Replies must target an
-existing public message in this room; no support/squad chat is exposed.
+existing public message in this room; squad replies are rejected.
 
 `chat-send` sends controller-supplied text up to 240 characters. A structured
 mention requires both the seated player's public ID and `@Name` in the body.

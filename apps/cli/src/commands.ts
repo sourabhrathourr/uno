@@ -1,5 +1,6 @@
 import { CHAT_REACTIONS } from "@workspace/game"
 import type {
+  ChatChannel,
   PlayCardsInput,
   StageCardsInput,
   VoteKickChoice,
@@ -9,10 +10,17 @@ type Envelope = { id?: string | number; expectedVersion?: number }
 export type CliCommand = Envelope &
   (
     | { action: "help" | "status" | "resync" | "quit" | "metrics" }
-    | { action: "watch" | "chat-watch"; enabled: boolean }
-    | { action: "chat-read"; afterMessageId?: string; limit?: number }
+    | { action: "watch"; enabled: boolean }
+    | { action: "chat-watch"; enabled: boolean; channel?: ChatChannel }
+    | {
+        action: "chat-read"
+        afterMessageId?: string
+        limit?: number
+        channel?: ChatChannel
+      }
     | {
         action: "chat-send"
+        channel?: ChatChannel
         body: string
         mentionPlayerIds?: string[]
         replyToMessageId?: string
@@ -24,6 +32,10 @@ export type CliCommand = Envelope &
         active: boolean
       }
     | { action: "chat-typing"; typing: boolean }
+    | { action: "support-read" | "support-view" }
+    | { action: "support-join" | "support-request"; supportedPlayerId: string }
+    | { action: "support-kick"; supporterPlayerId: string }
+    | { action: "support-respond"; supporterPlayerId: string; approve: boolean }
     | { action: "vote-read"; voteKickId?: string }
     | { action: "vote-cast"; voteKickId: string; choice: VoteKickChoice }
     | { action: "wait-for-action"; afterVersion?: number; timeoutMs?: number }
@@ -67,6 +79,7 @@ type Validator = (value: unknown) => boolean
 const text: Validator = (value) =>
   typeof value === "string" && value.trim().length > 0 && value.length <= 256
 const bool: Validator = (value) => typeof value === "boolean"
+const channel: Validator = (value) => value === "public" || value === "squad"
 const ids: Validator = (value) =>
   Array.isArray(value) &&
   value.length <= 128 &&
@@ -87,9 +100,10 @@ const schemas: Record<
   help: {},
   status: {},
   metrics: {},
-  "chat-watch": { required: { enabled: bool } },
+  "chat-watch": { required: { enabled: bool }, optional: { channel } },
   "chat-read": {
     optional: {
+      channel,
       afterMessageId: text,
       limit: (value) =>
         Number.isInteger(value) &&
@@ -101,8 +115,14 @@ const schemas: Record<
     required: {
       body: (value) => text(value) && (value as string).trim().length <= 240,
     },
-    optional: { mentionPlayerIds: ids, replyToMessageId: text },
+    optional: { channel, mentionPlayerIds: ids, replyToMessageId: text },
   },
+  "support-read": {},
+  "support-view": {},
+  "support-join": { required: { supportedPlayerId: text } },
+  "support-request": { required: { supportedPlayerId: text } },
+  "support-kick": { required: { supporterPlayerId: text } },
+  "support-respond": { required: { supporterPlayerId: text, approve: bool } },
   "chat-react": {
     required: {
       messageId: text,
@@ -184,7 +204,7 @@ const schemas: Record<
 
 export const COMMANDS = Object.keys(schemas) as Array<CliCommand["action"]>
 
-/** An explicit allowlist: no raw events, borrowed sessions, support or spectator reads. */
+/** An explicit allowlist: no raw events, borrowed sessions or unrestricted spectator reads. */
 export function parseCommand(input: unknown): CliCommand {
   if (!input || typeof input !== "object" || Array.isArray(input))
     throw new CliError(
@@ -219,6 +239,15 @@ export function parseCommand(input: unknown): CliCommand {
     if (!Object.hasOwn(data, key))
       throw new CliError("invalid-command", `Missing field: ${key}.`)
   }
+  if (
+    data.action === "chat-send" &&
+    data.channel === "squad" &&
+    data.replyToMessageId !== undefined
+  )
+    throw new CliError(
+      "invalid-command",
+      "Replies are supported only in public chat."
+    )
   if (
     data.action === "gift" &&
     Object.hasOwn(data, "cardId") !== Object.hasOwn(data, "targetPlayerId")
