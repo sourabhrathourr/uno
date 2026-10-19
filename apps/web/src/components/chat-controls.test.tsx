@@ -6,6 +6,7 @@ import type { GameSocket } from "@/lib/realtime"
 import { useChannelChat } from "./use-channel-chat"
 import {
   PublicMessageActions,
+  PublicMessageReactions,
   ReplyPreview,
   usePublicChatControls,
 } from "./public-chat-controls"
@@ -32,6 +33,7 @@ afterEach(async () => {
   document.body.innerHTML = ""
   vi.useRealTimers()
   vi.clearAllMocks()
+  vi.unstubAllGlobals()
 })
 
 const players = ["a", "b"].map((id, seat) => ({
@@ -295,12 +297,16 @@ it("renders reply content literally and keeps reply/react callbacks tied to the 
           onReply={reply}
           onReact={react}
         />
+        <PublicMessageReactions message={original} selfId="a" onReact={react} />
       </>
     )
   )
   expect(document.querySelector("img,script")).toBeNull()
   expect(document.body.textContent).toContain(original.body)
   expect(document.body.textContent).toContain(original.playerName)
+  await act(() =>
+    labelledButton(`React or reply to ${original.playerName}'s message`).click()
+  )
   await act(() =>
     document
       .querySelector<HTMLButtonElement>(
@@ -309,15 +315,18 @@ it("renders reply content literally and keeps reply/react callbacks tied to the 
       .click()
   )
   expect(reply).toHaveBeenCalledWith("unsafe")
-  const existing = labelledButton("👍 reaction, 1")
-  expect(existing.getAttribute("aria-pressed")).toBe("true")
+  const existing = labelledButton("👍 reactions, 1. View who reacted")
+  expect(existing.hasAttribute("data-own-reaction")).toBe(true)
   await act(() => existing.click())
+  expect(react).not.toHaveBeenCalled()
+  await act(() => labelledButton("Remove my 👍 reaction").click())
   expect(react).toHaveBeenLastCalledWith(original, "👍")
-  const details = document.querySelector("details")!
-  details.setAttribute("open", "")
+  await act(() =>
+    labelledButton(`React or reply to ${original.playerName}'s message`).click()
+  )
   await act(() => labelledButton("React 🔥").click())
   expect(react).toHaveBeenLastCalledWith(original, "🔥")
-  expect(details.hasAttribute("open")).toBe(false)
+  expect(document.querySelector('[role="dialog"]')).toBeNull()
   await act(() =>
     document
       .querySelector<HTMLButtonElement>('button[aria-label="Cancel reply"]')!
@@ -413,6 +422,62 @@ it.each([
     expect(h.get().typingNames).toEqual(["B"])
     await act(() => vi.advanceTimersByTime(2))
     expect(h.get().typingNames).toEqual([])
+  }
+)
+
+it.each([false, true])(
+  "reveals only a message in its own log, preserves reading position, and honors reduced motion=%s",
+  async (reduced) => {
+    mountRoot()
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({ matches: reduced }))
+    )
+    let ids = ["original"]
+    let current!: ReturnType<typeof useReadingScroll>
+    function Harness() {
+      current = useReadingScroll(ids)
+      return (
+        <div data-list ref={current.listRef} onScroll={current.onScroll}>
+          <div data-original tabIndex={-1}>
+            Original
+          </div>
+        </div>
+      )
+    }
+    const render = () => root!.render(<Harness />)
+    await act(render)
+    const list = document.querySelector<HTMLDivElement>("[data-list]")!
+    const original = document.querySelector<HTMLDivElement>("[data-original]")!
+    Object.defineProperties(list, {
+      scrollHeight: { configurable: true, value: 1000 },
+      clientHeight: { value: 200 },
+    })
+    Object.defineProperty(original, "clientHeight", { value: 40 })
+    vi.spyOn(list, "getBoundingClientRect").mockReturnValue({
+      top: 100,
+    } as DOMRect)
+    vi.spyOn(original, "getBoundingClientRect").mockReturnValue({
+      top: 500,
+    } as DOMRect)
+    list.scrollTo = vi.fn()
+    list.scrollTop = 200
+    await act(() => expect(current.reveal(original)).toBe(true))
+    expect(list.scrollTo).toHaveBeenCalledWith({
+      top: 520,
+      behavior: reduced ? "auto" : "smooth",
+    })
+    expect(document.activeElement).toBe(original)
+    expect(current.reveal(document.createElement("div"))).toBe(false)
+    // The first smooth-scroll frame can still be near the bottom.
+    list.scrollTop = 790
+    await act(() => current.onScroll())
+    await act(() => {
+      ids = [...ids, "incoming"]
+      render()
+    })
+    expect(list.scrollTop).toBe(790)
+    expect(current.unread).toBe(1)
   }
 )
 

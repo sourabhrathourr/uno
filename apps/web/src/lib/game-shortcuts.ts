@@ -48,7 +48,7 @@ export function installGameShortcuts(
       !handCard &&
       node instanceof Element &&
       node.closest(
-        'input,textarea,select,button,a[href],summary,[role="button"],[contenteditable]:not([contenteditable="false"])'
+        'input,textarea,select,button,a[href],summary,[role="button"],[role="log"],[contenteditable]:not([contenteditable="false"])'
       )
     )
       return
