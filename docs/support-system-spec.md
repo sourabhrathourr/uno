@@ -22,7 +22,7 @@
 - When a supported player becomes inactive, released supporters may choose another active player.
 - Multiple supporters may back the same active player.
 - Allegiances, supporter identities, and supporter counts are public.
-- A supported player may kick a supporter. The kicked player becomes free to support another active player but cannot rejoin the player who kicked them during that match.
+- A supported player may kick a supporter. The kicked player becomes free to support another active player; rejoining the player who kicked them during that match requires that player's approval of a support request and still follows normal eligibility rules.
 - Supporters cannot invoke match mechanics, including calling a missed UNO.
 
 ## Support View

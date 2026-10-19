@@ -19,6 +19,7 @@ import type {
 } from "@workspace/game"
 import { CliError, COMMANDS, parseCommand } from "./commands"
 import type { CliCommand } from "./commands"
+import { SquadState } from "./squad-state"
 
 type GameSocket = Socket<ServerToClientEvents, ClientToServerEvents>
 type Target = { code: string; name: string }
@@ -41,7 +42,7 @@ export function validateServerUrl(value: string): string {
   return url.origin
 }
 
-/** A single in-memory seat. No voice, arbitrary socket events, or other-hand views. */
+/** A single in-memory seat with explicit, server-authorized support reads. */
 export class UnoClient extends EventEmitter {
   private readonly socket: GameSocket
   private readonly sessionId = randomUUID()
@@ -68,6 +69,7 @@ export class UnoClient extends EventEmitter {
   private seenChat: Set<string> | null = null
   private mentions = new Set<string>()
   private typingPlayers: ChatTypingPlayer[] = []
+  private readonly squad = new SquadState((value) => this.emit("notice", value))
   private macroActive = false
   private priorityChat: Array<{
     command: CliCommand
@@ -115,6 +117,7 @@ export class UnoClient extends EventEmitter {
     })
     this.socket.on("disconnect", () => {
       this.connectionEpoch++
+      this.squad.reset()
       this.typingPlayers = []
       this.joinedSocketId = null
       this.joining = null
@@ -148,6 +151,11 @@ export class UnoClient extends EventEmitter {
       )
         return
       this.self = structuredClone(snapshot)
+      this.changed("state")
+    })
+    this.socket.on("room:playerSocial", (snapshot) => {
+      if (!this.isJoined() || !this.isSynchronized()) return
+      this.squad.apply(snapshot)
       this.changed("state")
     })
     this.socket.on("room:error", (error) =>
@@ -238,6 +246,8 @@ export class UnoClient extends EventEmitter {
           (player) => player.expiresAt > Date.now()
         ),
       },
+      squadChat: this.squad.chatStatus(),
+      support: this.squad.summary(),
       needsResync: this.uncertainAction !== null,
       uncertainAction: this.uncertainAction,
       pending: {
@@ -297,6 +307,7 @@ export class UnoClient extends EventEmitter {
       this.anchorRoomClock(room)
     }
     this.room = structuredClone(room)
+    if (this.player) this.squad.update(this.room, this.player.id)
     this.observeChat()
     this.changed("state")
   }
@@ -343,6 +354,8 @@ export class UnoClient extends EventEmitter {
   }
 
   private readChat(command: Extract<CliCommand, { action: "chat-read" }>) {
+    if (command.channel === "squad")
+      return this.squad.read(command.afterMessageId, command.limit)
     const all = this.room?.chatMessages ?? []
     const index = command.afterMessageId
       ? all.findIndex((message) => message.id === command.afterMessageId)
@@ -389,6 +402,7 @@ export class UnoClient extends EventEmitter {
     if (this.joining) return this.joining
     const socketId = this.socket.id
     const target = this.target
+    this.squad.reset()
     const attempt = (async () => {
       const result = await this.ack<JoinRoomResponse>((ack) => {
         this.socket.timeout(this.timeoutMs).volatile.emit(
@@ -411,6 +425,8 @@ export class UnoClient extends EventEmitter {
           ? structuredClone(result.playerGame)
           : null
       this.joinedSocketId = socketId ?? null
+      this.squad.update(this.room, this.player.id)
+      if (result.playerSocial) this.squad.apply(result.playerSocial)
       this.applyChatTyping(result.chatTyping ?? [])
       this.observeChat()
       this.changed("state")
@@ -455,8 +471,8 @@ export class UnoClient extends EventEmitter {
               mutation
                 ? "No confirmed acknowledgement. The action may have applied. Inspect status and explicitly resync before another mutation; do not replay it blindly."
                 : disconnected
-                  ? "Disconnected before room join completed."
-                  : "Timed out waiting for room join."
+                  ? "Disconnected before the request completed."
+                  : "Timed out waiting for the server."
             )
           )
         } else if (!result.ok)
@@ -492,10 +508,13 @@ export class UnoClient extends EventEmitter {
       return Promise.resolve({ samples: structuredClone(this.metrics) })
     if (command.action === "chat-read")
       return Promise.resolve(this.readChat(command))
+    if (command.action === "support-read")
+      return Promise.resolve(this.squad.summary())
     if (command.action === "vote-read")
       return Promise.resolve(this.voteKickState(command.voteKickId))
     if (command.action === "chat-watch") {
-      this.chatWatching = command.enabled
+      if (command.channel === "squad") this.squad.watching = command.enabled
+      else this.chatWatching = command.enabled
       return Promise.resolve(this.status())
     }
     const queuedAt = performance.now()
@@ -601,6 +620,7 @@ export class UnoClient extends EventEmitter {
       if (!this.target)
         throw new CliError("not-joined", "Join or create a room first.")
       this.joinedSocketId = null
+      this.squad.reset()
       await this.join(this.target.code, this.target.name)
       this.uncertainAction = null
       this.changed("state")
@@ -646,6 +666,7 @@ export class UnoClient extends EventEmitter {
       )
       return { confirmed: true }
     }
+    if (command.action === "support-view") return this.readSupportView()
     if (command.action === "vote-cast") {
       const vote = this.voteKickState(command.voteKickId)
       if (!vote)
@@ -699,6 +720,51 @@ export class UnoClient extends EventEmitter {
       syncMs: performance.now() - ackAt,
     })
     return room
+  }
+
+  private async readSupportView() {
+    const target = this.squad.target()
+    if (!target)
+      throw new CliError(
+        "support-view-unavailable",
+        "Join an eligible player's squad after resolving your last gift before reading their hand."
+      )
+    const epoch = this.connectionEpoch,
+      version = this.room!.version,
+      matchId = this.room!.game!.matchId
+    const view = await this.ack<PlayerGameSnapshot | null>(
+      (ack) =>
+        this.socket
+          .timeout(this.timeoutMs)
+          .volatile.emit("game:getSupportView", ack),
+      false
+    )
+    if (
+      !this.isJoined() ||
+      this.closed ||
+      epoch !== this.connectionEpoch ||
+      version !== this.room?.version ||
+      (view?.roomVersion !== undefined && view.roomVersion !== version) ||
+      matchId !== this.room?.game?.matchId ||
+      target !== this.squad.target()
+    )
+      throw new CliError(
+        "stale-support-view",
+        "The match, connection or squad changed while reading. Request a fresh support view."
+      )
+    if (!view || view.playerId !== target)
+      throw new CliError(
+        "support-view-unavailable",
+        "That support view is no longer available."
+      )
+    // Never assign this hand to self or make it available to gameplay commands.
+    return structuredClone({
+      readOnly: true,
+      playerId: target,
+      roomVersion: version,
+      matchId,
+      hand: view.hand,
+    })
   }
 
   private async drainChat() {
@@ -828,7 +894,12 @@ export class UnoClient extends EventEmitter {
     if (!this.isJoined()) return ["disconnected"]
     if (this.uncertainAction) return ["resync-required"]
     if (!this.isSynchronized()) return []
-    const mentions = this.mentions.size ? ["mention"] : []
+    const mentions = [
+      ...(this.mentions.size ? ["mention"] : []),
+      ...(this.squad.watching && this.squad.mentions.size
+        ? ["squad-mention"]
+        : []),
+    ]
     if (afterVersion !== undefined && (this.room?.version ?? 0) <= afterVersion)
       return mentions
     return [...mentions, ...this.gameplayReasons()]
@@ -995,12 +1066,43 @@ export class UnoClient extends EventEmitter {
         socket.emit(
           "room:sendChatMessage",
           {
-            channel: "public",
+            channel: command.channel ?? "public",
             kind: "text",
             body: command.body,
             mentionPlayerIds: command.mentionPlayerIds,
             replyToMessageId: command.replyToMessageId,
           },
+          ack
+        )
+        break
+      case "support-join":
+        socket.emit(
+          "game:supportPlayer",
+          { supportedPlayerId: command.supportedPlayerId },
+          ack
+        )
+        break
+      case "support-request":
+        socket.emit(
+          "game:requestSupport",
+          { supportedPlayerId: command.supportedPlayerId },
+          ack
+        )
+        break
+      case "support-respond":
+        socket.emit(
+          "game:respondSupportRequest",
+          {
+            supporterPlayerId: command.supporterPlayerId,
+            approve: command.approve,
+          },
+          ack
+        )
+        break
+      case "support-kick":
+        socket.emit(
+          "game:kickSupporter",
+          { supporterPlayerId: command.supporterPlayerId },
           ack
         )
         break
@@ -1103,6 +1205,7 @@ export class UnoClient extends EventEmitter {
   close() {
     if (this.closed) return
     this.closed = true
+    this.squad.reset()
     this.lifetime.abort()
     this.joinedSocketId = null
     this.socket.disconnect()

@@ -54,8 +54,9 @@ describe("CLI command boundary", () => {
       cardIds: [],
     })
   })
-  it("offers no raw event, voice, spectator, or support actions", () => {
-    expect(COMMANDS.join(" ")).not.toMatch(/voice|spectat|support|signal/)
+  it("offers typed support operations without raw events, voice or unrestricted spectator access", () => {
+    expect(COMMANDS.join(" ")).not.toMatch(/voice|spectat|signal|:/)
+    expect(COMMANDS).toContain("support-view")
   })
   it.each([
     "file:///tmp/socket",
@@ -82,6 +83,41 @@ describe("CLI command boundary", () => {
       client.close()
     }
   })
+})
+
+it("validates squad channels and typed support fields without accepting impersonation or squad replies", () => {
+  for (const input of [
+    { action: "chat-send", channel: "squad", body: "Hello squad" },
+    { action: "chat-read", channel: "squad", limit: 20 },
+    { action: "chat-watch", channel: "squad", enabled: true },
+    { action: "support-join", supportedPlayerId: "target" },
+    { action: "support-request", supportedPlayerId: "target" },
+    { action: "support-respond", supporterPlayerId: "member", approve: false },
+    { action: "support-kick", supporterPlayerId: "member" },
+    { action: "support-read" },
+    { action: "support-view" },
+  ])
+    expect(parseCommand(input)).toEqual(input)
+  for (const input of [
+    { action: "chat-send", channel: "dm", body: "Hello" },
+    {
+      action: "chat-send",
+      channel: "squad",
+      body: "Hello",
+      replyToMessageId: "id",
+    },
+    { action: "chat-watch", channel: "private", enabled: true },
+    { action: "support-view", targetPlayerId: "foreign" },
+    { action: "support-join", supportedPlayerId: "" },
+    { action: "support-kick" },
+    { action: "support-respond", supporterPlayerId: "member", approve: "yes" },
+    {
+      action: "support-join",
+      supportedPlayerId: "target",
+      playerId: "borrowed",
+    },
+  ])
+    expect(() => parseCommand(input)).toThrow()
 })
 
 it("validates bounded event-driven waits and the payload-free roulette macro", () => {

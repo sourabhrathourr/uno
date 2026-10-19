@@ -213,7 +213,7 @@ it.each([-1, 501, 1.5, "180"])(
 
 it("rejects undeclared social capabilities and malformed public fields", () => {
   for (const input of [
-    { action: "chat-send", body: "hello", channel: "squad" },
+    { action: "chat-send", body: "hello", channel: "dm" },
     { action: "chat-send", body: "hello", kind: "gif" },
     { action: "chat-send", body: "x".repeat(241) },
     { action: "chat-react", messageId: "id", emoji: "💀", active: true },

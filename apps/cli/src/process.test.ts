@@ -149,6 +149,143 @@ it("accepts piped commands during startup, handles malformed input, and exits cl
   expect(await exited).toBe(0)
 }, 20_000)
 
+it("uses website support and squad chat through portable CLI processes and real server handlers", async () => {
+  const host = cli()
+  const created = await host.send({ action: "create", name: "Squad host" })
+  expect(created.ok).toBe(true)
+  const code = created.data.room.code
+  const target = created.data.playerId
+  const browser = io(serverUrl, { transports: ["websocket"] })
+  try {
+    await new Promise<void>((resolve) => browser.once("connect", resolve))
+    const joined = await browser.timeout(2_000).emitWithAck("room:join", {
+      code,
+      playerName: "Browser opponent",
+      sessionId: "local-squad-browser",
+    })
+    expect(joined.ok).toBe(true)
+    expect((await host.send({ action: "ready", ready: true })).ok).toBe(true)
+    expect(
+      (
+        await browser
+          .timeout(2_000)
+          .emitWithAck("room:setReady", { ready: true })
+      ).ok
+    ).toBe(true)
+    expect((await host.send({ action: "start" })).ok).toBe(true)
+    const supporter = cli()
+    const late = await supporter.send({
+      action: "join",
+      code,
+      name: "Supporter",
+    })
+    expect(late.ok).toBe(true)
+    const supporterId = late.data.playerId
+    expect(late.data.self.hand).toEqual([])
+    expect(
+      (
+        await supporter.send({
+          action: "support-join",
+          supportedPlayerId: target,
+        })
+      ).ok
+    ).toBe(true)
+    const view = await supporter.send({ action: "support-view" })
+    expect(view.ok).toBe(true)
+    const ownHand = (await host.send({ action: "status" })).data.self.hand
+    expect(view.data).toMatchObject({
+      readOnly: true,
+      playerId: target,
+      hand: ownHand,
+    })
+    expect((await supporter.send({ action: "status" })).data.self.hand).toEqual(
+      []
+    )
+    expect(
+      (
+        await host.send({
+          action: "chat-send",
+          channel: "squad",
+          body: "Private plan",
+        })
+      ).ok
+    ).toBe(true)
+    const privateChat = await supporter.send({
+      action: "chat-read",
+      channel: "squad",
+    })
+    expect(
+      privateChat.data.messages.map((message: { body: string }) => message.body)
+    ).toEqual(["Private plan"])
+    expect(
+      JSON.stringify((await supporter.send({ action: "chat-read" })).data)
+    ).not.toContain("Private plan")
+    const opponentSocial = await browser
+      .timeout(2_000)
+      .emitWithAck("room:join", {
+        code,
+        playerName: "Browser opponent",
+        sessionId: "local-squad-browser",
+      })
+    expect(opponentSocial.ok).toBe(true)
+    expect(opponentSocial.data.playerSocial.squadChatMessages).toEqual([])
+    expect(
+      (
+        await host.send({
+          action: "support-kick",
+          supporterPlayerId: supporterId,
+        })
+      ).ok
+    ).toBe(true)
+    expect((await supporter.send({ action: "support-view" })).ok).toBe(false)
+    expect(
+      (
+        await supporter.send({
+          action: "support-join",
+          supportedPlayerId: target,
+        })
+      ).error.code
+    ).toBe("support-blocked")
+    expect(
+      (
+        await supporter.send({
+          action: "support-request",
+          supportedPlayerId: target,
+        })
+      ).ok
+    ).toBe(true)
+    const requests = (await host.send({ action: "support-read" })).data
+    expect(requests.incomingSupportRequests).toEqual([
+      expect.objectContaining({
+        supporterPlayerId: supporterId,
+        supportedPlayerId: target,
+      }),
+    ])
+    expect(
+      (
+        await host.send({
+          action: "support-respond",
+          supporterPlayerId: supporterId,
+          approve: true,
+        })
+      ).ok
+    ).toBe(true)
+    expect((await supporter.send({ action: "support-view" })).ok).toBe(true)
+    const afterRejoin = await supporter.send({
+      action: "chat-read",
+      channel: "squad",
+    })
+    expect(afterRejoin.data.messages).toEqual([
+      expect.objectContaining({ body: "Private plan" }),
+    ])
+    expect(
+      JSON.stringify((await supporter.send({ action: "status" })).data)
+    ).not.toContain("Private plan")
+  } finally {
+    browser.disconnect()
+  }
+}, 30_000)
+
 it("plays an entire local match alongside a browser-protocol player through real server handlers", async () => {
   const p = cli()
   const created = await p.send({ action: "create", name: "CLI host" })

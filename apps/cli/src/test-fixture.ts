@@ -42,6 +42,7 @@ export async function fixture() {
     holdAckFor: "",
     delayAckMs: 0,
     holdPrivate: false,
+    holdSocial: false,
     disconnectFor: "",
   }
 
@@ -55,6 +56,9 @@ export async function fixture() {
       if (socket.data.roomCode !== code) continue
       const state = manager.getPlayerGame(code, socket.data.playerId)
       if (state && !controls.holdPrivate) socket.emit("game:playerState", state)
+      const social = manager.getPlayerSocial(code, socket.data.playerId)
+      if (social && !controls.holdSocial)
+        socket.emit("room:playerSocial", social)
     }
   }
   io.on("connection", (socket) => {
@@ -79,6 +83,7 @@ export async function fixture() {
             ...joined.data,
             room,
             playerGame: manager.getPlayerGame(code, joined.data.player.id),
+            playerSocial: manager.getPlayerSocial(code, joined.data.player.id),
             chatTyping: manager.getChatTyping(code),
           },
         })
@@ -180,6 +185,52 @@ export async function fixture() {
     socket.on("game:catchUno", (input, ack) =>
       run("game:catchUno", (code, id) => manager.catchUno(code, id, input), ack)
     )
+    socket.on("game:supportPlayer", (input, ack) =>
+      run(
+        "game:supportPlayer",
+        (code, id) => manager.supportPlayer(code, id, input.supportedPlayerId),
+        ack
+      )
+    )
+    socket.on("game:kickSupporter", (input, ack) =>
+      run(
+        "game:kickSupporter",
+        (code, id) => manager.kickSupporter(code, id, input.supporterPlayerId),
+        ack
+      )
+    )
+    socket.on("game:requestSupport", (input, ack) =>
+      run(
+        "game:requestSupport",
+        (code, id) => manager.requestSupport(code, id, input.supportedPlayerId),
+        ack
+      )
+    )
+    socket.on("game:respondSupportRequest", (input, ack) =>
+      run(
+        "game:respondSupportRequest",
+        (code, id) =>
+          manager.respondToSupportRequest(
+            code,
+            id,
+            input.supporterPlayerId,
+            input.approve
+          ),
+        ack
+      )
+    )
+    socket.on("game:getSupportView", (ack) => {
+      const result = {
+        ok: true as const,
+        data: manager.getSupportView(
+          socket.data.roomCode,
+          socket.data.playerId
+        ),
+      }
+      const respond = () => ack(result)
+      if (controls.holdAckFor === "game:getSupportView") heldAcks.push(respond)
+      else if (controls.dropAckFor !== "game:getSupportView") respond()
+    })
     registerPartyHandlers(socket, manager, publish)
     socket.on("disconnect", () => {
       const room = manager.unregisterConnection(

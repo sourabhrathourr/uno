@@ -33,7 +33,7 @@ The active player chosen unilaterally by one or more supporters. Each support li
 _Avoid_: Supporter, spectated player, target
 
 **Support Kick**:
-The supported player's removal of one supporter from their support squad, immediately revoking Support View and Squad Chat access. The kicked player may support someone else but cannot support the player who kicked them again during the same match.
+The supported player's removal of one supporter from their support squad, immediately revoking Support View and Squad Chat access. The kicked player may support someone else; rejoining the player who kicked them during the same match requires that player's approval of a support request.
 _Avoid_: Ban, leave squad
 
 **Vote-Kick**:
