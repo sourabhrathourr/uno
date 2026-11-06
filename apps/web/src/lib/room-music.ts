@@ -285,6 +285,12 @@ export function likedByLabel(
 
 const EMPTY_TRACKS: Array<MusicTrack> = []
 
+/**
+ * Music starts quiet so it sits under voice chat. iPhones ignore this (iOS
+ * won't let pages set media volume), so there it plays at the phone's level.
+ */
+export const MUSIC_DEFAULT_VOLUME = 40
+
 type VolumeState = { volume: number; muted: boolean }
 const volumeStore = createStore<VolumeState>(() => {
   const stored =
@@ -293,11 +299,16 @@ const volumeStore = createStore<VolumeState>(() => {
       : readJson<Partial<VolumeState> | null>(VOLUME_KEY, null)
   const volume = Number(stored?.volume)
   return {
-    volume: Number.isFinite(volume) ? Math.min(100, Math.max(0, volume)) : 60,
+    volume: Number.isFinite(volume)
+      ? Math.min(100, Math.max(0, volume))
+      : MUSIC_DEFAULT_VOLUME,
     muted: Boolean(stored?.muted),
   }
 })
-const DEFAULT_VOLUME: VolumeState = { volume: 60, muted: false }
+const DEFAULT_VOLUME: VolumeState = {
+  volume: MUSIC_DEFAULT_VOLUME,
+  muted: false,
+}
 
 /** Each listener's own volume; music never changes anyone else's level. */
 export function useMusicVolume() {

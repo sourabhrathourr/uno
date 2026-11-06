@@ -36,6 +36,7 @@ import type { RoomMusicController } from "@/lib/room-music"
 import type { YouTubePlayer } from "@/lib/youtube-player"
 import { TOOLBAR_BUTTON, TOOLBAR_BUTTON_ON } from "@/components/toolbar"
 import {
+  MUSIC_DEFAULT_VOLUME,
   estimatePositionSec,
   searchMusic,
   useLikedSongs,
@@ -48,7 +49,7 @@ import { YT_STATE, loadYouTubeApi } from "@/lib/youtube-player"
 
 /** iOS-style sheet curve: fast out, long settle. */
 /** Level the mute button restores when the slider was dragged to zero. */
-const UNMUTE_VOLUME = 50
+const UNMUTE_VOLUME = MUSIC_DEFAULT_VOLUME
 
 const EASE_DRAWER = "ease-[cubic-bezier(0.32,0.72,0,1)]"
 const PRESS =
