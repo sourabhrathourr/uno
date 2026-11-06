@@ -1,31 +1,33 @@
 import {
-  ArrowLeft,
   Check,
   Heart,
-  ListMusic,
+  ListEnd,
   ListPlus,
   ListStart,
   LoaderCircle,
   Music2,
   Pause,
   Play,
-  Plus,
   Search,
   SkipForward,
   Square,
-  Trash2,
   Volume2,
   VolumeX,
   X,
 } from "lucide-react"
-import { useEffect, useRef, useState, useSyncExternalStore } from "react"
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react"
 
 import { formatTrackDuration } from "@workspace/game"
 import type {
   MusicTrack,
   QueuedTrack,
   RoomMusicSnapshot,
-  RoomPlaylist,
 } from "@workspace/game"
 import type { ReactNode, PointerEvent as ReactPointerEvent } from "react"
 
@@ -44,6 +46,9 @@ import {
 import { YT_STATE, loadYouTubeApi } from "@/lib/youtube-player"
 
 /** iOS-style sheet curve: fast out, long settle. */
+/** Level the mute button restores when the slider was dragged to zero. */
+const UNMUTE_VOLUME = 50
+
 const EASE_DRAWER = "ease-[cubic-bezier(0.32,0.72,0,1)]"
 const PRESS =
   "transition-[transform,background-color,color,opacity] duration-150 ease-out active:scale-[0.96]"
@@ -207,13 +212,16 @@ export function RoomMusic({ controller }: { controller: RoomMusicController }) {
       else player.cueVideoById(options)
       return
     }
+    // A fresh snapshot may carry a seek, so follow it closely here; the
+    // periodic drift check below stays looser.
+    const off = Math.abs(player.getCurrentTime() - expected) > 1
     if (snapshot.status === "paused") {
       player.pauseVideo()
+      if (off) player.seekTo(expected, true)
       return
     }
     if (player.getPlayerState() !== YT_STATE.PLAYING) player.playVideo()
-    if (Math.abs(player.getCurrentTime() - expected) > 2.5)
-      player.seekTo(expected, true)
+    if (off) player.seekTo(expected, true)
   }, [ready, snapshot, receivedAt])
 
   // Drift check + autoplay-blocked detection while a song should be playing.
@@ -248,9 +256,14 @@ export function RoomMusic({ controller }: { controller: RoomMusicController }) {
   useEffect(() => {
     const player = playerRef.current
     if (!ready || !player) return
+    // Volume 0 must mute: YouTube's unMute() can restore its last non-zero
+    // level, so setVolume(0) + unMute() kept playing quietly.
+    if (muted || volume === 0) {
+      player.mute()
+      return
+    }
+    player.unMute()
     player.setVolume(volume)
-    if (muted) player.mute()
-    else player.unMute()
   }, [ready, volume, muted])
 
   // A song you liked in another room counts as liked here too, so the room
@@ -339,7 +352,66 @@ function EqualizerBars() {
 /* phones that can be swiped down to close.                            */
 /* ------------------------------------------------------------------ */
 
-type Tab = "search" | "queue" | "history" | "liked" | "playlists"
+type Tab = "search" | "queue" | "history" | "liked"
+
+type SlotRect = { top: number; left: number; width: number; height: number }
+
+function measureChatSlot(): SlotRect | null {
+  for (const node of document.querySelectorAll<HTMLElement>(
+    "[data-music-anchor]"
+  )) {
+    const rect = node.getBoundingClientRect()
+    if (rect.width > 0 && rect.height > 0) {
+      return {
+        top: rect.top,
+        left: rect.left,
+        width: rect.width,
+        height: rect.height,
+      }
+    }
+  }
+  return null
+}
+
+function sameRect(a: SlotRect | null, b: SlotRect | null) {
+  return (
+    a === b ||
+    (!!a &&
+      !!b &&
+      a.top === b.top &&
+      a.left === b.left &&
+      a.width === b.width &&
+      a.height === b.height)
+  )
+}
+
+/**
+ * Where the room chat sits on screen, so the music panel can take over that
+ * exact slot. Null when no chat is visible (phones use the bottom sheet).
+ * Tracks the slot every frame while open — the chat grid reflows when the
+ * panel opens, on resize, and when the table's layout shifts.
+ */
+function useChatSlotRect(open: boolean) {
+  const [rect, setRect] = useState<SlotRect | null>(null)
+
+  useLayoutEffect(() => {
+    if (!open) return
+    let frame = 0
+    let last: SlotRect | null = null
+    const tick = () => {
+      const next = measureChatSlot()
+      if (!sameRect(last, next)) {
+        last = next
+        setRect(next)
+      }
+      frame = requestAnimationFrame(tick)
+    }
+    tick()
+    return () => cancelAnimationFrame(frame)
+  }, [open])
+
+  return rect
+}
 
 function useSheetDrag(onDismiss: () => void) {
   const sheetRef = useRef<HTMLElement | null>(null)
@@ -414,6 +486,7 @@ function MusicPanel({
   const snapshot = controller.snapshot
   const { liked } = useLikedSongs()
   const { sheetRef, handlers } = useSheetDrag(() => panel.setOpen(false))
+  const slot = useChatSlotRect(panel.open)
 
   useEffect(() => {
     if (!panel.open) return
@@ -429,7 +502,6 @@ function MusicPanel({
     { id: "queue", label: "Queue", count: snapshot?.queue.length },
     { id: "history", label: "History" },
     { id: "liked", label: "Liked", count: liked.length },
-    { id: "playlists", label: "Playlists" },
   ]
 
   return (
@@ -448,15 +520,22 @@ function MusicPanel({
         aria-label="Room music"
         aria-hidden={!panel.open}
         inert={!panel.open}
+        style={slot ?? undefined}
         className={
           "fixed z-[151] flex flex-col overflow-hidden bg-[#0f0e0c] text-white will-change-transform " +
-          // Phone: bottom sheet. Desktop: floating side panel.
-          "inset-x-0 bottom-0 h-[min(88dvh,760px)] rounded-t-[28px] border-t border-white/[0.08] pb-[env(safe-area-inset-bottom)] shadow-[0_-24px_80px_rgba(0,0,0,0.6)] " +
-          "sm:inset-x-auto sm:top-3 sm:right-3 sm:bottom-3 sm:h-auto sm:w-[384px] sm:rounded-3xl sm:border sm:border-white/10 sm:pb-0 sm:shadow-[0_24px_80px_rgba(0,0,0,0.55)] " +
           `transition-[transform,opacity] duration-[320ms] ${EASE_DRAWER} motion-reduce:transition-opacity sm:duration-[240ms] ` +
-          (panel.open
-            ? "translate-y-0 opacity-100 sm:translate-x-0"
-            : "pointer-events-none translate-y-full motion-reduce:translate-x-0 motion-reduce:translate-y-0 motion-reduce:opacity-0 sm:translate-x-[calc(100%+1rem)] sm:translate-y-0 sm:opacity-0")
+          (slot
+            ? // Desktop: sits exactly over the room chat, same size and shape.
+              "rounded-2xl border border-white/10 shadow-[0_18px_56px_rgba(0,0,0,0.28)] " +
+              (panel.open
+                ? "translate-y-0 opacity-100"
+                : "pointer-events-none translate-y-2 opacity-0 motion-reduce:translate-y-0")
+            : // Phone: bottom sheet. No chat column: floating side panel.
+              "inset-x-0 bottom-0 h-[min(88dvh,760px)] rounded-t-[28px] border-t border-white/[0.08] pb-[env(safe-area-inset-bottom)] shadow-[0_-24px_80px_rgba(0,0,0,0.6)] " +
+              "sm:inset-x-auto sm:top-3 sm:right-3 sm:bottom-3 sm:h-auto sm:w-[384px] sm:rounded-3xl sm:border sm:border-white/10 sm:pb-0 sm:shadow-[0_24px_80px_rgba(0,0,0,0.55)] " +
+              (panel.open
+                ? "translate-y-0 opacity-100 sm:translate-x-0"
+                : "pointer-events-none translate-y-full motion-reduce:translate-x-0 motion-reduce:translate-y-0 motion-reduce:opacity-0 sm:translate-x-[calc(100%+1rem)] sm:translate-y-0 sm:opacity-0"))
         }
       >
         {/* Drag zone: handle + title. */}
@@ -534,10 +613,10 @@ function MusicPanel({
             <TrackList
               tracks={liked}
               controller={controller}
+              showLikers
               empty="Tap ♥ on any song to keep it here. Your liked songs follow you to every room."
             />
           )}
-          {tab === "playlists" && <PlaylistsTab controller={controller} />}
         </div>
 
         {controller.error && (
@@ -608,6 +687,7 @@ function NowPlayingCard({
 }) {
   const tap = useNeedsTap()
   const { volume, muted, update } = useMusicVolume()
+  const silent = muted || volume === 0
   const like = useSongLike(track)
   const playing = snapshot.status === "playing"
 
@@ -634,18 +714,30 @@ function NowPlayingCard({
         <LikeButton like={like} title={track.title} />
       </div>
 
-      <Progress snapshot={snapshot} receivedAt={controller.receivedAt} />
+      <Progress
+        snapshot={snapshot}
+        receivedAt={controller.receivedAt}
+        onSeek={controller.seek}
+      />
 
       <div className="mt-1 flex items-center justify-between">
         <div className="flex items-center gap-0.5">
           <button
             type="button"
-            onClick={() => update({ muted: !muted })}
-            aria-label={muted ? "Unmute music for you" : "Mute music for you"}
-            title={muted ? "Unmute (just you)" : "Mute (just you)"}
+            onClick={() =>
+              silent
+                ? // Slid to zero: unmuting needs a level you can hear.
+                  update({
+                    muted: false,
+                    volume: volume === 0 ? UNMUTE_VOLUME : volume,
+                  })
+                : update({ muted: true })
+            }
+            aria-label={silent ? "Unmute music for you" : "Mute music for you"}
+            title={silent ? "Unmute (just you)" : "Mute (just you)"}
             className={ICON_BUTTON}
           >
-            {muted || volume === 0 ? (
+            {silent ? (
               <VolumeX className="size-4" strokeWidth={2} />
             ) : (
               <Volume2 className="size-4" strokeWidth={2} />
@@ -782,29 +874,76 @@ function LikeButton({
 function Progress({
   snapshot,
   receivedAt,
+  onSeek,
 }: {
   snapshot: RoomMusicSnapshot
   receivedAt: number
+  onSeek: (positionSec: number) => Promise<boolean>
 }) {
   const [now, setNow] = useState(() => Date.now())
+  // Where the thumb is while you drag; the room only moves on release.
+  const [scrub, setScrub] = useState<number | null>(null)
   useEffect(() => {
     if (snapshot.status !== "playing") return
     const id = window.setInterval(() => setNow(Date.now()), 500)
     return () => window.clearInterval(id)
   }, [snapshot.status])
-  const position = estimatePositionSec(snapshot, receivedAt, now)
+  const position = scrub ?? estimatePositionSec(snapshot, receivedAt, now)
   const duration = snapshot.nowPlaying?.durationSec ?? null
   const ratio = duration ? Math.min(1, position / duration) : 0
+  const seekable = duration !== null && duration > 0
+  const easing = scrub === null ? " duration-500 ease-linear" : " duration-0"
+
+  async function commit() {
+    if (scrub === null) return
+    await onSeek(scrub)
+    // The ack has already applied the new snapshot, so the bar won't jump.
+    setScrub(null)
+  }
 
   return (
-    <div className="mt-3.5">
-      <div className="h-[3px] overflow-hidden rounded-full bg-white/10">
-        <div
-          className="h-full origin-left rounded-full bg-white/85 transition-transform duration-500 ease-linear"
-          style={{ transform: `scaleX(${ratio})` }}
-        />
+    <div className="mt-2">
+      <div className="group relative flex h-4 items-center">
+        <div className="h-[3px] w-full overflow-hidden rounded-full bg-white/10 transition-[height] duration-150 group-hover:h-[5px] group-has-[:focus-visible]:h-[5px]">
+          <div
+            className={
+              "h-full origin-left rounded-full bg-white/85 transition-transform" +
+              easing
+            }
+            style={{ transform: `scaleX(${ratio})` }}
+          />
+        </div>
+        {seekable && (
+          <>
+            <span
+              aria-hidden="true"
+              className={
+                "pointer-events-none absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-white shadow-[0_1px_4px_rgba(0,0,0,0.5)] transition-[left,opacity]" +
+                easing +
+                (scrub === null
+                  ? " opacity-0 group-hover:opacity-100 group-has-[:focus-visible]:opacity-100"
+                  : " opacity-100")
+              }
+              style={{ left: `${ratio * 100}%` }}
+            />
+            <input
+              type="range"
+              min={0}
+              max={Math.floor(duration)}
+              step={1}
+              value={Math.round(position)}
+              onChange={(event) => setScrub(Number(event.target.value))}
+              onPointerUp={() => void commit()}
+              onPointerCancel={() => void commit()}
+              onKeyUp={() => void commit()}
+              aria-label="Seek (moves the song for everyone)"
+              aria-valuetext={`${formatTrackDuration(position)} of ${formatTrackDuration(duration)}`}
+              className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+            />
+          </>
+        )}
       </div>
-      <div className="mt-1.5 flex justify-between text-[10px] text-white/38 tabular-nums">
+      <div className="mt-0.5 flex justify-between text-[10px] text-white/38 tabular-nums">
         <span>{formatTrackDuration(position)}</span>
         <span>{duration ? formatTrackDuration(duration) : "Live"}</span>
       </div>
@@ -903,6 +1042,7 @@ function SearchTab({
           <TrackList
             tracks={results}
             controller={controller}
+            showLike={false}
             empty="No playable results. Try different words."
           />
         )}
@@ -944,170 +1084,20 @@ function QueueTab({ controller }: { controller: RoomMusicController }) {
   )
 }
 
-function PlaylistsTab({ controller }: { controller: RoomMusicController }) {
-  const playlists = controller.snapshot?.playlists ?? []
-  const [name, setName] = useState("")
-  const [openId, setOpenId] = useState<string | null>(null)
-  const open = playlists.find((playlist) => playlist.id === openId) ?? null
-
-  if (open) {
-    return (
-      <div>
-        <div className="flex items-center gap-2 px-2 pt-1 pb-3">
-          <button
-            type="button"
-            onClick={() => setOpenId(null)}
-            aria-label="Back to playlists"
-            className={ICON_BUTTON + " -ml-1"}
-          >
-            <ArrowLeft className="size-4" strokeWidth={2} />
-          </button>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold text-white/92">
-              {open.name}
-            </p>
-            <p className="text-[11px] text-white/40">
-              {open.tracks.length} song{open.tracks.length === 1 ? "" : "s"} ·{" "}
-              {open.createdByName}
-            </p>
-          </div>
-          <button
-            type="button"
-            disabled={open.tracks.length === 0}
-            onClick={() => void controller.playPlaylist(open.id)}
-            className={
-              "flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-white px-3.5 text-xs font-semibold text-neutral-950 disabled:opacity-30 " +
-              PRESS
-            }
-          >
-            <Play className="size-3" strokeWidth={2.4} fill="currentColor" />
-            Play
-          </button>
-          <button
-            type="button"
-            aria-label={`Delete ${open.name}`}
-            title="Delete playlist"
-            onClick={async () => {
-              if (await controller.deletePlaylist(open.id)) setOpenId(null)
-            }}
-            className={ICON_BUTTON}
-          >
-            <Trash2 className="size-4" strokeWidth={2} />
-          </button>
-        </div>
-        <TrackList
-          tracks={open.tracks}
-          controller={controller}
-          empty="Add songs from any list with the playlist button."
-          remove={{
-            label: `Remove from ${open.name}`,
-            onRemove: (track) =>
-              void controller.removeFromPlaylist(open.id, track.id),
-          }}
-        />
-      </div>
-    )
-  }
-
-  return (
-    <div className="px-2">
-      <form
-        onSubmit={async (event) => {
-          event.preventDefault()
-          if (!name.trim()) return
-          if (await controller.createPlaylist(name)) setName("")
-        }}
-        className="mt-1 flex gap-2"
-      >
-        <input
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          maxLength={40}
-          placeholder="New room playlist"
-          aria-label="New playlist name"
-          enterKeyHint="done"
-          className={INPUT + " min-w-0 flex-1 px-3.5"}
-        />
-        <button
-          type="submit"
-          disabled={!name.trim()}
-          aria-label="Create playlist"
-          className={
-            "grid size-11 shrink-0 place-items-center rounded-2xl bg-white text-neutral-950 disabled:opacity-25 sm:size-10 sm:rounded-xl " +
-            PRESS
-          }
-        >
-          <Plus className="size-4" strokeWidth={2.4} />
-        </button>
-      </form>
-      <p className="mt-2 px-1 text-[11px] leading-relaxed text-white/40">
-        Anyone in the room can add songs. Play one from chat with{" "}
-        <span className="text-white/70">@DJ playlist name</span>.
-      </p>
-      {playlists.length === 0 ? (
-        <Empty>No playlists yet.</Empty>
-      ) : (
-        <ul className="-mx-2 mt-3">
-          {playlists.map((playlist) => (
-            <li key={playlist.id}>
-              <button
-                type="button"
-                onClick={() => setOpenId(playlist.id)}
-                className={
-                  "flex w-full items-center gap-3 rounded-2xl px-2 py-2 text-left transition-colors duration-150 " +
-                  HOVER
-                }
-              >
-                <PlaylistCover playlist={playlist} />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-white/90">
-                    {playlist.name}
-                  </p>
-                  <p className="truncate text-xs text-white/40">
-                    {playlist.tracks.length} song
-                    {playlist.tracks.length === 1 ? "" : "s"} ·{" "}
-                    {playlist.createdByName}
-                  </p>
-                </div>
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  )
-}
-
-function PlaylistCover({ playlist }: { playlist: RoomPlaylist }) {
-  const first = playlist.tracks.at(0)
-  return first ? (
-    <img
-      src={first.thumbnailUrl}
-      alt=""
-      draggable={false}
-      className="size-12 shrink-0 rounded-xl object-cover outline outline-1 -outline-offset-1 outline-white/10"
-    />
-  ) : (
-    <span className="grid size-12 shrink-0 place-items-center rounded-xl bg-white/[0.05] text-white/40">
-      <ListMusic className="size-4" strokeWidth={2} />
-    </span>
-  )
-}
-
-/* ------------------------------------------------------------------ */
-/* Track rows                                                          */
-/* ------------------------------------------------------------------ */
-
 function TrackList({
   tracks,
   controller,
   empty,
-  remove,
+  showLike = true,
+  showLikers = false,
 }: {
   tracks: Array<MusicTrack>
   controller: RoomMusicController
   empty: string
-  remove?: { label: string; onRemove: (track: MusicTrack) => void }
+  /** Search results skip the heart; liking happens from what's playing. */
+  showLike?: boolean
+  /** Adds a "Liked by …" line under each song, as chat does. */
+  showLikers?: boolean
 }) {
   if (tracks.length === 0) return <Empty>{empty}</Empty>
   return (
@@ -1116,11 +1106,12 @@ function TrackList({
         <TrackRow
           key={`${track.id}-${index}`}
           track={track}
+          detail={showLikers ? <LikedByLine track={track} /> : undefined}
           actions={
             <TrackActions
               track={track}
               controller={controller}
-              remove={remove}
+              showLike={showLike}
             />
           }
         />
@@ -1133,11 +1124,14 @@ function TrackRow({
   track,
   meta,
   leading,
+  detail,
   actions,
 }: {
   track: MusicTrack | QueuedTrack
   meta?: string
   leading?: ReactNode
+  /** Optional third line under the artist. */
+  detail?: ReactNode
   actions?: ReactNode
 }) {
   return (
@@ -1162,6 +1156,7 @@ function TrackRow({
         <p className="truncate text-xs leading-4 text-white/42 sm:text-[11px]">
           {meta ?? track.artist} · {formatTrackDuration(track.durationSec)}
         </p>
+        {detail}
       </div>
       <div className="-mr-1 flex shrink-0 items-center">{actions}</div>
     </li>
@@ -1171,17 +1166,15 @@ function TrackRow({
 function TrackActions({
   track,
   controller,
-  remove,
+  showLike,
 }: {
   track: MusicTrack
   controller: RoomMusicController
-  remove?: { label: string; onRemove: (track: MusicTrack) => void }
+  showLike: boolean
 }) {
-  const like = useSongLike(track)
   const [queued, setQueued] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement | null>(null)
-  const playlists = controller.snapshot?.playlists ?? []
 
   useEffect(() => {
     if (!queued) return
@@ -1208,104 +1201,82 @@ function TrackActions({
     }
   }, [menuOpen])
 
+  async function queue(playNext: boolean) {
+    setMenuOpen(false)
+    if (await controller.enqueue(track.id, playNext)) setQueued(true)
+  }
+
   return (
     <div ref={menuRef} className="relative flex items-center">
-      <LikeButton like={like} title={track.title} small />
-      {remove ? (
-        <button
-          type="button"
-          onClick={() => remove.onRemove(track)}
-          aria-label={`${remove.label}: ${track.title}`}
-          title={remove.label}
-          className={ICON_BUTTON}
-        >
-          <X className="size-4" strokeWidth={2} />
-        </button>
-      ) : (
-        <button
-          type="button"
-          onClick={() => setMenuOpen((open) => !open)}
-          aria-label={`More for ${track.title}`}
-          aria-haspopup="menu"
-          aria-expanded={menuOpen}
-          title="Play next or add to a playlist"
-          className={
-            ICON_BUTTON + (menuOpen ? " bg-white/[0.08] text-white" : "")
-          }
-        >
-          <ListPlus className="size-4" strokeWidth={2} />
-        </button>
-      )}
+      {showLike && <TrackLikeButton track={track} />}
       <button
         type="button"
-        onClick={async () => {
-          if (await controller.enqueue(track.id)) setQueued(true)
-        }}
+        onClick={() => setMenuOpen((open) => !open)}
         aria-label={
-          queued ? "Added to the queue" : `Add ${track.title} to the queue`
+          queued ? "Added to the queue" : `Queue options for ${track.title}`
         }
-        title={queued ? "Added" : "Add to queue"}
-        className={ICON_BUTTON + (queued ? " text-white" : "")}
+        aria-haspopup="menu"
+        aria-expanded={menuOpen}
+        title={queued ? "Added" : "Play next or add to queue"}
+        className={
+          ICON_BUTTON +
+          (menuOpen || queued ? " bg-white/[0.08] text-white" : "")
+        }
       >
         {queued ? (
           <Check className="size-4" strokeWidth={2.4} />
         ) : (
-          <Plus className="size-4" strokeWidth={2.2} />
+          <ListPlus className="size-4" strokeWidth={2} />
         )}
+      </button>
+      <button
+        type="button"
+        onClick={() => void controller.playNow(track.id)}
+        aria-label={`Play ${track.title} now`}
+        title="Play now"
+        className={ICON_BUTTON}
+      >
+        <Play className="size-4" strokeWidth={2.2} fill="currentColor" />
       </button>
 
       {menuOpen && (
         <div
           role="menu"
-          className="absolute top-full right-0 z-10 mt-1 w-52 origin-top-right rounded-2xl border border-white/10 bg-[#161512] p-1.5 shadow-[0_18px_44px_rgba(0,0,0,0.55)] motion-safe:animate-[music-pop_160ms_cubic-bezier(0.23,1,0.32,1)]"
+          className="absolute top-full right-0 z-10 mt-1 w-48 origin-top-right rounded-2xl border border-white/10 bg-[#161512] p-1.5 shadow-[0_18px_44px_rgba(0,0,0,0.55)] motion-safe:animate-[music-pop_160ms_cubic-bezier(0.23,1,0.32,1)]"
         >
           <style>{`@keyframes music-pop{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}`}</style>
           <MenuItem
             icon={<ListStart className="size-4" strokeWidth={2} />}
-            onClick={async () => {
-              setMenuOpen(false)
-              if (await controller.enqueue(track.id, true)) setQueued(true)
-            }}
+            onClick={() => void queue(true)}
           >
             Play next
           </MenuItem>
-          <div className="mx-2 my-1 h-px bg-white/[0.07]" />
-          <p className="px-2.5 pt-1 pb-1 text-[10px] font-medium tracking-wide text-white/35 uppercase">
-            Add to playlist
-          </p>
-          {playlists.length === 0 && (
-            <p className="px-2.5 pb-2 text-xs leading-relaxed text-white/40">
-              Create one in the Playlists tab.
-            </p>
-          )}
-          {playlists.map((playlist) => {
-            const inPlaylist = playlist.tracks.some(
-              (item) => item.id === track.id
-            )
-            return (
-              <MenuItem
-                key={playlist.id}
-                disabled={inPlaylist}
-                icon={
-                  inPlaylist ? (
-                    <Check className="size-4" strokeWidth={2} />
-                  ) : (
-                    <ListMusic className="size-4" strokeWidth={2} />
-                  )
-                }
-                onClick={async () => {
-                  setMenuOpen(false)
-                  await controller.addToPlaylist(playlist.id, track.id)
-                }}
-              >
-                {playlist.name}
-              </MenuItem>
-            )
-          })}
+          <MenuItem
+            icon={<ListEnd className="size-4" strokeWidth={2} />}
+            onClick={() => void queue(false)}
+          >
+            Add to queue
+          </MenuItem>
         </div>
       )}
     </div>
   )
+}
+
+function LikedByLine({ track }: { track: MusicTrack }) {
+  const { label } = useSongLike(track)
+  if (!label) return null
+  return (
+    <p className="mt-0.5 truncate text-[11px] leading-4 text-rose-200/60">
+      {label}
+    </p>
+  )
+}
+
+/** Hooks can't be called conditionally, so the heart owns its like state. */
+function TrackLikeButton({ track }: { track: MusicTrack }) {
+  const like = useSongLike(track)
+  return <LikeButton like={like} title={track.title} small />
 }
 
 /* ------------------------------------------------------------------ */
@@ -1316,20 +1287,17 @@ function MenuItem({
   icon,
   children,
   onClick,
-  disabled = false,
 }: {
   icon: ReactNode
   children: ReactNode
   onClick: () => void
-  disabled?: boolean
 }) {
   return (
     <button
       type="button"
       role="menuitem"
-      disabled={disabled}
       onClick={onClick}
-      className="flex min-h-10 w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-[13px] text-white/82 transition-colors duration-150 disabled:text-white/32 [@media(hover:hover)]:hover:bg-white/[0.07] [@media(hover:hover)]:disabled:hover:bg-transparent"
+      className="flex min-h-10 w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-[13px] text-white/82 transition-colors duration-150 [@media(hover:hover)]:hover:bg-white/[0.07]"
     >
       <span className="shrink-0 text-white/50">{icon}</span>
       <span className="truncate">{children}</span>

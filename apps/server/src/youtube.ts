@@ -274,7 +274,7 @@ export class YouTubeService {
     if (requesterTimes.length >= this.maxSearchesPerRequesterPerHour) {
       throw new MusicSearchError(
         "search-player-budget",
-        "You have searched a lot this hour. Try a song from the history or a playlist."
+        "You have searched a lot this hour. Try a song from the history."
       )
     }
     if (this.searchTimes.length >= this.maxSearchesPerDay) {

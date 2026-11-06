@@ -50,12 +50,10 @@ import type {
 import type { HouseRules, Player, RoomSnapshot } from "./rooms"
 import type {
   MusicControlInput,
-  MusicCreatePlaylistInput,
   MusicEnqueueInput,
   MusicLikeInput,
-  MusicPlaylistInput,
-  MusicPlaylistTrackInput,
   MusicRemoveInput,
+  MusicSeekInput,
   MusicTrackReportInput,
   RoomMusicSnapshot,
 } from "./music"
@@ -220,6 +218,11 @@ export type ClientToServerEvents = {
     input: MusicRemoveInput,
     ack: (result: CommandResult<RoomMusicSnapshot>) => void
   ) => void
+  /** Moves the current song to a position, for everyone. */
+  "music:seek": (
+    input: MusicSeekInput,
+    ack: (result: CommandResult<RoomMusicSnapshot>) => void
+  ) => void
   /** Likes or unlikes a song for this room, so others see who liked it. */
   "music:like": (
     input: MusicLikeInput,
@@ -229,26 +232,6 @@ export type ClientToServerEvents = {
   "music:ended": (input: MusicTrackReportInput) => void
   /** A client's player cannot play the current track (blocked embed, removed). */
   "music:unplayable": (input: MusicTrackReportInput) => void
-  "music:createPlaylist": (
-    input: MusicCreatePlaylistInput,
-    ack: (result: CommandResult<RoomMusicSnapshot>) => void
-  ) => void
-  "music:deletePlaylist": (
-    input: MusicPlaylistInput,
-    ack: (result: CommandResult<RoomMusicSnapshot>) => void
-  ) => void
-  "music:playPlaylist": (
-    input: MusicPlaylistInput,
-    ack: (result: CommandResult<RoomMusicSnapshot>) => void
-  ) => void
-  "music:addToPlaylist": (
-    input: MusicPlaylistTrackInput,
-    ack: (result: CommandResult<RoomMusicSnapshot>) => void
-  ) => void
-  "music:removeFromPlaylist": (
-    input: MusicPlaylistTrackInput,
-    ack: (result: CommandResult<RoomMusicSnapshot>) => void
-  ) => void
   "voice:join": (
     ack: (
       result: CommandResult<{ sessionId: string; states: VoiceStateEvent[] }>

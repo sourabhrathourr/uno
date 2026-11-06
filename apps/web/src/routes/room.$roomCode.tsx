@@ -115,7 +115,11 @@ import {
 import { useSoundSystem } from "@/lib/use-sound-system"
 import { VoiceAudioOutputs } from "@/components/voice-audio-outputs"
 import { useRoomVoice } from "@/lib/use-room-voice"
-import { publishMusicController, useRoomMusic } from "@/lib/room-music"
+import {
+  publishMusicController,
+  useMusicPanel,
+  useRoomMusic,
+} from "@/lib/room-music"
 import { MusicButton, RoomMusic } from "@/components/music-player"
 import {
   TOOLBAR_BUTTON,
@@ -1197,6 +1201,10 @@ function GameTable({
   const [shortcutGuideOpen, setShortcutGuideOpen] = useState(false)
   const [keyboardSelectionHint, setKeyboardSelectionHint] = useState(false)
   const [chatCollapsed, setChatCollapsed] = useState(readStoredChatCollapsed)
+  const musicPanel = useMusicPanel()
+  // The music panel takes over the chat's slot, so a collapsed chat widens
+  // back out while music is open and the panel gets a usable column.
+  const chatSlotCollapsed = chatCollapsed && !musicPanel.open
   const [directionPulseKey, setDirectionPulseKey] = useState(0)
   const [directionPulseOn, setDirectionPulseOn] = useState(false)
 
@@ -1858,6 +1866,7 @@ function GameTable({
           )
         },
         focusChat: () => {
+          musicPanel.setOpen(false)
           setChatCollapsed(false)
           requestAnimationFrame(() =>
             [
@@ -1871,6 +1880,8 @@ function GameTable({
         },
         showGuide: () => setShortcutGuideOpen(true),
         escape: () => {
+          // The music panel closes itself on Escape; leave the chat alone.
+          if (musicPanel.open) return
           if (!chatCollapsed) setChatCollapsed(true)
           else if (!actionPending) setSelectedCardIds([])
         },
@@ -1895,6 +1906,7 @@ function GameTable({
       shortcutsEnabled,
       narrowViewport,
       chatCollapsed,
+      musicPanel.open,
       socket?.connected,
       room.status,
       room.version,
@@ -2465,7 +2477,7 @@ function GameTable({
           <section
             className={
               "grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] gap-2 overflow-hidden xl:grid-rows-none " +
-              (chatCollapsed
+              (chatSlotCollapsed
                 ? "lg:grid-rows-[minmax(0,1fr)_52px] xl:grid-cols-[minmax(0,1fr)_52px]"
                 : "lg:grid-rows-[minmax(0,1fr)_220px] xl:grid-cols-[minmax(0,1fr)_310px]")
             }
@@ -2858,7 +2870,7 @@ function GameTable({
               )}
               selfPlayerId={player.id}
               error={error}
-              collapsed={chatCollapsed}
+              collapsed={chatSlotCollapsed}
               onToggleCollapsed={() =>
                 setChatCollapsed((current) => {
                   writeStoredChatCollapsed(!current)
@@ -3928,10 +3940,16 @@ function TableChatPanel({
   useEffect(() => {
     if (collapsed) publicChat.onTyping(false)
   }, [collapsed])
+  // The music panel sits over this slot; keep focus out of the hidden chat.
+  const musicOpen = useMusicPanel().open
 
   if (collapsed) {
     return (
-      <aside className="hidden min-h-0 items-start justify-center rounded-2xl border border-white/10 bg-white/[0.035] p-1.5 shadow-[0_18px_56px_rgba(0,0,0,0.28)] lg:flex xl:items-start">
+      <aside
+        data-music-anchor
+        inert={musicOpen}
+        className="hidden min-h-0 items-start justify-center rounded-2xl border border-white/10 bg-white/[0.035] p-1.5 shadow-[0_18px_56px_rgba(0,0,0,0.28)] lg:flex xl:items-start"
+      >
         <button
           type="button"
           onClick={onToggleCollapsed}
@@ -3955,7 +3973,11 @@ function TableChatPanel({
   }
 
   return (
-    <aside className="hidden min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035] p-2 shadow-[0_18px_56px_rgba(0,0,0,0.28)] lg:flex xl:p-3">
+    <aside
+      data-music-anchor
+      inert={musicOpen}
+      className="hidden min-h-0 flex-col overflow-hidden rounded-2xl border border-white/10 bg-white/[0.035] p-2 shadow-[0_18px_56px_rgba(0,0,0,0.28)] lg:flex xl:p-3"
+    >
       <div className="flex shrink-0 items-center justify-between gap-3 px-1">
         <div className="flex min-w-0 items-center gap-2">
           <span className="grid size-8 shrink-0 place-items-center rounded-full border border-white/10 bg-black/28 text-white/70 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">

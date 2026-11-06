@@ -30,7 +30,7 @@ describe("room music queue", () => {
     const music = new RoomMusic()
     const first = music.enqueue(ROOM, track("a"), alice)
     const second = music.enqueue(ROOM, track("b"), alice)
-    const third = music.enqueue(ROOM, track("c"), alice, { playNext: true })
+    const third = music.enqueue(ROOM, track("c"), alice, "next")
 
     expect(first.ok && first.data.placement).toBe("playing")
     expect(second.ok && second.data.placement).toBe(1)
@@ -123,18 +123,72 @@ describe("room music queue", () => {
     expect(music.snapshot(ROOM).nowPlaying?.title).toBe("Song b")
   })
 
-  it("stop clears the queue but keeps history and playlists", () => {
+  it("stop clears the queue but keeps history", () => {
     const music = new RoomMusic()
     music.enqueue(ROOM, track("a"), alice)
     music.enqueue(ROOM, track("b"), alice)
-    const playlist = music.createPlaylist(ROOM, "Bangers", alice)
-    expect(playlist.ok).toBe(true)
     music.stop(ROOM)
     const snapshot = music.snapshot(ROOM)
     expect(snapshot).toMatchObject({ status: "idle", nowPlaying: null })
     expect(snapshot.queue).toEqual([])
     expect(snapshot.history).toHaveLength(1)
-    expect(snapshot.playlists).toHaveLength(1)
+  })
+
+  it("seeks the current song for everyone, playing or paused", () => {
+    const music = new RoomMusic()
+    music.enqueue(ROOM, track("a", 100), alice)
+    music.enqueue(ROOM, track("b", 100), alice)
+    vi.advanceTimersByTime(10_000)
+
+    expect(music.seek(ROOM, 60).ok).toBe(true)
+    expect(music.snapshot(ROOM).positionSec).toBe(60)
+    vi.advanceTimersByTime(5_000)
+    expect(music.snapshot(ROOM).positionSec).toBe(65)
+
+    // Seeking moves the auto-advance timer with it.
+    vi.advanceTimersByTime(36_000)
+    expect(music.snapshot(ROOM).nowPlaying?.title).toBe("Song a")
+    vi.advanceTimersByTime(2_000)
+    expect(music.snapshot(ROOM).nowPlaying?.title).toBe("Song b")
+
+    music.pause(ROOM)
+    music.seek(ROOM, 30)
+    expect(music.snapshot(ROOM)).toMatchObject({
+      status: "paused",
+      positionSec: 30,
+    })
+    music.seek(ROOM, 500)
+    expect(music.snapshot(ROOM).positionSec).toBe(99)
+    music.seek(ROOM, -5)
+    expect(music.snapshot(ROOM).positionSec).toBe(0)
+  })
+
+  it("refuses to seek when idle, live, or given garbage", () => {
+    const music = new RoomMusic()
+    expect(music.seek(ROOM, 10).ok).toBe(false)
+    music.enqueue(ROOM, { ...track("a"), durationSec: null }, alice)
+    const live = music.seek(ROOM, 10)
+    expect(!live.ok && live.error.code).toBe("music-not-seekable")
+    music.skip(ROOM)
+    music.enqueue(ROOM, track("b", 100), alice)
+    expect(music.seek(ROOM, Number.NaN).ok).toBe(false)
+  })
+
+  it("play now replaces the current song and keeps the queue", () => {
+    const music = new RoomMusic()
+    music.enqueue(ROOM, track("a"), alice)
+    music.enqueue(ROOM, track("b"), alice)
+    music.pause(ROOM)
+    const now = music.enqueue(ROOM, track("c"), alice, "now")
+    expect(now.ok && now.data.placement).toBe("playing")
+    const snapshot = music.snapshot(ROOM)
+    expect(snapshot).toMatchObject({ status: "playing", positionSec: 0 })
+    expect(snapshot.nowPlaying?.title).toBe("Song c")
+    expect(snapshot.queue.map((entry) => entry.title)).toEqual(["Song b"])
+    expect(snapshot.history.map((entry) => entry.title)).toEqual([
+      "Song c",
+      "Song a",
+    ])
   })
 
   it("moves a replayed song to the top of history instead of duplicating it", () => {
@@ -148,38 +202,6 @@ describe("room music queue", () => {
       "Song a",
       "Song b",
     ])
-  })
-})
-
-describe("room playlists", () => {
-  it("creates, fills, plays and deletes a shared playlist", () => {
-    const music = new RoomMusic()
-    const created = music.createPlaylist(ROOM, "  Late   night ", alice)
-    if (!created.ok) throw new Error(created.error.message)
-    expect(created.data.name).toBe("Late night")
-
-    music.addToPlaylist(ROOM, created.data.id, track("a"))
-    music.addToPlaylist(ROOM, created.data.id, track("b"))
-    music.addToPlaylist(ROOM, created.data.id, track("a"))
-    expect(music.findPlaylist(ROOM, created.data.id)?.tracks).toHaveLength(2)
-
-    expect(music.findPlaylistByName(ROOM, "late")?.id).toBe(created.data.id)
-    const playlist = music.findPlaylist(ROOM, created.data.id)!
-    expect(music.enqueueMany(ROOM, playlist.tracks, alice)).toBe(2)
-    expect(music.snapshot(ROOM).nowPlaying?.title).toBe("Song a")
-
-    music.removeFromPlaylist(ROOM, created.data.id, track("a").id)
-    expect(music.findPlaylist(ROOM, created.data.id)?.tracks).toHaveLength(1)
-    expect(music.deletePlaylist(ROOM, created.data.id).ok).toBe(true)
-    expect(music.snapshot(ROOM).playlists).toEqual([])
-  })
-
-  it("rejects blank and duplicate playlist names", () => {
-    const music = new RoomMusic()
-    expect(music.createPlaylist(ROOM, "   ", alice).ok).toBe(false)
-    expect(music.createPlaylist(ROOM, "Mix", alice).ok).toBe(true)
-    const duplicate = music.createPlaylist(ROOM, "mix", alice)
-    expect(!duplicate.ok && duplicate.error.code).toBe("playlist-exists")
   })
 })
 

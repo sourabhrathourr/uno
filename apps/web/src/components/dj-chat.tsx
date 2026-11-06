@@ -59,16 +59,65 @@ export function DjMessageBubble({
         </div>
         <div className="overflow-hidden rounded-2xl rounded-bl-md bg-white/[0.06] px-3 py-2 text-white/82 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.07),0_10px_24px_rgba(0,0,0,0.22)]">
           {replyPreview}
-          {message.body && (
-            <p className="text-sm leading-relaxed text-pretty [overflow-wrap:anywhere] whitespace-pre-line">
-              {message.body}
-            </p>
+          {message.skipped ? (
+            <SkipSummary skipped={message.skipped} next={message.track} />
+          ) : (
+            <>
+              {message.body && (
+                <p className="text-sm leading-relaxed text-pretty [overflow-wrap:anywhere] whitespace-pre-line">
+                  {message.body}
+                </p>
+              )}
+              {message.track && <ChatTrackCard track={message.track} />}
+            </>
           )}
-          {message.track && <ChatTrackCard track={message.track} />}
         </div>
       </div>
       {actions}
     </div>
+  )
+}
+
+/** A skip, as two cards: what was cut, and what plays now. */
+function SkipSummary({
+  skipped,
+  next,
+}: {
+  skipped: NonNullable<ChatMessage["skipped"]>
+  next?: MusicTrack
+}) {
+  return (
+    <div>
+      <SkipLabel>
+        {skipped.byName ? `${skipped.byName} skipped` : "Skipped"}
+      </SkipLabel>
+      <ChatTrackCard track={skipped.track} />
+      <SkipLabel className="mt-2.5">Up now</SkipLabel>
+      {next ? (
+        <ChatTrackCard track={next} />
+      ) : (
+        <p className="mt-1 text-[13px] text-white/50">The queue is empty.</p>
+      )}
+    </div>
+  )
+}
+
+function SkipLabel({
+  children,
+  className = "",
+}: {
+  children: ReactNode
+  className?: string
+}) {
+  return (
+    <p
+      className={
+        "text-[11px] font-medium tracking-wide text-white/50 uppercase " +
+        className
+      }
+    >
+      {children}
+    </p>
   )
 }
 

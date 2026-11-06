@@ -13,7 +13,7 @@ import {
 } from "@workspace/game"
 
 import type { RoomManager } from "./room-manager"
-import type { RoomMusic } from "./room-music"
+import type { EnqueueMode, RoomMusic } from "./room-music"
 import { MusicSearchError, type YouTubeService } from "./youtube"
 
 export type DjCommand =
@@ -27,7 +27,6 @@ export type DjCommand =
   | { type: "queue" }
   | { type: "now-playing" }
   | { type: "remove"; position: number }
-  | { type: "playlist"; name: string }
 
 const DJ_PREFIX = new RegExp(`^@${DJ_BOT_NAME}(?=$|[\\s,:])[\\s,:]*`, "i")
 
@@ -101,9 +100,6 @@ export function parseDjCommand(
         ? { type: "remove", position }
         : { type: "help" }
     }
-    case "playlist":
-    case "pl":
-      return args ? { type: "playlist", name: args } : { type: "help" }
     default:
       // "@DJ never gonna give you up" is a play request.
       return { type: "play", query: rest, playNext: false }
@@ -116,8 +112,7 @@ export const DJ_HELP_TEXT = [
   "• @DJ next <song>: play it right after this one",
   "• @DJ pause / resume / skip / stop",
   "• @DJ queue · @DJ np · @DJ remove <#> · @DJ clear",
-  "• @DJ playlist <name>: queue a room playlist",
-  "Open the music library (♪ button) to search, browse history, like songs, and build playlists.",
+  "Open the music library (♪ button) to search, browse history, and like songs.",
 ].join("\n")
 
 type MusicControllerOptions = {
@@ -154,7 +149,7 @@ export class MusicController {
   async enqueueVideo(
     actor: Actor,
     videoId: string,
-    playNext = false
+    mode: EnqueueMode = "end"
   ): Promise<CommandResult<RoomMusicSnapshot>> {
     const requester = this.requester(actor)
     if (!requester) return notJoined()
@@ -170,9 +165,12 @@ export class MusicController {
         "That video can't be played here (removed, private, or embedding is off)."
       )
     }
-    const result = this.options.music.enqueue(actor.code, track, requester, {
-      playNext,
-    })
+    const result = this.options.music.enqueue(
+      actor.code,
+      track,
+      requester,
+      mode
+    )
     if (!result.ok) return result
     this.announce(actor.code, announcement(requester.name, result.data), track)
     return this.changed(actor.code)
@@ -201,10 +199,12 @@ export class MusicController {
       case "skip": {
         const result = music.skip(actor.code)
         if (!result.ok) return result
-        this.announce(
-          actor.code,
-          skipMessage(requester.name, result.data, music.nowPlaying(actor.code))
-        )
+        const next = music.nowPlaying(actor.code)
+        this.post(actor.code, {
+          body: skipMessage(requester.name, result.data, next),
+          track: next ?? undefined,
+          skipped: { track: result.data, byName: requester.name },
+        })
         break
       }
       case "stop": {
@@ -219,6 +219,14 @@ export class MusicController {
       default:
         return fail("music-action", "Unknown music action.")
     }
+    return this.changed(actor.code)
+  }
+
+  /** Scrubbing is silent: announcing every drag would flood the chat. */
+  seek(actor: Actor, positionSec: number): CommandResult<RoomMusicSnapshot> {
+    if (!this.requester(actor)) return notJoined()
+    const result = this.options.music.seek(actor.code, positionSec)
+    if (!result.ok) return result
     return this.changed(actor.code)
   }
 
@@ -260,91 +268,6 @@ export class MusicController {
     this.options.emitMusic(actor.code)
   }
 
-  createPlaylist(actor: Actor, name: string): CommandResult<RoomMusicSnapshot> {
-    const requester = this.requester(actor)
-    if (!requester) return notJoined()
-    const result = this.options.music.createPlaylist(
-      actor.code,
-      name,
-      requester
-    )
-    if (!result.ok) return result
-    return this.changed(actor.code)
-  }
-
-  deletePlaylist(
-    actor: Actor,
-    playlistId: string
-  ): CommandResult<RoomMusicSnapshot> {
-    if (!this.requester(actor)) return notJoined()
-    const result = this.options.music.deletePlaylist(actor.code, playlistId)
-    if (!result.ok) return result
-    return this.changed(actor.code)
-  }
-
-  async addToPlaylist(
-    actor: Actor,
-    playlistId: string,
-    videoId: string
-  ): Promise<CommandResult<RoomMusicSnapshot>> {
-    if (!this.requester(actor)) return notJoined()
-    if (!this.options.music.findPlaylist(actor.code, playlistId))
-      return fail("playlist-missing", "No such playlist.")
-    let track: MusicTrack | null
-    try {
-      track = await this.options.youtube.resolveTrack(videoId)
-    } catch (cause) {
-      return fail("music-lookup-failed", errorMessage(cause))
-    }
-    if (!track)
-      return fail("music-unavailable", "That song can't be played here.")
-    const result = this.options.music.addToPlaylist(
-      actor.code,
-      playlistId,
-      track
-    )
-    if (!result.ok) return result
-    return this.changed(actor.code)
-  }
-
-  removeFromPlaylist(
-    actor: Actor,
-    playlistId: string,
-    videoId: string
-  ): CommandResult<RoomMusicSnapshot> {
-    if (!this.requester(actor)) return notJoined()
-    const result = this.options.music.removeFromPlaylist(
-      actor.code,
-      playlistId,
-      videoId
-    )
-    if (!result.ok) return result
-    return this.changed(actor.code)
-  }
-
-  playPlaylist(
-    actor: Actor,
-    playlistId: string
-  ): CommandResult<RoomMusicSnapshot> {
-    const requester = this.requester(actor)
-    if (!requester) return notJoined()
-    const playlist = this.options.music.findPlaylist(actor.code, playlistId)
-    if (!playlist) return fail("playlist-missing", "No such playlist.")
-    if (playlist.tracks.length === 0)
-      return fail("playlist-empty", `“${playlist.name}” has no songs yet.`)
-    const added = this.options.music.enqueueMany(
-      actor.code,
-      playlist.tracks,
-      requester
-    )
-    if (added === 0) return fail("music-queue-full", "The queue is full.")
-    this.announce(
-      actor.code,
-      `${requester.name} queued the playlist “${playlist.name}” (${added} song${added === 1 ? "" : "s"}).`
-    )
-    return this.changed(actor.code)
-  }
-
   /**
    * Runs an `@DJ` chat command. The player's own message is already in chat;
    * the DJ answers as a reply to it.
@@ -361,8 +284,11 @@ export class MusicController {
     const command = parseDjCommand(message.body, mentioned)
     if (!command) return false
     const actor = { code, playerId }
-    const reply = (body: string, track?: MusicTrack) =>
-      this.post(code, { body, track, replyToMessageId: message.id })
+    const reply = (
+      body: string,
+      track?: MusicTrack,
+      skipped?: { track: MusicTrack }
+    ) => this.post(code, { body, track, skipped, replyToMessageId: message.id })
     const requester = this.requester(actor)
     if (!requester) return true
 
@@ -391,16 +317,19 @@ export class MusicController {
           reply(`I couldn't find anything playable for “${command.query}”.`)
           return true
         }
-        const result = this.options.music.enqueue(code, track, requester, {
-          playNext: command.playNext,
-        })
+        const result = this.options.music.enqueue(
+          code,
+          track,
+          requester,
+          command.playNext ? "next" : "end"
+        )
         if (!result.ok) {
           reply(result.error.message)
           return true
         }
         reply(
           result.data.placement === "playing"
-            ? `Now playing for everyone (requested by ${requester.name}).`
+            ? `Requested by ${requester.name}.`
             : `Queued at #${result.data.placement}${command.playNext ? " (up next)" : ""}.`,
           track
         )
@@ -416,7 +345,11 @@ export class MusicController {
           reply(result.error.message)
           return true
         }
-        reply(result.data.message, result.data.track ?? undefined)
+        reply(
+          result.data.message,
+          result.data.track ?? undefined,
+          result.data.skipped ? { track: result.data.skipped } : undefined
+        )
         this.options.emitMusic(code)
         return true
       }
@@ -456,39 +389,17 @@ export class MusicController {
         this.options.emitMusic(code)
         return true
       }
-      case "playlist": {
-        const playlist = this.options.music.findPlaylistByName(
-          code,
-          command.name
-        )
-        if (!playlist) {
-          reply(
-            `No playlist called “${command.name}”. Create one in the music library.`
-          )
-          return true
-        }
-        const added = this.options.music.enqueueMany(
-          code,
-          playlist.tracks,
-          requester
-        )
-        reply(
-          added
-            ? `Queued “${playlist.name}” (${added} song${added === 1 ? "" : "s"}).`
-            : playlist.tracks.length
-              ? "The queue is full."
-              : `“${playlist.name}” has no songs yet.`
-        )
-        if (added) this.options.emitMusic(code)
-        return true
-      }
     }
   }
 
   private controlQuietly(
     code: string,
     action: "pause" | "resume" | "skip" | "stop"
-  ): CommandResult<{ message: string; track: QueuedTrack | null }> {
+  ): CommandResult<{
+    message: string
+    track: QueuedTrack | null
+    skipped?: QueuedTrack
+  }> {
     const { music } = this.options
     if (action === "pause") {
       const result = music.pause(code)
@@ -504,11 +415,13 @@ export class MusicController {
       const result = music.skip(code)
       if (!result.ok) return result
       const next = music.nowPlaying(code)
+      // Web chat draws both songs as cards; the text is for the terminal.
       return ok({
         message: next
-          ? `Skipped “${result.data.title}”. Up now:`
+          ? `Skipped “${result.data.title}”. Up now: “${next.title}”.`
           : `Skipped “${result.data.title}”. The queue is empty.`,
         track: next,
+        skipped: result.data,
       })
     }
     const result = music.stop(code)
@@ -523,11 +436,19 @@ export class MusicController {
 
   private post(
     code: string,
-    input: { body: string; track?: MusicTrack; replyToMessageId?: string }
+    input: {
+      body: string
+      track?: MusicTrack
+      skipped?: { track: MusicTrack; byName?: string }
+      replyToMessageId?: string
+    }
   ) {
     const result = this.options.rooms.postBotMessage(code, {
       ...input,
       track: input.track ? plainTrack(input.track) : undefined,
+      skipped: input.skipped
+        ? { ...input.skipped, track: plainTrack(input.skipped.track) }
+        : undefined,
     })
     if (result.ok) this.options.emitRoom(code, result.data)
   }

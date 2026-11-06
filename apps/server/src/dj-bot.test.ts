@@ -143,7 +143,6 @@ describe("parseDjCommand", () => {
     ["@DJ queue", { type: "queue" }],
     ["@DJ np", { type: "now-playing" }],
     ["@DJ remove 2", { type: "remove", position: 2 }],
-    ["@DJ playlist road trip", { type: "playlist", name: "road trip" }],
     ["@DJ", { type: "help" }],
   ])("reads %s", (body, expected) => {
     expect(parseDjCommand(body)).toEqual(expected)
@@ -193,7 +192,7 @@ describe("DJ chat commands", () => {
       playerName: "DJ",
       track: { id: "kJQP7kiw5Fk" },
     })
-    expect(first?.body).toContain("Now playing")
+    expect(first?.body).toBe("Requested by Alice.")
     expect(emitMusic).toHaveBeenCalledWith(code)
 
     const { sent } = await say(bob, "@DJ https://youtu.be/dQw4w9WgXcQ")
@@ -247,28 +246,27 @@ describe("DJ chat commands", () => {
     expect(music.snapshot(code).nowPlaying?.title).toBe(
       "Never Gonna Give You Up"
     )
+    expect(lastBotMessage()).toMatchObject({
+      skipped: { track: { id: "kJQP7kiw5Fk" } },
+      track: { id: "dQw4w9WgXcQ" },
+    })
+    expect(lastBotMessage()?.skipped?.byName).toBeUndefined()
     expect(lastBotMessage()?.body).toContain("Skipped “Despacito”")
   })
 
-  it("queues a room playlist by name", async () => {
-    const { say, alice, controller, music, code, lastBotMessage } = setup()
-    const playlist = data(
-      controller.createPlaylist({ code, playerId: alice }, "Road trip")
-    ).playlists[0]!
-    await controller.addToPlaylist(
-      { code, playerId: alice },
-      playlist.id,
-      "kJQP7kiw5Fk"
-    )
-    await controller.addToPlaylist(
-      { code, playerId: alice },
-      playlist.id,
-      "dQw4w9WgXcQ"
-    )
+  it("posts a skip from the library with both songs as cards", async () => {
+    const { controller, alice, bob, code, lastBotMessage } = setup()
+    await controller.enqueueVideo({ code, playerId: alice }, "kJQP7kiw5Fk")
+    await controller.enqueueVideo({ code, playerId: alice }, "dQw4w9WgXcQ")
+    data(controller.control({ code, playerId: bob }, "skip"))
+    expect(lastBotMessage()).toMatchObject({
+      skipped: { track: { id: "kJQP7kiw5Fk" }, byName: "Bob" },
+      track: { id: "dQw4w9WgXcQ" },
+    })
 
-    await say(alice, "@DJ playlist road")
-    expect(lastBotMessage()?.body).toBe("Queued “Road trip” (2 songs).")
-    expect(music.snapshot(code).nowPlaying?.title).toBe("Despacito")
+    data(controller.control({ code, playerId: bob }, "skip"))
+    expect(lastBotMessage()?.skipped?.track.id).toBe("dQw4w9WgXcQ")
+    expect(lastBotMessage()?.track).toBeUndefined()
   })
 
   it("rejects clients sending messages as the bot", () => {
@@ -292,6 +290,20 @@ describe("library actions", () => {
       body: "Bob started the music.",
       track: { id: "dQw4w9WgXcQ" },
     })
+  })
+
+  it("plays a library pick right away when asked to play now", async () => {
+    const { controller, code, bob, music } = setup()
+    await controller.enqueueVideo({ code, playerId: bob }, "kJQP7kiw5Fk")
+    const snapshot = data(
+      await controller.enqueueVideo(
+        { code, playerId: bob },
+        "dQw4w9WgXcQ",
+        "now"
+      )
+    )
+    expect(snapshot.nowPlaying?.id).toBe("dQw4w9WgXcQ")
+    expect(music.snapshot(code).queue).toEqual([])
   })
 
   it("refuses videos YouTube won't let us embed", async () => {

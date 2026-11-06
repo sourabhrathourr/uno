@@ -3,9 +3,6 @@ import { randomUUID } from "node:crypto"
 import {
   MUSIC_HISTORY_LIMIT,
   MUSIC_LIKED_SONG_LIMIT,
-  MUSIC_PLAYLIST_LIMIT,
-  MUSIC_PLAYLIST_NAME_MAX_LENGTH,
-  MUSIC_PLAYLIST_TRACK_LIMIT,
   MUSIC_QUEUE_LIMIT,
   type CommandResult,
   type MusicHistoryEntry,
@@ -13,7 +10,6 @@ import {
   type MusicTrack,
   type QueuedTrack,
   type RoomMusicSnapshot,
-  type RoomPlaylist,
 } from "@workspace/game"
 
 type Requester = { id: string; name: string }
@@ -26,7 +22,6 @@ type RoomMusicState = {
   pausedAtSec: number | null
   queue: QueuedTrack[]
   history: MusicHistoryEntry[]
-  playlists: RoomPlaylist[]
   likes: Map<string, MusicLiker[]>
   endTimer: ReturnType<typeof setTimeout> | null
   version: number
@@ -43,6 +38,9 @@ type RoomMusicOptions = {
 const END_GRACE_MS = 2_500
 /** Unknown-length tracks may be ended by a client after this long. */
 const MIN_REPORTED_PLAY_SEC = 10
+
+/** Where a new song lands: after the queue, at its front, or playing now. */
+export type EnqueueMode = "end" | "next" | "now"
 
 export type EnqueueOutcome = {
   entry: QueuedTrack
@@ -78,7 +76,6 @@ export class RoomMusic {
         serverNow,
         queue: [],
         history: [],
-        playlists: [],
         likes: {},
         searchAvailable: this.searchAvailable(),
         version: 0,
@@ -95,10 +92,6 @@ export class RoomMusic {
       serverNow,
       queue: state.queue.map((entry) => ({ ...entry })),
       history: state.history.map((entry) => ({ ...entry })),
-      playlists: state.playlists.map((playlist) => ({
-        ...playlist,
-        tracks: playlist.tracks.map((track) => ({ ...track })),
-      })),
       likes: Object.fromEntries(
         Array.from(state.likes, ([id, likers]) => [
           id,
@@ -127,10 +120,14 @@ export class RoomMusic {
     code: string,
     track: MusicTrack,
     requester: Requester,
-    options: { playNext?: boolean } = {}
+    mode: EnqueueMode = "end"
   ): CommandResult<EnqueueOutcome> {
     const state = this.ensure(code)
-    if (state.nowPlaying && state.queue.length >= MUSIC_QUEUE_LIMIT) {
+    if (
+      mode !== "now" &&
+      state.nowPlaying &&
+      state.queue.length >= MUSIC_QUEUE_LIMIT
+    ) {
       return fail(
         "music-queue-full",
         `The queue is full (${MUSIC_QUEUE_LIMIT} songs). Skip or remove some first.`
@@ -143,27 +140,18 @@ export class RoomMusic {
       requestedByName: requester.name,
       requestedAt: new Date(this.now()).toISOString(),
     }
-    if (!state.nowPlaying) {
+    // "now" replaces whatever is playing; the queue behind it is untouched.
+    if (!state.nowPlaying || mode === "now") {
       this.start(code, state, entry)
       return ok({ entry, placement: "playing" })
     }
-    if (options.playNext) state.queue.unshift(entry)
+    if (mode === "next") state.queue.unshift(entry)
     else state.queue.push(entry)
     state.version++
     return ok({
       entry,
-      placement: options.playNext ? 1 : state.queue.length,
+      placement: mode === "next" ? 1 : state.queue.length,
     })
-  }
-
-  /** Queues as many tracks as fit; returns how many were added. */
-  enqueueMany(code: string, tracks: MusicTrack[], requester: Requester) {
-    let added = 0
-    for (const track of tracks) {
-      if (!this.enqueue(code, track, requester).ok) break
-      added++
-    }
-    return added
   }
 
   pause(code: string): CommandResult<null> {
@@ -187,6 +175,32 @@ export class RoomMusic {
     return ok(null)
   }
 
+  /** Jumps the current song to `positionSec`, playing or paused. */
+  seek(code: string, positionSec: number): CommandResult<null> {
+    const state = this.rooms.get(code)
+    const current = state?.nowPlaying
+    if (!state || !current) return fail("music-idle", "Nothing is playing.")
+    if (current.durationSec === null) {
+      return fail("music-not-seekable", "Live streams can't be scrubbed.")
+    }
+    if (!Number.isFinite(positionSec)) {
+      return fail("music-invalid", "Pick a point in the song.")
+    }
+    // Stop just short of the end so a seek never counts as finishing it.
+    const target = Math.min(
+      Math.max(0, positionSec),
+      Math.max(0, current.durationSec - 1)
+    )
+    if (state.pausedAtSec !== null) {
+      state.pausedAtSec = target
+    } else {
+      state.startedAtMs = this.now() - target * 1_000
+      this.scheduleEnd(code, state)
+    }
+    state.version++
+    return ok(null)
+  }
+
   /** Skips the current song; returns the song that was skipped. */
   skip(code: string): CommandResult<QueuedTrack> {
     const state = this.rooms.get(code)
@@ -196,7 +210,7 @@ export class RoomMusic {
     return ok(current)
   }
 
-  /** Stops playback and clears the queue. History and playlists remain. */
+  /** Stops playback and clears the queue. History remains. */
   stop(code: string): CommandResult<null> {
     const state = this.rooms.get(code)
     if (!state?.nowPlaying && !state?.queue.length) {
@@ -257,106 +271,6 @@ export class RoomMusic {
     return current
   }
 
-  createPlaylist(
-    code: string,
-    name: string,
-    creator: Requester
-  ): CommandResult<RoomPlaylist> {
-    const state = this.ensure(code)
-    const cleaned = cleanPlaylistName(name)
-    if (!cleaned) return fail("playlist-name", "Give the playlist a name.")
-    if (state.playlists.length >= MUSIC_PLAYLIST_LIMIT) {
-      return fail(
-        "playlist-limit",
-        `This room already has ${MUSIC_PLAYLIST_LIMIT} playlists.`
-      )
-    }
-    if (this.findPlaylistByName(code, cleaned)) {
-      return fail("playlist-exists", `“${cleaned}” already exists.`)
-    }
-    const playlist: RoomPlaylist = {
-      id: randomUUID(),
-      name: cleaned,
-      createdByPlayerId: creator.id,
-      createdByName: creator.name,
-      tracks: [],
-      updatedAt: new Date(this.now()).toISOString(),
-    }
-    state.playlists.push(playlist)
-    state.version++
-    return ok(playlist)
-  }
-
-  deletePlaylist(code: string, playlistId: string): CommandResult<null> {
-    const state = this.rooms.get(code)
-    const index = state?.playlists.findIndex((p) => p.id === playlistId) ?? -1
-    if (!state || index < 0)
-      return fail("playlist-missing", "No such playlist.")
-    state.playlists.splice(index, 1)
-    state.version++
-    return ok(null)
-  }
-
-  addToPlaylist(
-    code: string,
-    playlistId: string,
-    track: MusicTrack
-  ): CommandResult<RoomPlaylist> {
-    const state = this.rooms.get(code)
-    const playlist = state?.playlists.find((p) => p.id === playlistId)
-    if (!state || !playlist)
-      return fail("playlist-missing", "No such playlist.")
-    if (playlist.tracks.some((existing) => existing.id === track.id)) {
-      return ok(playlist)
-    }
-    if (playlist.tracks.length >= MUSIC_PLAYLIST_TRACK_LIMIT) {
-      return fail(
-        "playlist-full",
-        `A playlist holds up to ${MUSIC_PLAYLIST_TRACK_LIMIT} songs.`
-      )
-    }
-    playlist.tracks.push({ ...track })
-    playlist.updatedAt = new Date(this.now()).toISOString()
-    state.version++
-    return ok(playlist)
-  }
-
-  removeFromPlaylist(
-    code: string,
-    playlistId: string,
-    videoId: string
-  ): CommandResult<RoomPlaylist> {
-    const state = this.rooms.get(code)
-    const playlist = state?.playlists.find((p) => p.id === playlistId)
-    if (!state || !playlist)
-      return fail("playlist-missing", "No such playlist.")
-    const before = playlist.tracks.length
-    playlist.tracks = playlist.tracks.filter((track) => track.id !== videoId)
-    if (playlist.tracks.length !== before) {
-      playlist.updatedAt = new Date(this.now()).toISOString()
-      state.version++
-    }
-    return ok(playlist)
-  }
-
-  findPlaylist(code: string, playlistId: string): RoomPlaylist | null {
-    return (
-      this.rooms.get(code)?.playlists.find((p) => p.id === playlistId) ?? null
-    )
-  }
-
-  /** Exact name match first, then the first playlist whose name starts with it. */
-  findPlaylistByName(code: string, name: string): RoomPlaylist | null {
-    const needle = cleanPlaylistName(name).toLocaleLowerCase()
-    if (!needle) return null
-    const playlists = this.rooms.get(code)?.playlists ?? []
-    return (
-      playlists.find((p) => p.name.toLocaleLowerCase() === needle) ??
-      playlists.find((p) => p.name.toLocaleLowerCase().startsWith(needle)) ??
-      null
-    )
-  }
-
   /** Records whether a player likes a song. Idempotent in both directions. */
   setLike(
     code: string,
@@ -404,7 +318,6 @@ export class RoomMusic {
         pausedAtSec: null,
         queue: [],
         history: [],
-        playlists: [],
         likes: new Map(),
         endTimer: null,
         version: 0,
@@ -479,12 +392,6 @@ export class RoomMusic {
     const duration = state.nowPlaying.durationSec
     return duration === null ? elapsed : Math.min(elapsed, duration)
   }
-}
-
-export function cleanPlaylistName(value: string): string {
-  return typeof value === "string"
-    ? value.trim().replace(/\s+/g, " ").slice(0, MUSIC_PLAYLIST_NAME_MAX_LENGTH)
-    : ""
 }
 
 function ok<T>(data: T): CommandResult<T> {
