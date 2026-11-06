@@ -90,7 +90,13 @@ import {
   ReplyPreview,
   usePublicChatControls,
 } from "@/components/public-chat-controls"
-import { useChannelChat } from "@/components/use-channel-chat"
+import { isDjCandidate, useChannelChat } from "@/components/use-channel-chat"
+import {
+  DjAvatar,
+  DjMentionToken,
+  DjMessageBubble,
+  djCommandPrefixLength,
+} from "@/components/dj-chat"
 
 import { getGameSocket, getRoomPreview } from "@/lib/realtime"
 import {
@@ -110,6 +116,8 @@ import {
 import { useSoundSystem } from "@/lib/use-sound-system"
 import { VoiceAudioOutputs } from "@/components/voice-audio-outputs"
 import { useRoomVoice } from "@/lib/use-room-voice"
+import { publishMusicController, useRoomMusic } from "@/lib/room-music"
+import { MusicButton, RoomMusic } from "@/components/music-player"
 
 type ResponsiveCardSize = "sm" | "md"
 type DeckDrawFlightState = {
@@ -181,6 +189,12 @@ function RoomPage() {
     selfPlayerId: player?.id ?? null,
     players: room?.players ?? [],
   })
+
+  const music = useRoomMusic(socket, joinedSocketId)
+  useEffect(() => {
+    publishMusicController(music)
+  })
+  useEffect(() => () => publishMusicController(null), [])
 
   function applyRoomSnapshot(nextRoom: RoomSnapshot | null) {
     const currentRoom = roomRef.current
@@ -979,6 +993,7 @@ function RoomPage() {
           </button>
         </div>
       )}
+      {player && <RoomMusic controller={music} />}
       <VoiceAudioOutputs
         streamsByPlayerId={voice.remoteStreamsByPlayerId}
         connectionIssues={voice.connectionIssues}
@@ -1972,6 +1987,7 @@ function GameTable({
               </div>
               <div className="flex shrink-0 items-center gap-1.5">
                 <VoiceToggleButton voice={voice} compact />
+                <MusicButton compact />
                 <CopyInviteButton iconOnly onCopy={onCopyInvite} />
                 <MobileChatSheet
                   socket={socket}
@@ -2434,6 +2450,7 @@ function GameTable({
             <MatchEventFeed room={room} selfPlayerId={player.id} />
             <div className="ml-auto flex shrink-0 items-center gap-2">
               <VoiceToggleButton voice={voice} />
+              <MusicButton />
               <CopyInviteButton onCopy={onCopyInvite} />
               <HowToPlayGuide />
             </div>
@@ -5210,15 +5227,24 @@ function MentionSuggestionList({
                 : "text-white/78 hover:bg-white/[0.08] hover:text-white")
             }
           >
-            <img
-              src={avatarUrls.get(player.id) ?? PLAYER_AVATARS[0]}
-              alt=""
-              className="size-7 shrink-0 rounded-full border border-white/12 object-cover"
-              draggable={false}
-            />
+            {isDjCandidate(player) ? (
+              <DjAvatar />
+            ) : (
+              <img
+                src={avatarUrls.get(player.id) ?? PLAYER_AVATARS[0]}
+                alt=""
+                className="size-7 shrink-0 rounded-full border border-white/12 object-cover"
+                draggable={false}
+              />
+            )}
             <span className="min-w-0 flex-1 truncate text-sm font-medium">
               {player.name}
             </span>
+            {isDjCandidate(player) && (
+              <span className="shrink-0 text-[11px] text-white/40">
+                Plays music for the room
+              </span>
+            )}
           </button>
         )
       })}
@@ -5503,6 +5529,17 @@ function ChatMessageBubble({
   replyPreview?: ReactNode
   actions?: ReactNode
 }) {
+  if (message.kind === "bot") {
+    return (
+      <DjMessageBubble
+        message={message}
+        replyPreview={replyPreview}
+        actions={actions}
+        time={formatChatTime(message.createdAt)}
+      />
+    )
+  }
+
   if (message.kind === "vote-kick" && message.voteKick) {
     return (
       <div
@@ -5609,6 +5646,24 @@ function ChatMessageBody({
   roomCode: string
   isSelf: boolean
 }) {
+  // "@DJ ..." commands get the bot's name highlighted, unless a seated
+  // player is actually called DJ and was the one mentioned.
+  const djPrefixLength = djCommandPrefixLength(body)
+  if (
+    djPrefixLength > 0 &&
+    !mentionPlayerIds.some(
+      (id) =>
+        players.find((player) => player.id === id)?.name.toLowerCase() === "dj"
+    )
+  ) {
+    return (
+      <span className="leading-relaxed">
+        <DjMentionToken isSelf={isSelf} />
+        {body.slice(djPrefixLength)}
+      </span>
+    )
+  }
+
   const avatarUrls = avatarsByPlayerId(roomCode, players)
   const mentionedPlayers = mentionPlayerIds
     .map((playerId) => players.find((player) => player.id === playerId))
@@ -8752,6 +8807,7 @@ function LobbyWaitingRoom({
           </div>
           <div className="flex items-center justify-between gap-1 sm:justify-start sm:gap-2">
             <VoiceToggleButton voice={voice} />
+            <MusicButton />
             <SoundToggle />
             <StatusDot connected={connected} />
             <div className="lg:hidden">

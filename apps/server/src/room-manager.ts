@@ -1,5 +1,8 @@
 import {
   CHAT_REACTIONS,
+  DJ_BOT_ID,
+  DJ_BOT_NAME,
+  type MusicTrack,
   type ChatTypingPlayer,
   type ReactToChatMessageInput,
 } from "@workspace/game"
@@ -648,6 +651,49 @@ export class RoomManager {
     this.clearChatTyping(room, playerId)
     touch(room, now)
 
+    return ok(snapshot(room))
+  }
+
+  /** Name of a seated player, for bot replies and music credits. */
+  getPlayerName(code: string, playerId: string): string | null {
+    const room = this.getManagedRoom(code)
+    return room ? (findPlayer(room, playerId)?.name ?? null) : null
+  }
+
+  /**
+   * Posts a public message from the room DJ. Bot messages skip player rate
+   * limits; a reply target that has since scrolled out is dropped.
+   */
+  postBotMessage(
+    code: string,
+    input: { body: string; track?: MusicTrack; replyToMessageId?: string }
+  ): CommandResult<RoomSnapshot> {
+    const room = this.getManagedRoom(code)
+    if (!room) return fail("room-not-found", "That room code does not exist.")
+    const nowMs = Date.now()
+    const now = new Date(nowMs).toISOString()
+    const replyAvailable =
+      input.replyToMessageId !== undefined &&
+      room.chatMessages.some(
+        (message) =>
+          message.id === input.replyToMessageId && message.channel === "public"
+      )
+    const message: ChatMessage = {
+      id: randomUUID(),
+      playerId: DJ_BOT_ID,
+      playerName: DJ_BOT_NAME,
+      channel: "public",
+      kind: "bot",
+      body: input.body.trim().slice(0, 600),
+      mentionPlayerIds: [],
+      track: input.track ? { ...input.track } : undefined,
+      replyToMessageId: replyAvailable ? input.replyToMessageId : undefined,
+      createdAt: now,
+    }
+    room.chatMessages = [...room.chatMessages, message].slice(
+      -CHAT_HISTORY_LIMIT
+    )
+    touch(room, now)
     return ok(snapshot(room))
   }
 
@@ -1801,6 +1847,7 @@ function cloneChatMessage(message: ChatMessage): ChatMessage {
   return {
     ...message,
     mentionPlayerIds: [...message.mentionPlayerIds],
+    track: message.track ? { ...message.track } : undefined,
     reactions: message.reactions?.map((reaction) => ({
       ...reaction,
       playerIds: [...reaction.playerIds],

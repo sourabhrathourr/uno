@@ -23,6 +23,35 @@ export type {
   VoteKickVote,
 } from "./chat"
 export { createNoMercyDeck, shuffleCards } from "./deck"
+export {
+  DJ_BOT_ID,
+  DJ_BOT_NAME,
+  MUSIC_HISTORY_LIMIT,
+  MUSIC_PLAYLIST_LIMIT,
+  MUSIC_PLAYLIST_NAME_MAX_LENGTH,
+  MUSIC_PLAYLIST_TRACK_LIMIT,
+  MUSIC_QUEUE_LIMIT,
+  formatTrackDuration,
+  isYouTubeVideoId,
+  parseYouTubeVideoId,
+} from "./music"
+export type {
+  MusicControlAction,
+  MusicControlInput,
+  MusicCreatePlaylistInput,
+  MusicEnqueueInput,
+  MusicHistoryEntry,
+  MusicPlaybackStatus,
+  MusicPlaylistInput,
+  MusicPlaylistTrackInput,
+  MusicRemoveInput,
+  MusicSearchResponse,
+  MusicTrack,
+  MusicTrackReportInput,
+  QueuedTrack,
+  RoomMusicSnapshot,
+  RoomPlaylist,
+} from "./music"
 export type { GifProvider, GifSearchResponse, GifSearchResult } from "./gifs"
 export {
   addWaitingPlayer,

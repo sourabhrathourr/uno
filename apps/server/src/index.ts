@@ -18,6 +18,9 @@ import type {
 import { RoomVoice } from "./room-voice"
 import { registerPartyHandlers } from "./party-handlers"
 import { GiphyService } from "./giphy"
+import { MusicController } from "./dj-bot"
+import { RoomMusic } from "./room-music"
+import { YouTubeService } from "./youtube"
 import { ROOM_MEMORY_CLEANUP_INTERVAL_MS, RoomManager } from "./room-manager"
 
 type IceServerConfig = {
@@ -55,6 +58,32 @@ const rooms = new RoomManager({
   onRoomExpired: clearExpiredRoomRuntimeState,
   onChatTypingUpdated: (code, players) =>
     io.to(code).emit("room:chatTyping", players),
+})
+
+const youtube = new YouTubeService({
+  apiKey: process.env.YOUTUBE_API_KEY,
+  regionCode: process.env.YOUTUBE_REGION_CODE ?? process.env.GIPHY_COUNTRY_CODE,
+  maxSearchesPerDay: Number.parseInt(
+    process.env.YOUTUBE_SEARCHES_PER_DAY ?? "95",
+    10
+  ),
+  maxSearchesPerRequesterPerHour: Number.parseInt(
+    process.env.YOUTUBE_SEARCHES_PER_PLAYER_PER_HOUR ?? "20",
+    10
+  ),
+})
+const roomMusic = new RoomMusic({
+  searchAvailable: () => youtube.configured,
+  onStateChanged: (code) => emitMusicState(code),
+})
+const music = new MusicController({
+  rooms,
+  music: roomMusic,
+  youtube,
+  emitMusic: (code) => emitMusicState(code),
+  emitRoom: (code, room) => {
+    void emitRoomState(code, room)
+  },
 })
 
 const httpServer = createServer(async (req, res) => {
@@ -114,6 +143,38 @@ const httpServer = createServer(async (req, res) => {
           code: "gif-search-unavailable",
           message: "GIF search is temporarily unavailable.",
         },
+      })
+    }
+    return
+  }
+
+  if (req.method === "GET" && url.pathname === "/music/search") {
+    const roomCode = firstHeader(req.headers["x-room-code"])
+    const sessionId = firstHeader(req.headers["x-player-session-id"])
+    if (!rooms.hasPlayerSession(roomCode, sessionId)) {
+      sendJson(req, res, 401, {
+        error: {
+          code: "music-search-unauthorized",
+          message: "Join the room before searching for music.",
+        },
+      })
+      return
+    }
+    try {
+      const results = await music.search(
+        url.searchParams.get("q") ?? "",
+        sessionId
+      )
+      sendJson(req, res, 200, { results })
+    } catch (cause) {
+      const message =
+        cause instanceof Error
+          ? cause.message
+          : "Music search is temporarily unavailable."
+      if (!(cause instanceof Error && "code" in cause))
+        console.error("Music search failed", cause)
+      sendJson(req, res, 502, {
+        error: { code: "music-search-unavailable", message },
       })
     }
     return
@@ -224,6 +285,7 @@ io.on("connection", (socket) => {
       },
     })
     socket.emit("room:chatTyping", rooms.getChatTyping(room.code))
+    socket.emit("music:state", music.snapshot(room.code))
     void emitRoomState(room.code, room)
 
     if (result.data.isNewPlayer) {
@@ -320,7 +382,135 @@ io.on("connection", (socket) => {
       rooms.sendChatMessage(roomCode, playerId, input)
     )
     ack(result)
-    if (result.ok) void emitRoomState(result.data.code, result.data)
+    if (!result.ok) return
+    void emitRoomState(result.data.code, result.data)
+
+    // A public text message that starts with @DJ is a music command. Public
+    // messages are appended last, so the sender's message is the final one.
+    const playerId = socket.data.playerId
+    const sent = result.data.chatMessages.at(-1)
+    if (
+      (input.channel ?? "public") === "public" &&
+      input.kind === "text" &&
+      playerId &&
+      sent?.playerId === playerId &&
+      sent.kind === "text"
+    ) {
+      void music
+        .handleChatMessage(
+          result.data.code,
+          playerId,
+          sent,
+          result.data.players
+        )
+        .catch((cause) => console.error("DJ command failed", cause))
+    }
+  })
+
+  socket.on("music:get", (ack) => {
+    const { roomCode, playerId } = socket.data
+    if (!roomCode || !playerId) {
+      ack({
+        ok: false,
+        error: { code: "not-joined", message: "Join a room first." },
+      })
+      return
+    }
+    ack({ ok: true, data: music.snapshot(roomCode) })
+  })
+
+  socket.on("music:enqueue", (input, ack) => {
+    const actor = joinedActor(socket.data)
+    if (!actor) return ack(notJoinedResult())
+    if (!input || typeof input.videoId !== "string") {
+      return ack({
+        ok: false,
+        error: { code: "music-invalid", message: "Choose a song first." },
+      })
+    }
+    void music
+      .enqueueVideo(actor, input.videoId, Boolean(input.playNext))
+      .then(ack)
+      .catch((cause) => {
+        console.error("Music enqueue failed", cause)
+        ack({
+          ok: false,
+          error: { code: "music-failed", message: "Couldn't queue that song." },
+        })
+      })
+  })
+
+  socket.on("music:control", (input, ack) => {
+    const actor = joinedActor(socket.data)
+    if (!actor) return ack(notJoinedResult())
+    ack(music.control(actor, input?.action))
+  })
+
+  socket.on("music:remove", (input, ack) => {
+    const actor = joinedActor(socket.data)
+    if (!actor) return ack(notJoinedResult())
+    ack(music.remove(actor, String(input?.queueId ?? "")))
+  })
+
+  socket.on("music:ended", (input) => {
+    const actor = joinedActor(socket.data)
+    if (actor && typeof input?.queueId === "string")
+      music.reportEnded(actor, input.queueId)
+  })
+
+  socket.on("music:unplayable", (input) => {
+    const actor = joinedActor(socket.data)
+    if (actor && typeof input?.queueId === "string")
+      music.reportUnplayable(actor, input.queueId)
+  })
+
+  socket.on("music:createPlaylist", (input, ack) => {
+    const actor = joinedActor(socket.data)
+    if (!actor) return ack(notJoinedResult())
+    ack(music.createPlaylist(actor, String(input?.name ?? "")))
+  })
+
+  socket.on("music:deletePlaylist", (input, ack) => {
+    const actor = joinedActor(socket.data)
+    if (!actor) return ack(notJoinedResult())
+    ack(music.deletePlaylist(actor, String(input?.playlistId ?? "")))
+  })
+
+  socket.on("music:playPlaylist", (input, ack) => {
+    const actor = joinedActor(socket.data)
+    if (!actor) return ack(notJoinedResult())
+    ack(music.playPlaylist(actor, String(input?.playlistId ?? "")))
+  })
+
+  socket.on("music:addToPlaylist", (input, ack) => {
+    const actor = joinedActor(socket.data)
+    if (!actor) return ack(notJoinedResult())
+    void music
+      .addToPlaylist(
+        actor,
+        String(input?.playlistId ?? ""),
+        String(input?.videoId ?? "")
+      )
+      .then(ack)
+      .catch((cause) => {
+        console.error("Playlist add failed", cause)
+        ack({
+          ok: false,
+          error: { code: "music-failed", message: "Couldn't add that song." },
+        })
+      })
+  })
+
+  socket.on("music:removeFromPlaylist", (input, ack) => {
+    const actor = joinedActor(socket.data)
+    if (!actor) return ack(notJoinedResult())
+    ack(
+      music.removeFromPlaylist(
+        actor,
+        String(input?.playlistId ?? ""),
+        String(input?.videoId ?? "")
+      )
+    )
   })
 
   socket.on("room:reactToChatMessage", (input, ack) => {
@@ -544,6 +734,7 @@ function firstHeader(value: string | Array<string> | undefined): string {
 
 function clearExpiredRoomRuntimeState(roomCode: string) {
   voice.clearRoom(roomCode)
+  roomMusic.clearRoom(roomCode)
   io.to(roomCode).emit("room:error", {
     code: "room-expired",
     message: "This room expired after 7 days of inactivity.",
@@ -603,6 +794,22 @@ async function emitRoomState(roomCode: string, room?: RoomSnapshot) {
     if (playerGame) client.emit("game:playerState", playerGame)
     const playerSocial = rooms.getPlayerSocial(roomCode, playerId)
     if (playerSocial) client.emit("room:playerSocial", playerSocial)
+  }
+}
+
+function emitMusicState(roomCode: string) {
+  io.to(roomCode).emit("music:state", music.snapshot(roomCode))
+}
+
+function joinedActor(data: SocketData) {
+  const { roomCode, playerId, sessionId } = data
+  return roomCode && playerId ? { code: roomCode, playerId, sessionId } : null
+}
+
+function notJoinedResult() {
+  return {
+    ok: false as const,
+    error: { code: "not-joined", message: "Join a room first." },
   }
 }
 

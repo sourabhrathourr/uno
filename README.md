@@ -65,6 +65,33 @@ The new server accepts older clients; the new web app requires `voice:join`.
 Tests use mocked WebRTC devices plus real local Socket.IO connections. They
 do not validate production Metered credentials or real browser audio output.
 
+## Room music (`@DJ`)
+
+Any player can tag the DJ in public chat (lobby or match) and the whole room
+hears the same song, kept within a couple of seconds of the server's clock:
+
+- `@DJ play <song or YouTube link>`, `@DJ next <song>` (plays after this one)
+- `@DJ pause` / `resume` / `skip` / `stop`, `@DJ queue`, `@DJ np`,
+  `@DJ remove <#>`, `@DJ clear`, `@DJ playlist <name>`
+
+The ♪ button opens the library: Search, Queue, room History, Liked songs
+(saved in that browser, across rooms), and shared room Playlists. There are
+no roles or votes; everyone can control playback. Each listener sets their
+own volume. Music lives with the room in memory, like chat, so a server restart
+clears queues and playlists.
+
+Audio comes from a hidden YouTube player in each browser, so only sound plays.
+YouTube's embed terms expect a visible player, which is worth revisiting before
+a public launch. Browsers block sound until the page is touched; when that
+happens the ♪ button shows a dot and one tap starts the music.
+
+Searching by name needs `YOUTUBE_API_KEY` in `apps/server/.env` (Google Cloud
+console → enable "YouTube Data API v3" → create an API key). A search costs
+about 101 of the default 10,000 daily quota units, so the server caps uncached
+searches at 95 per day (`YOUTUBE_SEARCHES_PER_DAY`) and 20 per player per hour
+(`YOUTUBE_SEARCHES_PER_PLAYER_PER_HOUR`), and caches results for 24 hours.
+Without a key, pasted YouTube links still play.
+
 ## GIPHY search
 
 Copy `apps/server/.env.example` to `apps/server/.env`, then set

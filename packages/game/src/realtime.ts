@@ -48,6 +48,16 @@ import type {
   SetChatTypingInput,
 } from "./chat"
 import type { HouseRules, Player, RoomSnapshot } from "./rooms"
+import type {
+  MusicControlInput,
+  MusicCreatePlaylistInput,
+  MusicEnqueueInput,
+  MusicPlaylistInput,
+  MusicPlaylistTrackInput,
+  MusicRemoveInput,
+  MusicTrackReportInput,
+  RoomMusicSnapshot,
+} from "./music"
 
 export type GameError = {
   code: string
@@ -196,6 +206,43 @@ export type ClientToServerEvents = {
     input: CastVoteKickInput,
     ack: (result: CommandResult<RoomSnapshot>) => void
   ) => void
+  "music:get": (ack: (result: CommandResult<RoomMusicSnapshot>) => void) => void
+  "music:enqueue": (
+    input: MusicEnqueueInput,
+    ack: (result: CommandResult<RoomMusicSnapshot>) => void
+  ) => void
+  "music:control": (
+    input: MusicControlInput,
+    ack: (result: CommandResult<RoomMusicSnapshot>) => void
+  ) => void
+  "music:remove": (
+    input: MusicRemoveInput,
+    ack: (result: CommandResult<RoomMusicSnapshot>) => void
+  ) => void
+  /** A client's player reached the end of the current track. */
+  "music:ended": (input: MusicTrackReportInput) => void
+  /** A client's player cannot play the current track (blocked embed, removed). */
+  "music:unplayable": (input: MusicTrackReportInput) => void
+  "music:createPlaylist": (
+    input: MusicCreatePlaylistInput,
+    ack: (result: CommandResult<RoomMusicSnapshot>) => void
+  ) => void
+  "music:deletePlaylist": (
+    input: MusicPlaylistInput,
+    ack: (result: CommandResult<RoomMusicSnapshot>) => void
+  ) => void
+  "music:playPlaylist": (
+    input: MusicPlaylistInput,
+    ack: (result: CommandResult<RoomMusicSnapshot>) => void
+  ) => void
+  "music:addToPlaylist": (
+    input: MusicPlaylistTrackInput,
+    ack: (result: CommandResult<RoomMusicSnapshot>) => void
+  ) => void
+  "music:removeFromPlaylist": (
+    input: MusicPlaylistTrackInput,
+    ack: (result: CommandResult<RoomMusicSnapshot>) => void
+  ) => void
   "voice:join": (
     ack: (
       result: CommandResult<{ sessionId: string; states: VoiceStateEvent[] }>
@@ -279,6 +326,7 @@ export type ServerToClientEvents = {
   "voice:state": (event: VoiceStateEvent) => void
   "voice:signal": (event: VoiceSignalEvent) => void
   "room:error": (error: GameError) => void
+  "music:state": (snapshot: RoomMusicSnapshot) => void
 }
 
 export type InterServerEvents = Record<string, never>

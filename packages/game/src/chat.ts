@@ -1,7 +1,15 @@
 import type { SupportRequest } from "./game"
 import type { GifProvider } from "./gifs"
+import type { MusicTrack } from "./music"
 
-export type ChatMessageKind = "text" | "emoji" | "gif" | "preset" | "vote-kick"
+/** `bot` messages come only from the server (the room DJ). */
+export type ChatMessageKind =
+  | "text"
+  | "emoji"
+  | "gif"
+  | "preset"
+  | "vote-kick"
+  | "bot"
 export type ChatChannel = "public" | "squad"
 export type VoteKickChoice = "yes" | "no"
 export type VoteKickStatus = "open" | "passed" | "failed"
@@ -30,6 +38,8 @@ export type ChatMessage = {
   reactions?: ChatReaction[]
   label?: string
   voteKick?: VoteKickPoll
+  /** The song a DJ message is about, rendered as a track card. */
+  track?: MusicTrack
   createdAt: string
 }
 
