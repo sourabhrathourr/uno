@@ -52,6 +52,7 @@ import type {
   MusicControlInput,
   MusicCreatePlaylistInput,
   MusicEnqueueInput,
+  MusicLikeInput,
   MusicPlaylistInput,
   MusicPlaylistTrackInput,
   MusicRemoveInput,
@@ -217,6 +218,11 @@ export type ClientToServerEvents = {
   ) => void
   "music:remove": (
     input: MusicRemoveInput,
+    ack: (result: CommandResult<RoomMusicSnapshot>) => void
+  ) => void
+  /** Likes or unlikes a song for this room, so others see who liked it. */
+  "music:like": (
+    input: MusicLikeInput,
     ack: (result: CommandResult<RoomMusicSnapshot>) => void
   ) => void
   /** A client's player reached the end of the current track. */

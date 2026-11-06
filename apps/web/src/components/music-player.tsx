@@ -1,4 +1,5 @@
 import {
+  ArrowLeft,
   Check,
   Heart,
   ListMusic,
@@ -26,10 +27,11 @@ import type {
   RoomMusicSnapshot,
   RoomPlaylist,
 } from "@workspace/game"
-import type { ReactNode } from "react"
+import type { ReactNode, PointerEvent as ReactPointerEvent } from "react"
 
 import type { RoomMusicController } from "@/lib/room-music"
 import type { YouTubePlayer } from "@/lib/youtube-player"
+import { TOOLBAR_BUTTON, TOOLBAR_BUTTON_ON } from "@/components/toolbar"
 import {
   estimatePositionSec,
   searchMusic,
@@ -37,13 +39,21 @@ import {
   useMusicController,
   useMusicPanel,
   useMusicVolume,
+  useSongLike,
 } from "@/lib/room-music"
 import { YT_STATE, loadYouTubeApi } from "@/lib/youtube-player"
 
-const EASE_OUT = "ease-[cubic-bezier(0.23,1,0.32,1)]"
+/** iOS-style sheet curve: fast out, long settle. */
+const EASE_DRAWER = "ease-[cubic-bezier(0.32,0.72,0,1)]"
 const PRESS =
-  "transition-[transform,background-color,color,border-color,opacity] duration-150 ease-out active:scale-[0.96]"
-const HOVER_ROW = "[@media(hover:hover)]:hover:bg-white/[0.05]"
+  "transition-[transform,background-color,color,opacity] duration-150 ease-out active:scale-[0.96]"
+const HOVER = "[@media(hover:hover)]:hover:bg-white/[0.06]"
+const ICON_BUTTON =
+  "grid size-9 shrink-0 place-items-center rounded-full text-white/50 " +
+  PRESS +
+  " [@media(hover:hover)]:hover:bg-white/[0.07] [@media(hover:hover)]:hover:text-white/90"
+const INPUT =
+  "h-11 w-full rounded-2xl border border-white/[0.08] bg-white/[0.04] text-base text-white/90 transition-[border-color,background-color] duration-150 outline-none placeholder:text-white/30 focus:border-white/20 focus:bg-white/[0.06] sm:h-10 sm:rounded-xl sm:text-sm"
 
 /* ------------------------------------------------------------------ */
 /* Audio-unlock flag: browsers block sound until the page is touched.  */
@@ -90,6 +100,7 @@ export function RoomMusic({ controller }: { controller: RoomMusicController }) {
   const controllerRef = useRef(controller)
   controllerRef.current = controller
   const { volume, muted } = useMusicVolume()
+  const { isLiked } = useLikedSongs()
 
   useEffect(() => {
     let cancelled = false
@@ -242,6 +253,17 @@ export function RoomMusic({ controller }: { controller: RoomMusicController }) {
     else player.unMute()
   }, [ready, volume, muted])
 
+  // A song you liked in another room counts as liked here too, so the room
+  // sees your heart on it as soon as it plays.
+  const nowPlayingId = snapshot?.nowPlaying?.id
+  const selfId = controller.selfPlayerId
+  useEffect(() => {
+    if (!nowPlayingId || !selfId || !isLiked(nowPlayingId)) return
+    const likers = controllerRef.current.snapshot?.likes[nowPlayingId] ?? []
+    if (!likers.some((liker) => liker.playerId === selfId))
+      void controllerRef.current.like(nowPlayingId, true)
+  }, [nowPlayingId, selfId, isLiked])
+
   return (
     <>
       {/* Audio only: the video frame stays off-screen. */}
@@ -259,7 +281,7 @@ export function RoomMusic({ controller }: { controller: RoomMusicController }) {
 /* Header button                                                       */
 /* ------------------------------------------------------------------ */
 
-export function MusicButton({ compact = false }: { compact?: boolean }) {
+export function MusicButton() {
   const controller = useMusicController()
   const panel = useMusicPanel()
   const tap = useNeedsTap()
@@ -281,14 +303,8 @@ export function MusicButton({ compact = false }: { compact?: boolean }) {
       aria-label={title}
       aria-expanded={panel.open}
       className={
-        "relative inline-flex shrink-0 items-center justify-center rounded-full border focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300 " +
-        PRESS +
-        " " +
-        (compact ? "size-9" : "size-11") +
-        " " +
-        (panel.open || status === "playing"
-          ? "border-violet-300/25 bg-violet-400/10 text-violet-100"
-          : "border-white/10 bg-white/[0.045] text-white/74 [@media(hover:hover)]:hover:border-white/18 [@media(hover:hover)]:hover:bg-white/[0.075] [@media(hover:hover)]:hover:text-white/88")
+        TOOLBAR_BUTTON +
+        (panel.open || status === "playing" ? " " + TOOLBAR_BUTTON_ON : "")
       }
     >
       {status === "playing" && !tap ? (
@@ -297,7 +313,7 @@ export function MusicButton({ compact = false }: { compact?: boolean }) {
         <Music2 className="size-4" strokeWidth={2} />
       )}
       {tap && (
-        <span className="absolute -top-0.5 -right-0.5 size-2.5 rounded-full bg-violet-300 shadow-[0_0_0_2px_#070604] motion-safe:animate-pulse" />
+        <span className="absolute top-1.5 right-1.5 size-1.5 rounded-full bg-white motion-safe:animate-pulse" />
       )}
     </button>
   )
@@ -309,8 +325,8 @@ function EqualizerBars() {
       {[0, 180, 360].map((delay) => (
         <span
           key={delay}
-          className="w-[3px] origin-bottom rounded-full bg-current motion-safe:animate-[music-bar_900ms_ease-in-out_infinite_alternate]"
-          style={{ height: "100%", animationDelay: `${delay}ms` }}
+          className="h-full w-[3px] origin-bottom rounded-full bg-current motion-safe:animate-[music-bar_900ms_ease-in-out_infinite_alternate]"
+          style={{ animationDelay: `${delay}ms` }}
         />
       ))}
       <style>{`@keyframes music-bar{0%{transform:scaleY(.3)}100%{transform:scaleY(1)}}`}</style>
@@ -319,10 +335,72 @@ function EqualizerBars() {
 }
 
 /* ------------------------------------------------------------------ */
-/* Library panel                                                       */
+/* Library panel: a right-side panel on desktop, a bottom sheet on     */
+/* phones that can be swiped down to close.                            */
 /* ------------------------------------------------------------------ */
 
 type Tab = "search" | "queue" | "history" | "liked" | "playlists"
+
+function useSheetDrag(onDismiss: () => void) {
+  const sheetRef = useRef<HTMLElement | null>(null)
+  const drag = useRef<{
+    id: number
+    startY: number
+    startedAt: number
+    dy: number
+  } | null>(null)
+
+  function onPointerDown(event: ReactPointerEvent<HTMLElement>) {
+    const sheet = sheetRef.current
+    if (!sheet || drag.current) return // ignore a second finger
+    if (!window.matchMedia("(max-width: 639px)").matches) return
+    if ((event.target as HTMLElement).closest("button,input,a")) return
+    drag.current = {
+      id: event.pointerId,
+      startY: event.clientY,
+      startedAt: performance.now(),
+      dy: 0,
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+    sheet.style.transition = "none"
+  }
+
+  function onPointerMove(event: ReactPointerEvent<HTMLElement>) {
+    const current = drag.current
+    const sheet = sheetRef.current
+    if (!current || !sheet || current.id !== event.pointerId) return
+    const raw = event.clientY - current.startY
+    // Past the top it resists instead of hitting a wall.
+    const dy = raw < 0 ? -Math.sqrt(-raw) * 2 : raw
+    current.dy = dy
+    sheet.style.transform = `translateY(${dy}px)`
+  }
+
+  function onPointerEnd(event: ReactPointerEvent<HTMLElement>) {
+    const current = drag.current
+    const sheet = sheetRef.current
+    if (!current || current.id !== event.pointerId) return
+    drag.current = null
+    const velocity =
+      current.dy / Math.max(1, performance.now() - current.startedAt)
+    if (sheet) {
+      // Hand back to the CSS transition so it settles from where it is.
+      sheet.style.transition = ""
+      sheet.style.transform = ""
+    }
+    if (current.dy > 120 || (current.dy > 12 && velocity > 0.11)) onDismiss()
+  }
+
+  return {
+    sheetRef,
+    handlers: {
+      onPointerDown,
+      onPointerMove,
+      onPointerUp: onPointerEnd,
+      onPointerCancel: onPointerEnd,
+    },
+  }
+}
 
 function MusicPanel({
   controller,
@@ -335,6 +413,7 @@ function MusicPanel({
   const [tab, setTab] = useState<Tab>("search")
   const snapshot = controller.snapshot
   const { liked } = useLikedSongs()
+  const { sheetRef, handlers } = useSheetDrag(() => panel.setOpen(false))
 
   useEffect(() => {
     if (!panel.open) return
@@ -349,84 +428,94 @@ function MusicPanel({
     { id: "search", label: "Search" },
     { id: "queue", label: "Queue", count: snapshot?.queue.length },
     { id: "history", label: "History" },
-    { id: "liked", label: "Liked", count: liked.length || undefined },
+    { id: "liked", label: "Liked", count: liked.length },
     { id: "playlists", label: "Playlists" },
   ]
 
   return (
     <>
-      {/* Mobile scrim */}
       <div
         aria-hidden="true"
         onClick={() => panel.setOpen(false)}
         className={
-          "fixed inset-0 z-[150] bg-black/50 transition-opacity duration-200 sm:hidden " +
+          "fixed inset-0 z-[150] bg-black/55 backdrop-blur-[2px] transition-opacity duration-300 sm:hidden " +
           (panel.open ? "opacity-100" : "pointer-events-none opacity-0")
         }
       />
       <section
+        ref={sheetRef}
         role="dialog"
         aria-label="Room music"
         aria-hidden={!panel.open}
         inert={!panel.open}
         className={
-          "fixed z-[151] flex flex-col overflow-hidden border border-white/10 bg-[#0d0c0a]/96 text-white shadow-[0_24px_80px_rgba(0,0,0,0.55)] backdrop-blur-xl will-change-transform " +
-          "inset-x-0 bottom-0 max-h-[86dvh] rounded-t-3xl sm:inset-x-auto sm:top-3 sm:right-3 sm:bottom-3 sm:max-h-none sm:w-[384px] sm:rounded-3xl " +
-          `transition-[transform,opacity] duration-[260ms] ${EASE_OUT} motion-reduce:transition-opacity ` +
+          "fixed z-[151] flex flex-col overflow-hidden bg-[#0f0e0c] text-white will-change-transform " +
+          // Phone: bottom sheet. Desktop: floating side panel.
+          "inset-x-0 bottom-0 h-[min(88dvh,760px)] rounded-t-[28px] border-t border-white/[0.08] pb-[env(safe-area-inset-bottom)] shadow-[0_-24px_80px_rgba(0,0,0,0.6)] " +
+          "sm:inset-x-auto sm:top-3 sm:right-3 sm:bottom-3 sm:h-auto sm:w-[384px] sm:rounded-3xl sm:border sm:border-white/10 sm:pb-0 sm:shadow-[0_24px_80px_rgba(0,0,0,0.55)] " +
+          `transition-[transform,opacity] duration-[320ms] ${EASE_DRAWER} motion-reduce:transition-opacity sm:duration-[240ms] ` +
           (panel.open
             ? "translate-y-0 opacity-100 sm:translate-x-0"
-            : "pointer-events-none translate-y-full opacity-0 motion-reduce:translate-x-0 motion-reduce:translate-y-0 sm:translate-x-[calc(100%+1rem)] sm:translate-y-0")
+            : "pointer-events-none translate-y-full motion-reduce:translate-x-0 motion-reduce:translate-y-0 motion-reduce:opacity-0 sm:translate-x-[calc(100%+1rem)] sm:translate-y-0 sm:opacity-0")
         }
       >
-        <header className="flex shrink-0 items-center justify-between px-4 pt-4 pb-2">
-          <div className="flex items-center gap-2">
-            <Music2 className="size-4 text-violet-200" strokeWidth={2} />
-            <h2 className="text-sm font-semibold tracking-tight text-white/90">
+        {/* Drag zone: handle + title. */}
+        <div {...handlers} className="shrink-0 touch-none select-none">
+          <div
+            aria-hidden="true"
+            className="mx-auto mt-2.5 h-1 w-9 rounded-full bg-white/20 sm:hidden"
+          />
+          <header className="flex items-center justify-between px-5 pt-3 pb-3 sm:px-4 sm:pt-4">
+            <h2 className="text-[15px] font-semibold tracking-tight text-white/92 sm:text-sm">
               Music
             </h2>
-          </div>
-          <IconButton label="Close music" onClick={() => panel.setOpen(false)}>
-            <X className="size-4" strokeWidth={2} />
-          </IconButton>
-        </header>
+            <button
+              type="button"
+              onClick={() => panel.setOpen(false)}
+              aria-label="Close music"
+              className={ICON_BUTTON + " -mr-1.5"}
+            >
+              <X className="size-4" strokeWidth={2} />
+            </button>
+          </header>
+        </div>
 
         <NowPlaying controller={controller} loadError={loadError} />
 
-        <nav
-          aria-label="Music library"
-          className="uno-scrollbar mx-4 mt-3 flex shrink-0 gap-1 overflow-x-auto"
-        >
-          {tabs.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => setTab(item.id)}
-              aria-pressed={tab === item.id}
-              className={
-                "flex h-8 shrink-0 items-center gap-1.5 rounded-full px-3 text-xs font-medium " +
-                PRESS +
-                " " +
-                (tab === item.id
-                  ? "bg-white text-neutral-950"
-                  : "text-white/56 [@media(hover:hover)]:hover:bg-white/[0.06] [@media(hover:hover)]:hover:text-white/86")
-              }
-            >
-              {item.label}
-              {item.count ? (
-                <span
-                  className={
-                    "tabular-nums " +
-                    (tab === item.id ? "text-neutral-500" : "text-white/36")
-                  }
-                >
-                  {item.count}
-                </span>
-              ) : null}
-            </button>
-          ))}
+        <nav aria-label="Music library" className="mt-4 shrink-0 px-4 sm:mt-3">
+          <div className="flex w-full gap-0.5 rounded-full bg-white/[0.04] p-1">
+            {tabs.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setTab(item.id)}
+                aria-pressed={tab === item.id}
+                className={
+                  "flex h-8 min-w-0 flex-1 items-center justify-center gap-1 rounded-full px-1 text-[13px] font-medium sm:text-xs " +
+                  PRESS +
+                  " " +
+                  (tab === item.id
+                    ? "bg-white text-neutral-950 shadow-[0_2px_8px_rgba(0,0,0,0.3)]"
+                    : "text-white/55 [@media(hover:hover)]:hover:text-white/88")
+                }
+              >
+                {item.label}
+                {item.count ? (
+                  <span
+                    className={
+                      "text-[11px] tabular-nums " +
+                      (tab === item.id ? "text-neutral-500" : "text-white/35")
+                    }
+                  >
+                    {item.count}
+                  </span>
+                ) : null}
+              </button>
+            ))}
+          </div>
         </nav>
 
-        <div className="uno-scrollbar mt-2 min-h-0 flex-1 overflow-y-auto px-2 pb-3">
+        <div className="uno-scrollbar mt-2 min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-4">
           {tab === "search" && (
             <SearchTab
               controller={controller}
@@ -438,11 +527,6 @@ function MusicPanel({
             <TrackList
               tracks={snapshot?.history ?? []}
               controller={controller}
-              meta={(track) =>
-                "requestedByName" in track
-                  ? `${track.artist} · ${track.requestedByName as string}`
-                  : track.artist
-              }
               empty="Songs played in this room show up here."
             />
           )}
@@ -450,7 +534,7 @@ function MusicPanel({
             <TrackList
               tracks={liked}
               controller={controller}
-              empty="Tap ♥ on any song to keep it here. Liked songs stay in this browser across rooms."
+              empty="Tap ♥ on any song to keep it here. Your liked songs follow you to every room."
             />
           )}
           {tab === "playlists" && <PlaylistsTab controller={controller} />}
@@ -459,14 +543,14 @@ function MusicPanel({
         {controller.error && (
           <p
             role="alert"
-            className="mx-3 mb-3 flex items-start justify-between gap-2 rounded-xl bg-red-500/10 px-3 py-2 text-xs text-red-100 shadow-[inset_0_0_0_1px_rgba(248,113,113,0.2)]"
+            className="mx-3 mb-3 flex items-start justify-between gap-2 rounded-2xl bg-red-500/10 px-3.5 py-2.5 text-xs leading-relaxed text-red-100 shadow-[inset_0_0_0_1px_rgba(248,113,113,0.18)]"
           >
             {controller.error}
             <button
               type="button"
               onClick={controller.clearError}
               aria-label="Dismiss"
-              className="shrink-0 text-red-100/60 hover:text-red-100"
+              className="-m-1 grid size-6 shrink-0 place-items-center text-red-100/60 hover:text-red-100"
             >
               <X className="size-3.5" strokeWidth={2} />
             </button>
@@ -484,111 +568,90 @@ function NowPlaying({
   controller: RoomMusicController
   loadError: string | null
 }) {
-  const snapshot = controller.snapshot
-  const track = snapshot?.nowPlaying ?? null
-  const tap = useNeedsTap()
-  const { volume, muted, update } = useMusicVolume()
-  const { isLiked, toggle } = useLikedSongs()
-
-  if (!snapshot || !track) {
+  const track = controller.snapshot?.nowPlaying ?? null
+  if (!controller.snapshot || !track) {
     return (
-      <div className="mx-4 rounded-2xl bg-white/[0.035] px-4 py-5 text-center shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)]">
-        <p className="text-sm font-medium text-white/80">Nothing playing</p>
-        <p className="mt-1 text-xs leading-relaxed text-white/44">
-          Search below, or type{" "}
-          <span className="font-semibold text-violet-200">@DJ play</span> and a
-          song in chat.
-        </p>
-        {loadError && (
-          <p className="mt-2 text-xs text-red-200/80">{loadError}</p>
-        )}
+      <div className="mx-4 flex items-center gap-3 rounded-[22px] bg-white/[0.035] p-3 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)]">
+        <span className="grid size-14 shrink-0 place-items-center rounded-2xl bg-white/[0.05] text-white/40">
+          <Music2 className="size-5" strokeWidth={1.8} />
+        </span>
+        <div className="min-w-0">
+          <p className="text-sm font-medium text-white/85">Nothing playing</p>
+          <p className="mt-0.5 text-xs leading-relaxed text-white/42">
+            Search below, or tag{" "}
+            <span className="font-medium text-white/70">@DJ</span> in chat.
+          </p>
+          {loadError && (
+            <p className="mt-1 text-xs text-red-200/80">{loadError}</p>
+          )}
+        </div>
       </div>
     )
   }
+  return (
+    <NowPlayingCard
+      controller={controller}
+      snapshot={controller.snapshot}
+      track={track}
+    />
+  )
+}
 
-  const liked = isLiked(track.id)
+function NowPlayingCard({
+  controller,
+  snapshot,
+  track,
+}: {
+  controller: RoomMusicController
+  snapshot: RoomMusicSnapshot
+  track: QueuedTrack
+}) {
+  const tap = useNeedsTap()
+  const { volume, muted, update } = useMusicVolume()
+  const like = useSongLike(track)
   const playing = snapshot.status === "playing"
 
   return (
-    <div className="mx-4 rounded-2xl bg-white/[0.035] p-3 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)]">
+    <div className="mx-4 rounded-[22px] bg-white/[0.035] p-3 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)]">
       <div className="flex items-center gap-3">
         <img
           src={track.thumbnailUrl}
           alt=""
           draggable={false}
-          className="size-14 shrink-0 rounded-xl object-cover outline outline-1 -outline-offset-1 outline-white/10"
+          className="size-14 shrink-0 rounded-2xl object-cover outline outline-1 -outline-offset-1 outline-white/10"
         />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold text-white/92">
+          <p className="truncate text-[15px] leading-5 font-semibold text-white/94 sm:text-sm">
             {track.title}
           </p>
-          <p className="truncate text-xs text-white/48">{track.artist}</p>
+          <p className="mt-0.5 truncate text-xs text-white/50">
+            {track.artist}
+          </p>
           <p className="mt-0.5 truncate text-[11px] text-white/34">
-            Requested by {track.requestedByName}
+            {like.label ?? `Requested by ${track.requestedByName}`}
           </p>
         </div>
-        <IconButton
-          label={liked ? "Unlike" : "Like"}
-          pressed={liked}
-          onClick={() => toggle(track)}
-          className={liked ? "text-rose-300" : undefined}
-        >
-          <Heart
-            className="size-4"
-            strokeWidth={2}
-            fill={liked ? "currentColor" : "none"}
-          />
-        </IconButton>
+        <LikeButton like={like} title={track.title} />
       </div>
 
       <Progress snapshot={snapshot} receivedAt={controller.receivedAt} />
 
-      <div className="mt-2 flex items-center gap-1">
-        <button
-          type="button"
-          onClick={() => void controller.control(playing ? "pause" : "resume")}
-          aria-label={playing ? "Pause for everyone" : "Resume for everyone"}
-          title={playing ? "Pause for everyone" : "Resume for everyone"}
-          className={
-            "grid size-9 place-items-center rounded-full bg-white text-neutral-950 " +
-            PRESS +
-            " [@media(hover:hover)]:hover:bg-white/88"
-          }
-        >
-          {playing ? (
-            <Pause className="size-4" strokeWidth={2.2} fill="currentColor" />
-          ) : (
-            <Play
-              className="size-4 translate-x-px"
-              strokeWidth={2.2}
-              fill="currentColor"
-            />
-          )}
-        </button>
-        <IconButton
-          label="Skip for everyone"
-          onClick={() => void controller.control("skip")}
-        >
-          <SkipForward className="size-4" strokeWidth={2} />
-        </IconButton>
-        <IconButton
-          label="Stop and clear the queue"
-          onClick={() => void controller.control("stop")}
-        >
-          <Square className="size-3.5" strokeWidth={2.2} />
-        </IconButton>
-
-        <div className="ml-auto flex items-center gap-1.5">
-          <IconButton
-            label={muted ? "Unmute music (just you)" : "Mute music (just you)"}
+      <div className="mt-1 flex items-center justify-between">
+        <div className="flex items-center gap-0.5">
+          <button
+            type="button"
             onClick={() => update({ muted: !muted })}
+            aria-label={muted ? "Unmute music for you" : "Mute music for you"}
+            title={muted ? "Unmute (just you)" : "Mute (just you)"}
+            className={ICON_BUTTON}
           >
             {muted || volume === 0 ? (
               <VolumeX className="size-4" strokeWidth={2} />
             ) : (
               <Volume2 className="size-4" strokeWidth={2} />
             )}
-          </IconButton>
+          </button>
+          {/* Phones have hardware volume keys; the slider is for desktops. */}
           <input
             type="range"
             min={0}
@@ -598,9 +661,64 @@ function NowPlaying({
               update({ volume: Number(event.target.value), muted: false })
             }
             aria-label="Music volume (just you)"
-            className="h-1 w-20 cursor-pointer accent-white"
+            className="hidden h-1 w-16 cursor-pointer accent-white sm:block"
           />
         </div>
+
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            onClick={() => void controller.control("stop")}
+            aria-label="Stop and clear the queue"
+            title="Stop and clear the queue"
+            className={ICON_BUTTON}
+          >
+            <Square className="size-3.5" strokeWidth={2.2} />
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              void controller.control(playing ? "pause" : "resume")
+            }
+            aria-label={playing ? "Pause for everyone" : "Play for everyone"}
+            title={playing ? "Pause for everyone" : "Play for everyone"}
+            className={
+              "grid size-11 place-items-center rounded-full bg-white text-neutral-950 shadow-[0_6px_18px_rgba(0,0,0,0.35)] " +
+              PRESS +
+              " [@media(hover:hover)]:hover:bg-white/90"
+            }
+          >
+            {playing ? (
+              <Pause
+                className="size-[18px]"
+                strokeWidth={2.2}
+                fill="currentColor"
+              />
+            ) : (
+              <Play
+                className="size-[18px] translate-x-px"
+                strokeWidth={2.2}
+                fill="currentColor"
+              />
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => void controller.control("skip")}
+            aria-label="Skip for everyone"
+            title="Skip for everyone"
+            className={ICON_BUTTON}
+          >
+            <SkipForward
+              className="size-4"
+              strokeWidth={2}
+              fill="currentColor"
+            />
+          </button>
+        </div>
+
+        {/* Balances the volume group so the transport sits centred. */}
+        <div className="w-9 sm:w-[100px]" aria-hidden="true" />
       </div>
 
       {tap && (
@@ -608,16 +726,56 @@ function NowPlaying({
           type="button"
           onClick={unlockMusic}
           className={
-            "mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-violet-400/14 py-2 text-xs font-medium text-violet-100 shadow-[inset_0_0_0_1px_rgba(196,181,253,0.22)] " +
-            PRESS +
-            " [@media(hover:hover)]:hover:bg-violet-400/20"
+            "mt-2 flex h-10 w-full items-center justify-center gap-2 rounded-2xl bg-white text-[13px] font-medium text-neutral-950 " +
+            PRESS
           }
         >
-          <Volume2 className="size-3.5" strokeWidth={2} />
-          Your browser paused the sound. Tap to listen
+          <Volume2 className="size-4" strokeWidth={2} />
+          Tap to listen
         </button>
       )}
     </div>
+  )
+}
+
+function LikeButton({
+  like,
+  title,
+  small = false,
+}: {
+  like: ReturnType<typeof useSongLike>
+  title: string
+  small?: boolean
+}) {
+  // Show a count only once someone besides you has liked it.
+  const showCount = like.likers.length > (like.liked ? 1 : 0)
+  return (
+    <button
+      type="button"
+      onClick={like.toggle}
+      aria-pressed={like.liked}
+      aria-label={
+        (like.liked ? `Unlike ${title}` : `Like ${title}`) +
+        (like.label ? `. ${like.label}` : "")
+      }
+      title={like.label ?? (like.liked ? "Unlike" : "Like")}
+      className={
+        "flex h-9 shrink-0 items-center justify-center gap-1 rounded-full text-[11px] font-medium tabular-nums " +
+        (showCount ? "px-2.5 " : "w-9 ") +
+        PRESS +
+        " [@media(hover:hover)]:hover:bg-white/[0.07] " +
+        (like.liked
+          ? "text-rose-300"
+          : "text-white/45 [@media(hover:hover)]:hover:text-white/90")
+      }
+    >
+      <Heart
+        className={small ? "size-3.5" : "size-4"}
+        strokeWidth={2}
+        fill={like.liked ? "currentColor" : "none"}
+      />
+      {showCount && <span>{like.likers.length}</span>}
+    </button>
   )
 }
 
@@ -639,14 +797,14 @@ function Progress({
   const ratio = duration ? Math.min(1, position / duration) : 0
 
   return (
-    <div className="mt-3">
-      <div className="h-1 overflow-hidden rounded-full bg-white/10">
+    <div className="mt-3.5">
+      <div className="h-[3px] overflow-hidden rounded-full bg-white/10">
         <div
-          className="h-full origin-left rounded-full bg-white/80 transition-transform duration-500 ease-linear"
+          className="h-full origin-left rounded-full bg-white/85 transition-transform duration-500 ease-linear"
           style={{ transform: `scaleX(${ratio})` }}
         />
       </div>
-      <div className="mt-1 flex justify-between text-[10px] text-white/40 tabular-nums">
+      <div className="mt-1.5 flex justify-between text-[10px] text-white/38 tabular-nums">
         <span>{formatTrackDuration(position)}</span>
         <span>{duration ? formatTrackDuration(duration) : "Live"}</span>
       </div>
@@ -690,45 +848,57 @@ function SearchTab({
   return (
     <div className="px-2">
       <form
+        role="search"
         onSubmit={(event) => {
           event.preventDefault()
+          ;(document.activeElement as HTMLElement | null)?.blur()
           void submit()
         }}
         className="relative mt-1"
       >
         <Search
-          className="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-white/36"
+          className="pointer-events-none absolute top-1/2 left-3.5 size-4 -translate-y-1/2 text-white/35"
           strokeWidth={2}
         />
         <input
+          type="search"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder={
             searchAvailable
-              ? "Song, artist, or YouTube link"
+              ? "Songs, artists, or a YouTube link"
               : "Paste a YouTube link"
           }
           aria-label="Search songs"
           enterKeyHint="search"
-          className="h-10 w-full rounded-xl border border-white/10 bg-black/30 pr-10 pl-8.5 text-sm text-white/88 transition-[border-color,background-color] duration-150 outline-none placeholder:text-white/30 focus:border-white/24 focus:bg-black/45"
+          autoComplete="off"
+          autoCorrect="off"
+          spellCheck={false}
+          className={
+            INPUT + " pr-10 pl-10 [&::-webkit-search-cancel-button]:hidden"
+          }
         />
         {loading && (
           <LoaderCircle
-            className="absolute top-1/2 right-3 size-4 -translate-y-1/2 animate-spin text-white/50"
+            className="absolute top-1/2 right-3.5 size-4 -translate-y-1/2 animate-spin text-white/50"
             strokeWidth={2}
           />
         )}
       </form>
       {!searchAvailable && (
         <p className="mt-2 px-1 text-[11px] leading-relaxed text-white/40">
-          Search by name needs YOUTUBE_API_KEY on the server. Links work without
-          it.
+          Searching by name needs a YouTube API key on the server. Links work
+          without it.
         </p>
       )}
-      {error && <p className="mt-3 px-1 text-xs text-red-200/90">{error}</p>}
+      {error && (
+        <p className="mt-3 px-1 text-xs leading-relaxed text-red-200/90">
+          {error}
+        </p>
+      )}
       <div className="-mx-2 mt-2">
         {results === null ? (
-          <Empty>Press Enter to search YouTube.</Empty>
+          <Empty>Find anything on YouTube and queue it for the room.</Empty>
         ) : (
           <TrackList
             tracks={results}
@@ -744,7 +914,7 @@ function SearchTab({
 function QueueTab({ controller }: { controller: RoomMusicController }) {
   const queue = controller.snapshot?.queue ?? []
   if (queue.length === 0)
-    return <Empty>The queue is empty. Add songs from Search or History.</Empty>
+    return <Empty>Up next is empty. Add songs from Search or History.</Empty>
   return (
     <ul>
       {queue.map((entry, index) => (
@@ -752,18 +922,21 @@ function QueueTab({ controller }: { controller: RoomMusicController }) {
           key={entry.queueId}
           track={entry}
           leading={
-            <span className="w-4 shrink-0 text-center text-[11px] text-white/34 tabular-nums">
+            <span className="w-5 shrink-0 text-center text-xs text-white/32 tabular-nums">
               {index + 1}
             </span>
           }
           meta={`${entry.artist} · ${entry.requestedByName}`}
           actions={
-            <IconButton
-              label={`Remove ${entry.title} from the queue`}
+            <button
+              type="button"
               onClick={() => void controller.remove(entry.queueId)}
+              aria-label={`Remove ${entry.title} from the queue`}
+              title="Remove"
+              className={ICON_BUTTON}
             >
-              <X className="size-3.5" strokeWidth={2} />
-            </IconButton>
+              <X className="size-4" strokeWidth={2} />
+            </button>
           }
         />
       ))}
@@ -780,71 +953,58 @@ function PlaylistsTab({ controller }: { controller: RoomMusicController }) {
   if (open) {
     return (
       <div>
-        <div className="flex items-center gap-2 px-2 py-1">
+        <div className="flex items-center gap-2 px-2 pt-1 pb-3">
           <button
             type="button"
             onClick={() => setOpenId(null)}
-            className={"text-xs text-white/50 hover:text-white/86 " + PRESS}
+            aria-label="Back to playlists"
+            className={ICON_BUTTON + " -ml-1"}
           >
-            ← Playlists
+            <ArrowLeft className="size-4" strokeWidth={2} />
           </button>
-        </div>
-        <div className="flex items-center justify-between gap-2 px-2 pt-1 pb-2">
-          <div className="min-w-0">
-            <p className="truncate text-sm font-semibold text-white/90">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-semibold text-white/92">
               {open.name}
             </p>
             <p className="text-[11px] text-white/40">
-              {open.tracks.length} song{open.tracks.length === 1 ? "" : "s"} ·
-              by {open.createdByName}
+              {open.tracks.length} song{open.tracks.length === 1 ? "" : "s"} ·{" "}
+              {open.createdByName}
             </p>
           </div>
-          <div className="flex shrink-0 items-center gap-1">
-            <button
-              type="button"
-              disabled={open.tracks.length === 0}
-              onClick={() => void controller.playPlaylist(open.id)}
-              className={
-                "flex h-8 items-center gap-1.5 rounded-full bg-white px-3 text-xs font-medium text-neutral-950 disabled:opacity-40 " +
-                PRESS
-              }
-            >
-              <Play className="size-3" strokeWidth={2.4} fill="currentColor" />
-              Queue all
-            </button>
-            <IconButton
-              label={`Delete ${open.name}`}
-              onClick={async () => {
-                if (await controller.deletePlaylist(open.id)) setOpenId(null)
-              }}
-            >
-              <Trash2 className="size-3.5" strokeWidth={2} />
-            </IconButton>
-          </div>
+          <button
+            type="button"
+            disabled={open.tracks.length === 0}
+            onClick={() => void controller.playPlaylist(open.id)}
+            className={
+              "flex h-9 shrink-0 items-center gap-1.5 rounded-full bg-white px-3.5 text-xs font-semibold text-neutral-950 disabled:opacity-30 " +
+              PRESS
+            }
+          >
+            <Play className="size-3" strokeWidth={2.4} fill="currentColor" />
+            Play
+          </button>
+          <button
+            type="button"
+            aria-label={`Delete ${open.name}`}
+            title="Delete playlist"
+            onClick={async () => {
+              if (await controller.deletePlaylist(open.id)) setOpenId(null)
+            }}
+            className={ICON_BUTTON}
+          >
+            <Trash2 className="size-4" strokeWidth={2} />
+          </button>
         </div>
-        {open.tracks.length === 0 ? (
-          <Empty>
-            Add songs with the <ListPlus className="inline size-3" /> button on
-            any song.
-          </Empty>
-        ) : (
-          <TrackList
-            tracks={open.tracks}
-            controller={controller}
-            extraAction={(track) => (
-              <IconButton
-                label={`Remove ${track.title} from ${open.name}`}
-                onClick={() =>
-                  void controller.removeFromPlaylist(open.id, track.id)
-                }
-              >
-                <X className="size-3.5" strokeWidth={2} />
-              </IconButton>
-            )}
-            hidePlaylistAction
-            empty=""
-          />
-        )}
+        <TrackList
+          tracks={open.tracks}
+          controller={controller}
+          empty="Add songs from any list with the playlist button."
+          remove={{
+            label: `Remove from ${open.name}`,
+            onRemove: (track) =>
+              void controller.removeFromPlaylist(open.id, track.id),
+          }}
+        />
       </div>
     )
   }
@@ -857,7 +1017,7 @@ function PlaylistsTab({ controller }: { controller: RoomMusicController }) {
           if (!name.trim()) return
           if (await controller.createPlaylist(name)) setName("")
         }}
-        className="mt-1 flex gap-1.5"
+        className="mt-1 flex gap-2"
       >
         <input
           value={name}
@@ -865,45 +1025,45 @@ function PlaylistsTab({ controller }: { controller: RoomMusicController }) {
           maxLength={40}
           placeholder="New room playlist"
           aria-label="New playlist name"
-          className="h-10 min-w-0 flex-1 rounded-xl border border-white/10 bg-black/30 px-3 text-sm text-white/88 transition-[border-color,background-color] duration-150 outline-none placeholder:text-white/30 focus:border-white/24 focus:bg-black/45"
+          enterKeyHint="done"
+          className={INPUT + " min-w-0 flex-1 px-3.5"}
         />
         <button
           type="submit"
           disabled={!name.trim()}
           aria-label="Create playlist"
           className={
-            "grid size-10 shrink-0 place-items-center rounded-xl bg-white text-neutral-950 disabled:opacity-30 " +
+            "grid size-11 shrink-0 place-items-center rounded-2xl bg-white text-neutral-950 disabled:opacity-25 sm:size-10 sm:rounded-xl " +
             PRESS
           }
         >
-          <Plus className="size-4" strokeWidth={2.2} />
+          <Plus className="size-4" strokeWidth={2.4} />
         </button>
       </form>
       <p className="mt-2 px-1 text-[11px] leading-relaxed text-white/40">
-        Everyone in the room can add to these. Play one from chat with{" "}
-        <span className="text-violet-200">@DJ playlist name</span>.
+        Anyone in the room can add songs. Play one from chat with{" "}
+        <span className="text-white/70">@DJ playlist name</span>.
       </p>
       {playlists.length === 0 ? (
         <Empty>No playlists yet.</Empty>
       ) : (
-        <ul className="-mx-2 mt-2">
+        <ul className="-mx-2 mt-3">
           {playlists.map((playlist) => (
             <li key={playlist.id}>
               <button
                 type="button"
                 onClick={() => setOpenId(playlist.id)}
                 className={
-                  "flex w-full items-center gap-3 rounded-xl px-2 py-2 text-left " +
-                  HOVER_ROW +
-                  " transition-colors duration-150"
+                  "flex w-full items-center gap-3 rounded-2xl px-2 py-2 text-left transition-colors duration-150 " +
+                  HOVER
                 }
               >
                 <PlaylistCover playlist={playlist} />
                 <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-white/88">
+                  <p className="truncate text-sm font-medium text-white/90">
                     {playlist.name}
                   </p>
-                  <p className="truncate text-[11px] text-white/40">
+                  <p className="truncate text-xs text-white/40">
                     {playlist.tracks.length} song
                     {playlist.tracks.length === 1 ? "" : "s"} ·{" "}
                     {playlist.createdByName}
@@ -925,10 +1085,10 @@ function PlaylistCover({ playlist }: { playlist: RoomPlaylist }) {
       src={first.thumbnailUrl}
       alt=""
       draggable={false}
-      className="size-10 shrink-0 rounded-lg object-cover outline outline-1 -outline-offset-1 outline-white/10"
+      className="size-12 shrink-0 rounded-xl object-cover outline outline-1 -outline-offset-1 outline-white/10"
     />
   ) : (
-    <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-white/[0.05] text-white/40">
+    <span className="grid size-12 shrink-0 place-items-center rounded-xl bg-white/[0.05] text-white/40">
       <ListMusic className="size-4" strokeWidth={2} />
     </span>
   )
@@ -942,16 +1102,12 @@ function TrackList({
   tracks,
   controller,
   empty,
-  meta,
-  extraAction,
-  hidePlaylistAction = false,
+  remove,
 }: {
   tracks: Array<MusicTrack>
   controller: RoomMusicController
   empty: string
-  meta?: (track: MusicTrack) => string
-  extraAction?: (track: MusicTrack) => ReactNode
-  hidePlaylistAction?: boolean
+  remove?: { label: string; onRemove: (track: MusicTrack) => void }
 }) {
   if (tracks.length === 0) return <Empty>{empty}</Empty>
   return (
@@ -960,16 +1116,12 @@ function TrackList({
         <TrackRow
           key={`${track.id}-${index}`}
           track={track}
-          meta={meta?.(track)}
           actions={
-            <>
-              {extraAction?.(track)}
-              <TrackActions
-                track={track}
-                controller={controller}
-                hidePlaylistAction={hidePlaylistAction}
-              />
-            </>
+            <TrackActions
+              track={track}
+              controller={controller}
+              remove={remove}
+            />
           }
         />
       ))}
@@ -991,8 +1143,8 @@ function TrackRow({
   return (
     <li
       className={
-        "group/track flex items-center gap-2.5 rounded-xl px-2 py-1.5 transition-colors duration-150 " +
-        HOVER_ROW
+        "flex items-center gap-3 rounded-2xl px-2 py-1.5 transition-colors duration-150 " +
+        HOVER
       }
     >
       {leading}
@@ -1001,17 +1153,17 @@ function TrackRow({
         alt=""
         loading="lazy"
         draggable={false}
-        className="size-10 shrink-0 rounded-lg object-cover outline outline-1 -outline-offset-1 outline-white/10"
+        className="size-11 shrink-0 rounded-xl object-cover outline outline-1 -outline-offset-1 outline-white/10"
       />
       <div className="min-w-0 flex-1">
-        <p className="truncate text-[13px] leading-5 font-medium text-white/88">
+        <p className="truncate text-sm leading-5 font-medium text-white/90 sm:text-[13px]">
           {track.title}
         </p>
-        <p className="truncate text-[11px] leading-4 text-white/42">
+        <p className="truncate text-xs leading-4 text-white/42 sm:text-[11px]">
           {meta ?? track.artist} · {formatTrackDuration(track.durationSec)}
         </p>
       </div>
-      <div className="flex shrink-0 items-center">{actions}</div>
+      <div className="-mr-1 flex shrink-0 items-center">{actions}</div>
     </li>
   )
 }
@@ -1019,16 +1171,16 @@ function TrackRow({
 function TrackActions({
   track,
   controller,
-  hidePlaylistAction,
+  remove,
 }: {
   track: MusicTrack
   controller: RoomMusicController
-  hidePlaylistAction: boolean
+  remove?: { label: string; onRemove: (track: MusicTrack) => void }
 }) {
-  const { isLiked, toggle } = useLikedSongs()
+  const like = useSongLike(track)
   const [queued, setQueued] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
-  const liked = isLiked(track.id)
+  const menuRef = useRef<HTMLDivElement | null>(null)
   const playlists = controller.snapshot?.playlists ?? []
 
   useEffect(() => {
@@ -1037,92 +1189,119 @@ function TrackActions({
     return () => window.clearTimeout(id)
   }, [queued])
 
+  useEffect(() => {
+    if (!menuOpen) return
+    function onPointerDown(event: PointerEvent) {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false)
+    }
+    function onKey(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.stopPropagation()
+        setMenuOpen(false)
+      }
+    }
+    document.addEventListener("pointerdown", onPointerDown)
+    document.addEventListener("keydown", onKey, true)
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown)
+      document.removeEventListener("keydown", onKey, true)
+    }
+  }, [menuOpen])
+
   return (
-    <div className="relative flex items-center">
-      <IconButton
-        label={liked ? `Unlike ${track.title}` : `Like ${track.title}`}
-        pressed={liked}
-        onClick={() => toggle(track)}
-        className={liked ? "text-rose-300" : undefined}
-      >
-        <Heart
-          className="size-3.5"
-          strokeWidth={2}
-          fill={liked ? "currentColor" : "none"}
-        />
-      </IconButton>
-      {!hidePlaylistAction && (
-        <IconButton
-          label={`Add ${track.title} to a playlist`}
-          pressed={menuOpen}
-          onClick={() => setMenuOpen((open) => !open)}
+    <div ref={menuRef} className="relative flex items-center">
+      <LikeButton like={like} title={track.title} small />
+      {remove ? (
+        <button
+          type="button"
+          onClick={() => remove.onRemove(track)}
+          aria-label={`${remove.label}: ${track.title}`}
+          title={remove.label}
+          className={ICON_BUTTON}
         >
-          <ListPlus className="size-3.5" strokeWidth={2} />
-        </IconButton>
+          <X className="size-4" strokeWidth={2} />
+        </button>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setMenuOpen((open) => !open)}
+          aria-label={`More for ${track.title}`}
+          aria-haspopup="menu"
+          aria-expanded={menuOpen}
+          title="Play next or add to a playlist"
+          className={
+            ICON_BUTTON + (menuOpen ? " bg-white/[0.08] text-white" : "")
+          }
+        >
+          <ListPlus className="size-4" strokeWidth={2} />
+        </button>
       )}
-      <IconButton
-        label={queued ? "Queued" : `Queue ${track.title}`}
+      <button
+        type="button"
         onClick={async () => {
           if (await controller.enqueue(track.id)) setQueued(true)
         }}
-        className={queued ? "text-violet-200" : undefined}
+        aria-label={
+          queued ? "Added to the queue" : `Add ${track.title} to the queue`
+        }
+        title={queued ? "Added" : "Add to queue"}
+        className={ICON_BUTTON + (queued ? " text-white" : "")}
       >
         {queued ? (
-          <Check className="size-3.5" strokeWidth={2.2} />
+          <Check className="size-4" strokeWidth={2.4} />
         ) : (
-          <Plus className="size-3.5" strokeWidth={2.2} />
+          <Plus className="size-4" strokeWidth={2.2} />
         )}
-      </IconButton>
+      </button>
 
       {menuOpen && (
         <div
           role="menu"
-          className="absolute top-full right-0 z-10 mt-1 w-48 origin-top-right rounded-xl border border-white/10 bg-neutral-950 p-1 shadow-[0_16px_40px_rgba(0,0,0,0.5)] motion-safe:animate-[music-pop_160ms_cubic-bezier(0.23,1,0.32,1)]"
+          className="absolute top-full right-0 z-10 mt-1 w-52 origin-top-right rounded-2xl border border-white/10 bg-[#161512] p-1.5 shadow-[0_18px_44px_rgba(0,0,0,0.55)] motion-safe:animate-[music-pop_160ms_cubic-bezier(0.23,1,0.32,1)]"
         >
           <style>{`@keyframes music-pop{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}`}</style>
-          <button
-            type="button"
-            role="menuitem"
+          <MenuItem
+            icon={<ListStart className="size-4" strokeWidth={2} />}
             onClick={async () => {
               setMenuOpen(false)
               if (await controller.enqueue(track.id, true)) setQueued(true)
             }}
-            className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-white/80 hover:bg-white/[0.07]"
           >
-            <ListStart className="size-3.5" strokeWidth={2} />
             Play next
-          </button>
-          {playlists.length > 0 && <div className="my-1 h-px bg-white/8" />}
+          </MenuItem>
+          <div className="mx-2 my-1 h-px bg-white/[0.07]" />
+          <p className="px-2.5 pt-1 pb-1 text-[10px] font-medium tracking-wide text-white/35 uppercase">
+            Add to playlist
+          </p>
+          {playlists.length === 0 && (
+            <p className="px-2.5 pb-2 text-xs leading-relaxed text-white/40">
+              Create one in the Playlists tab.
+            </p>
+          )}
           {playlists.map((playlist) => {
             const inPlaylist = playlist.tracks.some(
               (item) => item.id === track.id
             )
             return (
-              <button
+              <MenuItem
                 key={playlist.id}
-                type="button"
-                role="menuitem"
                 disabled={inPlaylist}
+                icon={
+                  inPlaylist ? (
+                    <Check className="size-4" strokeWidth={2} />
+                  ) : (
+                    <ListMusic className="size-4" strokeWidth={2} />
+                  )
+                }
                 onClick={async () => {
                   setMenuOpen(false)
                   await controller.addToPlaylist(playlist.id, track.id)
                 }}
-                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs text-white/80 hover:bg-white/[0.07] disabled:text-white/34 disabled:hover:bg-transparent"
               >
-                {inPlaylist ? (
-                  <Check className="size-3.5" strokeWidth={2} />
-                ) : (
-                  <ListMusic className="size-3.5" strokeWidth={2} />
-                )}
-                <span className="truncate">{playlist.name}</span>
-              </button>
+                {playlist.name}
+              </MenuItem>
             )
           })}
-          {playlists.length === 0 && (
-            <p className="px-2.5 py-2 text-[11px] leading-relaxed text-white/40">
-              Create a playlist in the Playlists tab to save songs for the room.
-            </p>
-          )}
         </div>
       )}
     </div>
@@ -1133,42 +1312,34 @@ function TrackActions({
 /* Primitives                                                          */
 /* ------------------------------------------------------------------ */
 
-function IconButton({
-  label,
-  onClick,
+function MenuItem({
+  icon,
   children,
-  pressed,
-  className,
+  onClick,
+  disabled = false,
 }: {
-  label: string
-  onClick: () => void
+  icon: ReactNode
   children: ReactNode
-  pressed?: boolean
-  className?: string
+  onClick: () => void
+  disabled?: boolean
 }) {
   return (
     <button
       type="button"
+      role="menuitem"
+      disabled={disabled}
       onClick={onClick}
-      aria-label={label}
-      aria-pressed={pressed}
-      title={label}
-      className={
-        "grid size-8 shrink-0 place-items-center rounded-full " +
-        PRESS +
-        " " +
-        (className ??
-          "text-white/50 [@media(hover:hover)]:hover:bg-white/[0.07] [@media(hover:hover)]:hover:text-white/88")
-      }
+      className="flex min-h-10 w-full items-center gap-2.5 rounded-xl px-2.5 text-left text-[13px] text-white/82 transition-colors duration-150 disabled:text-white/32 [@media(hover:hover)]:hover:bg-white/[0.07] [@media(hover:hover)]:disabled:hover:bg-transparent"
     >
-      {children}
+      <span className="shrink-0 text-white/50">{icon}</span>
+      <span className="truncate">{children}</span>
     </button>
   )
 }
 
 function Empty({ children }: { children: ReactNode }) {
   return (
-    <p className="px-4 py-8 text-center text-xs leading-relaxed text-white/38">
+    <p className="mx-auto max-w-[17rem] px-4 py-10 text-center text-[13px] leading-relaxed text-white/38 sm:text-xs">
       {children}
     </p>
   )

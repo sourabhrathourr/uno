@@ -12,6 +12,7 @@ import { Lightbulb, Mic, MicOff, X } from "lucide-react"
 import { cn } from "@workspace/ui/lib/utils"
 import { UnoCard } from "@workspace/ui/components/uno-card"
 import type { Card } from "@workspace/ui/components/uno-card"
+import { TOOLBAR_BUTTON } from "@/components/toolbar"
 
 const EASE = "cubic-bezier(0.2,0,0,1)"
 
@@ -23,9 +24,6 @@ const DEFAULT_HOLD_MS = 2000
 const OPPONENTS = ["Aman", "Rhea", "Kabir"] as const
 
 /** Circular icon-button styling shared with VoiceToggleButton / CopyInviteButton. */
-const triggerBase =
-  "inline-flex shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/[0.045] text-white/74 transition-[background-color,border-color,color,scale] active:scale-[0.96] hover:border-white/18 hover:bg-white/[0.075] hover:text-white/88"
-
 // ---------------------------------------------------------------------------
 // Mock table state — the tour drives this exactly like a player would.
 // ---------------------------------------------------------------------------
@@ -333,7 +331,7 @@ const CHAPTERS: Array<Chapter> = [
  * real table. Takes no game state, so it drops into any header with zero prop
  * plumbing.
  */
-export function HowToPlayGuide({ compact = false }: { compact?: boolean }) {
+export function HowToPlayGuide() {
   const [open, setOpen] = useState(false)
   const [chapter, setChapter] = useState(0)
 
@@ -344,12 +342,9 @@ export function HowToPlayGuide({ compact = false }: { compact?: boolean }) {
         onClick={() => setOpen(true)}
         title="How to play"
         aria-label="How to play"
-        className={cn(triggerBase, compact ? "size-8" : "size-9")}
+        className={TOOLBAR_BUTTON}
       >
-        <Lightbulb
-          className={compact ? "size-3.5" : "size-4"}
-          strokeWidth={2}
-        />
+        <Lightbulb className="size-4" strokeWidth={2} />
       </button>
       {open && typeof document !== "undefined"
         ? createPortal(
@@ -394,13 +389,13 @@ function HowToPlayDialog({
   const targets = useRef(new Map<string, HTMLElement>())
   const reducedMotion = useReducedMotion()
 
-  const active = CHAPTERS[chapter]!
+  const active = CHAPTERS[chapter]
   const [beat, setBeat] = useState(0)
   const [landed, setLanded] = useState(false)
   const [mock, setMock] = useState<Mock>(active.init)
   const [spot, setSpot] = useState<Spot | null>(null)
 
-  const currentBeat = active.beats[Math.min(beat, active.beats.length - 1)]!
+  const currentBeat = active.beats[Math.min(beat, active.beats.length - 1)]
 
   const goChapter = useCallback(
     (next: number) => {
@@ -408,7 +403,7 @@ function HowToPlayDialog({
       onChapter(wrapped)
       setBeat(0)
       setLanded(false)
-      setMock(CHAPTERS[wrapped]!.init)
+      setMock(CHAPTERS[wrapped].init)
     },
     [onChapter]
   )
@@ -417,7 +412,7 @@ function HowToPlayDialog({
   useEffect(() => {
     setBeat(0)
     setLanded(false)
-    setMock(CHAPTERS[chapter]!.init)
+    setMock(CHAPTERS[chapter].init)
   }, [chapter])
 
   // Beat runner: travel → click (apply) → hold → next.

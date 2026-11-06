@@ -12,6 +12,7 @@ import type { GameSocket } from "./realtime"
 import type {
   CommandResult,
   MusicControlAction,
+  MusicLiker,
   MusicSearchResponse,
   MusicTrack,
   RoomMusicSnapshot,
@@ -42,12 +43,14 @@ export async function searchMusic(
 }
 
 export type RoomMusicController = {
+  selfPlayerId: string | null
   snapshot: RoomMusicSnapshot | null
   /** Local clock (ms) when `snapshot` arrived, for position estimates. */
   receivedAt: number
   error: string | null
   clearError: () => void
   enqueue: (videoId: string, playNext?: boolean) => Promise<boolean>
+  like: (videoId: string, liked: boolean) => Promise<boolean>
   control: (action: MusicControlAction) => Promise<boolean>
   remove: (queueId: string) => Promise<boolean>
   reportEnded: (queueId: string) => void
@@ -73,7 +76,8 @@ export function estimatePositionSec(
 
 export function useRoomMusic(
   socket: GameSocket | null,
-  joinedSocketId: string | null
+  joinedSocketId: string | null,
+  selfPlayerId: string | null
 ): RoomMusicController {
   const [state, setState] = useState<{
     snapshot: RoomMusicSnapshot | null
@@ -129,6 +133,7 @@ export function useRoomMusic(
   )
 
   return {
+    selfPlayerId,
     snapshot: state.snapshot,
     receivedAt: state.receivedAt,
     error,
@@ -139,6 +144,8 @@ export function useRoomMusic(
       run((ack) => socket?.emit("music:control", { action }, ack)),
     remove: (queueId) =>
       run((ack) => socket?.emit("music:remove", { queueId }, ack)),
+    like: (videoId, liked) =>
+      run((ack) => socket?.emit("music:like", { videoId, liked }, ack)),
     reportEnded: (queueId) => socket?.emit("music:ended", { queueId }),
     reportUnplayable: (queueId) =>
       socket?.emit("music:unplayable", { queueId }),
@@ -220,11 +227,12 @@ export function useLikedSongs() {
     likedStore.get,
     () => EMPTY_TRACKS
   )
-  const toggle = useCallback((track: MusicTrack) => {
+  const setLiked = useCallback((track: MusicTrack, value: boolean) => {
     const current = likedStore.get()
-    const next = current.some((item) => item.id === track.id)
-      ? current.filter((item) => item.id !== track.id)
-      : [plainTrack(track), ...current].slice(0, LIKED_LIMIT)
+    const without = current.filter((item) => item.id !== track.id)
+    const next = value
+      ? [plainTrack(track), ...without].slice(0, LIKED_LIMIT)
+      : without
     likedStore.set(next)
     writeJson(LIKED_KEY, next)
   }, [])
@@ -232,7 +240,51 @@ export function useLikedSongs() {
     (id: string) => liked.some((track) => track.id === id),
     [liked]
   )
-  return { liked, toggle, isLiked }
+  return { liked, setLiked, isLiked }
+}
+
+const EMPTY_LIKERS: Array<MusicLiker> = []
+
+/**
+ * One song's heart: your own like (kept in this browser across rooms and
+ * shared with the room) plus everyone in the room who liked it.
+ */
+export function useSongLike(track: MusicTrack) {
+  const controller = useMusicController()
+  const { isLiked, setLiked } = useLikedSongs()
+  const selfId = controller?.selfPlayerId ?? null
+  const likers = controller?.snapshot?.likes[track.id] ?? EMPTY_LIKERS
+  const liked =
+    isLiked(track.id) || likers.some((liker) => liker.playerId === selfId)
+  return {
+    liked,
+    likers,
+    label: likedByLabel(likers, selfId),
+    toggle: () => {
+      const next = !liked
+      setLiked(track, next)
+      void controller?.like(track.id, next)
+    },
+  }
+}
+
+/** "Liked by you and Aman", "Liked by Aman, Riya and 3 others". */
+export function likedByLabel(
+  likers: Array<MusicLiker>,
+  selfId: string | null
+): string | null {
+  if (likers.length === 0) return null
+  const names = [
+    ...likers.filter((liker) => liker.playerId === selfId).map(() => "you"),
+    ...likers
+      .filter((liker) => liker.playerId !== selfId)
+      .map((liker) => liker.name),
+  ]
+  if (names.length === 1) return `Liked by ${names[0]}`
+  if (names.length === 2) return `Liked by ${names[0]} and ${names[1]}`
+  if (names.length === 3)
+    return `Liked by ${names[0]}, ${names[1]} and ${names[2]}`
+  return `Liked by ${names[0]}, ${names[1]} and ${names.length - 2} others`
 }
 
 const EMPTY_TRACKS: Array<MusicTrack> = []

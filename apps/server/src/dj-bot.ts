@@ -1,6 +1,7 @@
 import {
   DJ_BOT_NAME,
   formatTrackDuration,
+  isYouTubeVideoId,
   parseYouTubeVideoId,
   type ChatMessage,
   type CommandResult,
@@ -219,6 +220,20 @@ export class MusicController {
         return fail("music-action", "Unknown music action.")
     }
     return this.changed(actor.code)
+  }
+
+  like(
+    actor: Actor,
+    videoId: string,
+    liked: boolean
+  ): CommandResult<RoomMusicSnapshot> {
+    const requester = this.requester(actor)
+    if (!requester) return notJoined()
+    if (!isYouTubeVideoId(videoId))
+      return fail("music-invalid", "Choose a song first.")
+    if (this.options.music.setLike(actor.code, videoId, requester, liked))
+      this.options.emitMusic(actor.code)
+    return ok(this.options.music.snapshot(actor.code))
   }
 
   remove(actor: Actor, queueId: string): CommandResult<RoomMusicSnapshot> {

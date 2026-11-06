@@ -2,12 +2,14 @@ import { randomUUID } from "node:crypto"
 
 import {
   MUSIC_HISTORY_LIMIT,
+  MUSIC_LIKED_SONG_LIMIT,
   MUSIC_PLAYLIST_LIMIT,
   MUSIC_PLAYLIST_NAME_MAX_LENGTH,
   MUSIC_PLAYLIST_TRACK_LIMIT,
   MUSIC_QUEUE_LIMIT,
   type CommandResult,
   type MusicHistoryEntry,
+  type MusicLiker,
   type MusicTrack,
   type QueuedTrack,
   type RoomMusicSnapshot,
@@ -25,6 +27,7 @@ type RoomMusicState = {
   queue: QueuedTrack[]
   history: MusicHistoryEntry[]
   playlists: RoomPlaylist[]
+  likes: Map<string, MusicLiker[]>
   endTimer: ReturnType<typeof setTimeout> | null
   version: number
 }
@@ -76,6 +79,7 @@ export class RoomMusic {
         queue: [],
         history: [],
         playlists: [],
+        likes: {},
         searchAvailable: this.searchAvailable(),
         version: 0,
       }
@@ -95,6 +99,12 @@ export class RoomMusic {
         ...playlist,
         tracks: playlist.tracks.map((track) => ({ ...track })),
       })),
+      likes: Object.fromEntries(
+        Array.from(state.likes, ([id, likers]) => [
+          id,
+          likers.map((liker) => ({ ...liker })),
+        ])
+      ),
       searchAvailable: this.searchAvailable(),
       version: state.version,
     }
@@ -347,6 +357,38 @@ export class RoomMusic {
     )
   }
 
+  /** Records whether a player likes a song. Idempotent in both directions. */
+  setLike(
+    code: string,
+    videoId: string,
+    player: Requester,
+    liked: boolean
+  ): boolean {
+    const state = this.ensure(code)
+    const likers = state.likes.get(videoId) ?? []
+    const has = likers.some((liker) => liker.playerId === player.id)
+    if (has === liked) return false
+    if (liked) {
+      // Re-insert so recently liked songs are the last to be forgotten.
+      state.likes.delete(videoId)
+      state.likes.set(videoId, [
+        ...likers,
+        { playerId: player.id, name: player.name },
+      ])
+      while (state.likes.size > MUSIC_LIKED_SONG_LIMIT) {
+        const oldest = state.likes.keys().next().value
+        if (oldest === undefined) break
+        state.likes.delete(oldest)
+      }
+    } else {
+      const remaining = likers.filter((liker) => liker.playerId !== player.id)
+      if (remaining.length) state.likes.set(videoId, remaining)
+      else state.likes.delete(videoId)
+    }
+    state.version++
+    return true
+  }
+
   clearRoom(code: string) {
     const state = this.rooms.get(code)
     if (state) this.clearEndTimer(state)
@@ -363,6 +405,7 @@ export class RoomMusic {
         queue: [],
         history: [],
         playlists: [],
+        likes: new Map(),
         endTimer: null,
         version: 0,
       }

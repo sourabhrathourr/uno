@@ -446,6 +446,12 @@ io.on("connection", (socket) => {
     ack(music.control(actor, input?.action))
   })
 
+  socket.on("music:like", (input, ack) => {
+    const actor = joinedActor(socket.data)
+    if (!actor) return ack(notJoinedResult())
+    ack(music.like(actor, String(input?.videoId ?? ""), input?.liked === true))
+  })
+
   socket.on("music:remove", (input, ack) => {
     const actor = joinedActor(socket.data)
     if (!actor) return ack(notJoinedResult())

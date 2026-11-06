@@ -182,3 +182,21 @@ describe("room playlists", () => {
     expect(!duplicate.ok && duplicate.error.code).toBe("playlist-exists")
   })
 })
+
+describe("room likes", () => {
+  it("tracks who liked a song and ignores repeated likes", () => {
+    const music = new RoomMusic()
+    const bob = { id: "p-bob", name: "Bob" }
+    const id = track("a").id
+    expect(music.setLike(ROOM, id, alice, true)).toBe(true)
+    expect(music.setLike(ROOM, id, alice, true)).toBe(false)
+    music.setLike(ROOM, id, bob, true)
+    expect(music.snapshot(ROOM).likes[id]).toEqual([
+      { playerId: "p-alice", name: "Alice" },
+      { playerId: "p-bob", name: "Bob" },
+    ])
+    music.setLike(ROOM, id, alice, false)
+    music.setLike(ROOM, id, bob, false)
+    expect(music.snapshot(ROOM).likes[id]).toBeUndefined()
+  })
+})

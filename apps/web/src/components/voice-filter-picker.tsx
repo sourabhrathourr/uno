@@ -18,10 +18,12 @@ import {
   X,
 } from "lucide-react"
 import { Button } from "@workspace/ui/components/button"
+
 import { VOICE_FILTERS, getVoiceFilter } from "../lib/voice-filter-presets"
 import { useVoiceFilterPreview } from "../lib/use-voice-filter-preview"
 import type { VoiceFilterId } from "../lib/voice-filter-presets"
 import type { VoiceFilterControls } from "../lib/use-voice-filters"
+import { TOOLBAR_BUTTON, TOOLBAR_BUTTON_ON } from "@/components/toolbar"
 
 const FILTER_ICONS = {
   normal: AudioLines,
@@ -57,17 +59,9 @@ export function VoiceFilterPicker(props: PickerProps) {
         aria-haspopup="dialog"
         title={`Voice filters: ${active.name}`}
         onClick={() => setOpen(true)}
-        className={
-          "relative inline-flex size-11 shrink-0 items-center justify-center rounded-full border transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white/70 " +
-          (changed
-            ? "border-white/25 bg-white/[0.12] text-white hover:bg-white/[0.18]"
-            : "border-white/10 bg-white/[0.045] text-white/74 hover:border-white/18 hover:bg-white/[0.075] hover:text-white/88")
-        }
+        className={TOOLBAR_BUTTON + (changed ? " " + TOOLBAR_BUTTON_ON : "")}
       >
-        <Icon className="size-[18px]" strokeWidth={2} />
-        {changed && (
-          <span className="absolute right-1.5 bottom-1.5 size-1.5 rounded-full bg-white/80" />
-        )}
+        <Icon className="size-4" strokeWidth={2} />
       </Button>
       {open &&
         createPortal(
