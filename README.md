@@ -72,13 +72,14 @@ hears the same song, kept within a couple of seconds of the server's clock:
 
 - `@DJ play <song or YouTube link>`, `@DJ next <song>` (plays after this one)
 - `@DJ pause` / `resume` / `skip` / `stop`, `@DJ queue`, `@DJ np`,
-  `@DJ remove <#>`, `@DJ clear`, `@DJ playlist <name>`
+  `@DJ remove <#>`, `@DJ clear`
 
-The ♪ button opens the library: Search, Queue, room History, Liked songs
-(saved in that browser, across rooms), and shared room Playlists. There are
+The ♪ button opens the library: Search, Queue, room History, and Liked songs
+(saved in that browser, across rooms). Each result can play now, play next,
+or go to the end of the queue. There are
 no roles or votes; everyone can control playback. Each listener sets their
 own volume. Music lives with the room in memory, like chat, so a server restart
-clears queues and playlists.
+clears queues.
 
 Audio comes from a hidden YouTube player in each browser, so only sound plays.
 YouTube's embed terms expect a visible player, which is worth revisiting before

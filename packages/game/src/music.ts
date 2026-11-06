@@ -4,9 +4,6 @@ export const DJ_BOT_NAME = "DJ"
 
 export const MUSIC_QUEUE_LIMIT = 50
 export const MUSIC_HISTORY_LIMIT = 100
-export const MUSIC_PLAYLIST_LIMIT = 20
-export const MUSIC_PLAYLIST_TRACK_LIMIT = 100
-export const MUSIC_PLAYLIST_NAME_MAX_LENGTH = 40
 /** Songs per room whose likes are remembered; the oldest drop off. */
 export const MUSIC_LIKED_SONG_LIMIT = 300
 
@@ -33,15 +30,6 @@ export type MusicHistoryEntry = MusicTrack & {
   requestedByName: string
 }
 
-export type RoomPlaylist = {
-  id: string
-  name: string
-  createdByPlayerId: string
-  createdByName: string
-  tracks: MusicTrack[]
-  updatedAt: string
-}
-
 export type MusicPlaybackStatus = "idle" | "playing" | "paused"
 
 export type RoomMusicSnapshot = {
@@ -54,7 +42,6 @@ export type RoomMusicSnapshot = {
   queue: QueuedTrack[]
   /** Most recent first. */
   history: MusicHistoryEntry[]
-  playlists: RoomPlaylist[]
   /** Who in this room liked each song, keyed by video ID, oldest first. */
   likes: Record<string, MusicLiker[]>
   /** False when the server has no YouTube API key and cannot search by name. */
@@ -70,18 +57,18 @@ export type MusicEnqueueInput = {
   videoId: string
   /** Insert at the front of the queue instead of the back. */
   playNext?: boolean
+  /** Replace the current song and start this one right away. */
+  playNow?: boolean
 }
 
 export type MusicControlAction = "pause" | "resume" | "skip" | "stop"
 
 export type MusicControlInput = { action: MusicControlAction }
 export type MusicRemoveInput = { queueId: string }
+export type MusicSeekInput = { positionSec: number }
 export type MusicTrackReportInput = { queueId: string }
 export type MusicLiker = { playerId: string; name: string }
 export type MusicLikeInput = { videoId: string; liked: boolean }
-export type MusicCreatePlaylistInput = { name: string }
-export type MusicPlaylistInput = { playlistId: string }
-export type MusicPlaylistTrackInput = { playlistId: string; videoId: string }
 
 export function isYouTubeVideoId(value: string): boolean {
   return /^[A-Za-z0-9_-]{11}$/.test(value)

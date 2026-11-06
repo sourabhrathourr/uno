@@ -429,7 +429,11 @@ io.on("connection", (socket) => {
       })
     }
     void music
-      .enqueueVideo(actor, input.videoId, Boolean(input.playNext))
+      .enqueueVideo(
+        actor,
+        input.videoId,
+        input.playNow ? "now" : input.playNext ? "next" : "end"
+      )
       .then(ack)
       .catch((cause) => {
         console.error("Music enqueue failed", cause)
@@ -444,6 +448,12 @@ io.on("connection", (socket) => {
     const actor = joinedActor(socket.data)
     if (!actor) return ack(notJoinedResult())
     ack(music.control(actor, input?.action))
+  })
+
+  socket.on("music:seek", (input, ack) => {
+    const actor = joinedActor(socket.data)
+    if (!actor) return ack(notJoinedResult())
+    ack(music.seek(actor, Number(input?.positionSec)))
   })
 
   socket.on("music:like", (input, ack) => {
@@ -468,55 +478,6 @@ io.on("connection", (socket) => {
     const actor = joinedActor(socket.data)
     if (actor && typeof input?.queueId === "string")
       music.reportUnplayable(actor, input.queueId)
-  })
-
-  socket.on("music:createPlaylist", (input, ack) => {
-    const actor = joinedActor(socket.data)
-    if (!actor) return ack(notJoinedResult())
-    ack(music.createPlaylist(actor, String(input?.name ?? "")))
-  })
-
-  socket.on("music:deletePlaylist", (input, ack) => {
-    const actor = joinedActor(socket.data)
-    if (!actor) return ack(notJoinedResult())
-    ack(music.deletePlaylist(actor, String(input?.playlistId ?? "")))
-  })
-
-  socket.on("music:playPlaylist", (input, ack) => {
-    const actor = joinedActor(socket.data)
-    if (!actor) return ack(notJoinedResult())
-    ack(music.playPlaylist(actor, String(input?.playlistId ?? "")))
-  })
-
-  socket.on("music:addToPlaylist", (input, ack) => {
-    const actor = joinedActor(socket.data)
-    if (!actor) return ack(notJoinedResult())
-    void music
-      .addToPlaylist(
-        actor,
-        String(input?.playlistId ?? ""),
-        String(input?.videoId ?? "")
-      )
-      .then(ack)
-      .catch((cause) => {
-        console.error("Playlist add failed", cause)
-        ack({
-          ok: false,
-          error: { code: "music-failed", message: "Couldn't add that song." },
-        })
-      })
-  })
-
-  socket.on("music:removeFromPlaylist", (input, ack) => {
-    const actor = joinedActor(socket.data)
-    if (!actor) return ack(notJoinedResult())
-    ack(
-      music.removeFromPlaylist(
-        actor,
-        String(input?.playlistId ?? ""),
-        String(input?.videoId ?? "")
-      )
-    )
   })
 
   socket.on("room:reactToChatMessage", (input, ack) => {

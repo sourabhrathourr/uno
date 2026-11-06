@@ -50,16 +50,14 @@ export type RoomMusicController = {
   error: string | null
   clearError: () => void
   enqueue: (videoId: string, playNext?: boolean) => Promise<boolean>
+  /** Replaces the current song for everyone and starts this one. */
+  playNow: (videoId: string) => Promise<boolean>
   like: (videoId: string, liked: boolean) => Promise<boolean>
   control: (action: MusicControlAction) => Promise<boolean>
   remove: (queueId: string) => Promise<boolean>
+  seek: (positionSec: number) => Promise<boolean>
   reportEnded: (queueId: string) => void
   reportUnplayable: (queueId: string) => void
-  createPlaylist: (name: string) => Promise<boolean>
-  deletePlaylist: (playlistId: string) => Promise<boolean>
-  playPlaylist: (playlistId: string) => Promise<boolean>
-  addToPlaylist: (playlistId: string, videoId: string) => Promise<boolean>
-  removeFromPlaylist: (playlistId: string, videoId: string) => Promise<boolean>
 }
 
 /** Live position of the room's song, extrapolated from the last snapshot. */
@@ -140,29 +138,21 @@ export function useRoomMusic(
     clearError: () => setError(null),
     enqueue: (videoId, playNext = false) =>
       run((ack) => socket?.emit("music:enqueue", { videoId, playNext }, ack)),
+    playNow: (videoId) =>
+      run((ack) =>
+        socket?.emit("music:enqueue", { videoId, playNow: true }, ack)
+      ),
     control: (action) =>
       run((ack) => socket?.emit("music:control", { action }, ack)),
     remove: (queueId) =>
       run((ack) => socket?.emit("music:remove", { queueId }, ack)),
+    seek: (positionSec) =>
+      run((ack) => socket?.emit("music:seek", { positionSec }, ack)),
     like: (videoId, liked) =>
       run((ack) => socket?.emit("music:like", { videoId, liked }, ack)),
     reportEnded: (queueId) => socket?.emit("music:ended", { queueId }),
     reportUnplayable: (queueId) =>
       socket?.emit("music:unplayable", { queueId }),
-    createPlaylist: (name) =>
-      run((ack) => socket?.emit("music:createPlaylist", { name }, ack)),
-    deletePlaylist: (playlistId) =>
-      run((ack) => socket?.emit("music:deletePlaylist", { playlistId }, ack)),
-    playPlaylist: (playlistId) =>
-      run((ack) => socket?.emit("music:playPlaylist", { playlistId }, ack)),
-    addToPlaylist: (playlistId, videoId) =>
-      run((ack) =>
-        socket?.emit("music:addToPlaylist", { playlistId, videoId }, ack)
-      ),
-    removeFromPlaylist: (playlistId, videoId) =>
-      run((ack) =>
-        socket?.emit("music:removeFromPlaylist", { playlistId, videoId }, ack)
-      ),
   }
 }
 
@@ -254,12 +244,18 @@ export function useSongLike(track: MusicTrack) {
   const { isLiked, setLiked } = useLikedSongs()
   const selfId = controller?.selfPlayerId ?? null
   const likers = controller?.snapshot?.likes[track.id] ?? EMPTY_LIKERS
-  const liked =
-    isLiked(track.id) || likers.some((liker) => liker.playerId === selfId)
+  const selfInRoom = likers.some((liker) => liker.playerId === selfId)
+  const liked = isLiked(track.id) || selfInRoom
+  // A song liked in another room is in your list before this room knows it;
+  // still name you in the label.
+  const named =
+    liked && !selfInRoom
+      ? [{ playerId: selfId ?? "", name: "you" }, ...likers]
+      : likers
   return {
     liked,
     likers,
-    label: likedByLabel(likers, selfId),
+    label: likedByLabel(named, selfId),
     toggle: () => {
       const next = !liked
       setLiked(track, next)

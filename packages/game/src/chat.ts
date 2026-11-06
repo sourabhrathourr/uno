@@ -40,6 +40,12 @@ export type ChatMessage = {
   voteKick?: VoteKickPoll
   /** The song a DJ message is about, rendered as a track card. */
   track?: MusicTrack
+  /**
+   * A DJ skip: the song that was cut. `track` is then the song playing now
+   * (absent when the queue ran out). `byName` is who skipped, when the
+   * message is not already a reply to them.
+   */
+  skipped?: { track: MusicTrack; byName?: string }
   createdAt: string
 }
 

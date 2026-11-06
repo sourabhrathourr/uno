@@ -666,7 +666,12 @@ export class RoomManager {
    */
   postBotMessage(
     code: string,
-    input: { body: string; track?: MusicTrack; replyToMessageId?: string }
+    input: {
+      body: string
+      track?: MusicTrack
+      skipped?: { track: MusicTrack; byName?: string }
+      replyToMessageId?: string
+    }
   ): CommandResult<RoomSnapshot> {
     const room = this.getManagedRoom(code)
     if (!room) return fail("room-not-found", "That room code does not exist.")
@@ -687,6 +692,9 @@ export class RoomManager {
       body: input.body.trim().slice(0, 600),
       mentionPlayerIds: [],
       track: input.track ? { ...input.track } : undefined,
+      skipped: input.skipped
+        ? { ...input.skipped, track: { ...input.skipped.track } }
+        : undefined,
       replyToMessageId: replyAvailable ? input.replyToMessageId : undefined,
       createdAt: now,
     }
@@ -1848,6 +1856,9 @@ function cloneChatMessage(message: ChatMessage): ChatMessage {
     ...message,
     mentionPlayerIds: [...message.mentionPlayerIds],
     track: message.track ? { ...message.track } : undefined,
+    skipped: message.skipped
+      ? { ...message.skipped, track: { ...message.skipped.track } }
+      : undefined,
     reactions: message.reactions?.map((reaction) => ({
       ...reaction,
       playerIds: [...reaction.playerIds],
