@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react"
 
+import { DJ_BOT_ID, DJ_BOT_NAME } from "@workspace/game"
 import type {
   ChatChannel,
   ChatMessage,
@@ -11,6 +12,21 @@ import { mentionablePlayersForChannel } from "@/components/support-experience"
 import { playFx } from "@/lib/sound"
 
 export type ChatTray = "presets" | "emoji" | "gifs" | "voteKick"
+
+/** The music bot, offered in the public mention list as `@DJ`. */
+export const DJ_MENTION_CANDIDATE: Player = {
+  id: DJ_BOT_ID,
+  name: DJ_BOT_NAME,
+  seat: -1,
+  ready: true,
+  connected: true,
+  joinedAt: "",
+  lastSeenAt: "",
+}
+
+export function isDjCandidate(player: Pick<Player, "id">) {
+  return player.id === DJ_BOT_ID
+}
 
 export function useChannelChat({
   messages,
@@ -49,11 +65,19 @@ export function useChannelChat({
     () => new Set([...messages, ...squadMessages].map((message) => message.id))
   )
   const channelMessages = channel === "squad" ? squadMessages : messages
-  const mentionablePlayers = mentionablePlayersForChannel(
+  const channelPlayers = mentionablePlayersForChannel(
     players,
     channel,
     squadMemberIds
   ).filter((player) => player.id !== selfPlayerId)
+  // A seated player named "DJ" keeps the name; the bot steps aside.
+  const djNameTaken = players.some(
+    (player) => player.name.toLowerCase() === DJ_BOT_NAME.toLowerCase()
+  )
+  const mentionablePlayers =
+    channel === "public" && !djNameTaken
+      ? [DJ_MENTION_CANDIDATE, ...channelPlayers]
+      : channelPlayers
 
   const markChannelRead = useCallback(
     (activeChannel = channel) => {
@@ -143,9 +167,12 @@ export function useChannelChat({
     const next = `${before}@${mentioned.name} ${after}`
     setText(next)
     onTyping?.(channel === "public")
-    setMentionPlayerIds((current) =>
-      Array.from(new Set([...current, mentioned.id]))
-    )
+    // The DJ is not a seated player, so it never joins mentionPlayerIds;
+    // the server reads the leading "@DJ" in the text instead.
+    if (!isDjCandidate(mentioned))
+      setMentionPlayerIds((current) =>
+        Array.from(new Set([...current, mentioned.id]))
+      )
     setTray(null)
     return range.start + mentioned.name.length + 2
   }

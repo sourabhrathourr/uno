@@ -3,7 +3,6 @@ import confetti from "canvas-confetti"
 import {
   ArrowRight,
   Check,
-  Circle,
   Clipboard,
   Clock,
   Crown,
@@ -90,7 +89,13 @@ import {
   ReplyPreview,
   usePublicChatControls,
 } from "@/components/public-chat-controls"
-import { useChannelChat } from "@/components/use-channel-chat"
+import { isDjCandidate, useChannelChat } from "@/components/use-channel-chat"
+import {
+  DjAvatar,
+  DjMentionToken,
+  DjMessageBubble,
+  djCommandPrefixLength,
+} from "@/components/dj-chat"
 
 import { getGameSocket, getRoomPreview } from "@/lib/realtime"
 import {
@@ -110,6 +115,14 @@ import {
 import { useSoundSystem } from "@/lib/use-sound-system"
 import { VoiceAudioOutputs } from "@/components/voice-audio-outputs"
 import { useRoomVoice } from "@/lib/use-room-voice"
+import { publishMusicController, useRoomMusic } from "@/lib/room-music"
+import { MusicButton, RoomMusic } from "@/components/music-player"
+import {
+  TOOLBAR_BUTTON,
+  TOOLBAR_BUTTON_OFF,
+  ToolbarDivider,
+  ToolbarGroup,
+} from "@/components/toolbar"
 
 type ResponsiveCardSize = "sm" | "md"
 type DeckDrawFlightState = {
@@ -181,6 +194,12 @@ function RoomPage() {
     selfPlayerId: player?.id ?? null,
     players: room?.players ?? [],
   })
+
+  const music = useRoomMusic(socket, joinedSocketId, player?.id ?? null)
+  useEffect(() => {
+    publishMusicController(music)
+  })
+  useEffect(() => () => publishMusicController(null), [])
 
   function applyRoomSnapshot(nextRoom: RoomSnapshot | null) {
     const currentRoom = roomRef.current
@@ -979,6 +998,7 @@ function RoomPage() {
           </button>
         </div>
       )}
+      {player && <RoomMusic controller={music} />}
       <VoiceAudioOutputs
         streamsByPlayerId={voice.remoteStreamsByPlayerId}
         connectionIssues={voice.connectionIssues}
@@ -1970,9 +1990,9 @@ function GameTable({
                     ""}
                 </p>
               </div>
-              <div className="flex shrink-0 items-center gap-1.5">
-                <VoiceToggleButton voice={voice} compact />
-                <CopyInviteButton iconOnly onCopy={onCopyInvite} />
+              <ToolbarGroup>
+                <VoiceToggleButton voice={voice} />
+                <MusicButton />
                 <MobileChatSheet
                   socket={socket}
                   messages={room.chatMessages}
@@ -1991,8 +2011,7 @@ function GameTable({
                   onKickSupporter={onKickSupporter}
                   room={room}
                 />
-                <HowToPlayGuide compact />
-              </div>
+              </ToolbarGroup>
             </header>
 
             <div
@@ -2432,11 +2451,13 @@ function GameTable({
               Copy invite, and connection state already shows on the seats. */}
           <header className="flex shrink-0 items-center justify-between gap-3 border-b border-white/10 pb-2 sm:pb-3">
             <MatchEventFeed room={room} selfPlayerId={player.id} />
-            <div className="ml-auto flex shrink-0 items-center gap-2">
+            <ToolbarGroup className="ml-auto">
               <VoiceToggleButton voice={voice} />
-              <CopyInviteButton onCopy={onCopyInvite} />
+              <MusicButton />
+              <ToolbarDivider />
+              <CopyInviteButton iconOnly toolbar onCopy={onCopyInvite} />
               <HowToPlayGuide />
-            </div>
+            </ToolbarGroup>
           </header>
 
           {/* Collapsing the chat hands its width back to the table, which is
@@ -4146,7 +4167,7 @@ function MobileChatSheet({
       <button
         type="button"
         onClick={openChat}
-        className="relative grid size-9 shrink-0 place-items-center rounded-full border border-white/10 bg-white/[0.045] text-white/74 transition-[background-color,border-color,color,scale] duration-200 ease-[cubic-bezier(0.2,0,0,1)] hover:border-white/18 hover:bg-white/[0.075] hover:text-white active:scale-[0.96]"
+        className={TOOLBAR_BUTTON}
         aria-label={
           unreadMessageCount > 0
             ? `Open table chat, ${unreadMessageCount} unread message${unreadMessageCount === 1 ? "" : "s"}`
@@ -5210,15 +5231,24 @@ function MentionSuggestionList({
                 : "text-white/78 hover:bg-white/[0.08] hover:text-white")
             }
           >
-            <img
-              src={avatarUrls.get(player.id) ?? PLAYER_AVATARS[0]}
-              alt=""
-              className="size-7 shrink-0 rounded-full border border-white/12 object-cover"
-              draggable={false}
-            />
+            {isDjCandidate(player) ? (
+              <DjAvatar />
+            ) : (
+              <img
+                src={avatarUrls.get(player.id) ?? PLAYER_AVATARS[0]}
+                alt=""
+                className="size-7 shrink-0 rounded-full border border-white/12 object-cover"
+                draggable={false}
+              />
+            )}
             <span className="min-w-0 flex-1 truncate text-sm font-medium">
               {player.name}
             </span>
+            {isDjCandidate(player) && (
+              <span className="shrink-0 text-[11px] text-white/40">
+                Plays music for the room
+              </span>
+            )}
           </button>
         )
       })}
@@ -5503,6 +5533,17 @@ function ChatMessageBubble({
   replyPreview?: ReactNode
   actions?: ReactNode
 }) {
+  if (message.kind === "bot") {
+    return (
+      <DjMessageBubble
+        message={message}
+        replyPreview={replyPreview}
+        actions={actions}
+        time={formatChatTime(message.createdAt)}
+      />
+    )
+  }
+
   if (message.kind === "vote-kick" && message.voteKick) {
     return (
       <div
@@ -5609,6 +5650,24 @@ function ChatMessageBody({
   roomCode: string
   isSelf: boolean
 }) {
+  // "@DJ ..." commands get the bot's name highlighted, unless a seated
+  // player is actually called DJ and was the one mentioned.
+  const djPrefixLength = djCommandPrefixLength(body)
+  if (
+    djPrefixLength > 0 &&
+    !mentionPlayerIds.some(
+      (id) =>
+        players.find((player) => player.id === id)?.name.toLowerCase() === "dj"
+    )
+  ) {
+    return (
+      <span className="leading-relaxed">
+        <DjMentionToken isSelf={isSelf} />
+        {body.slice(djPrefixLength)}
+      </span>
+    )
+  }
+
   const avatarUrls = avatarsByPlayerId(roomCode, players)
   const mentionedPlayers = mentionPlayerIds
     .map((playerId) => players.find((player) => player.id === playerId))
@@ -8024,9 +8083,12 @@ async function copyTextToClipboard(value: string) {
 
 function CopyInviteButton({
   iconOnly = false,
+  toolbar = false,
   onCopy,
 }: {
   iconOnly?: boolean
+  /** Render as a borderless circle inside a ToolbarGroup. */
+  toolbar?: boolean
   onCopy: () => Promise<void>
 }) {
   const [copied, setCopied] = useState(false)
@@ -8083,15 +8145,17 @@ function CopyInviteButton({
       aria-live="polite"
       onClick={handleCopy}
       className={
-        "relative z-50 transition-[background-color,color,border-color,scale,transform] active:scale-[0.96] " +
-        (iconOnly
-          ? "rounded-full border border-white/10 bg-white/[0.045] text-white/74 hover:border-white/18 hover:bg-white/[0.075] hover:text-white/88 "
-          : "bg-white text-neutral-950 hover:bg-white/85 ") +
-        (copyFailed
-          ? iconOnly
-            ? "!border-red-300/40 !bg-red-500/12 !text-red-100"
-            : "bg-red-100 text-red-950 hover:bg-red-100"
-          : "")
+        toolbar
+          ? TOOLBAR_BUTTON + (copyFailed ? " text-red-300" : "")
+          : "relative z-50 transition-[background-color,color,border-color,scale,transform] active:scale-[0.96] " +
+            (iconOnly
+              ? "rounded-full border border-white/10 bg-white/[0.045] text-white/74 hover:border-white/18 hover:bg-white/[0.075] hover:text-white/88 "
+              : "bg-white text-neutral-950 hover:bg-white/85 ") +
+            (copyFailed
+              ? iconOnly
+                ? "!border-red-300/40 !bg-red-500/12 !text-red-100"
+                : "bg-red-100 text-red-950 hover:bg-red-100"
+              : "")
       }
     >
       <span
@@ -8550,44 +8614,6 @@ function useMediaQuery(query: string) {
   return matches
 }
 
-function StatusDot({
-  connected,
-  compact = false,
-}: {
-  connected: boolean
-  compact?: boolean
-}) {
-  if (compact) {
-    return (
-      <div
-        className="grid size-9 shrink-0 place-items-center rounded-full border border-white/10 bg-white/[0.045]"
-        title={connected ? "Connected" : "Offline"}
-        aria-label={connected ? "Connected" : "Offline"}
-      >
-        <Circle
-          className={
-            "size-2.5 fill-current " +
-            (connected ? "text-emerald-400" : "text-white/25")
-          }
-        />
-      </div>
-    )
-  }
-  return (
-    <div className="flex h-8 items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-2.5 text-xs text-white/60 sm:px-3">
-      <Circle
-        className={
-          "size-2 fill-current " +
-          (connected ? "text-emerald-400" : "text-white/25")
-        }
-      />
-      <span className="hidden sm:inline">
-        {connected ? "Connected" : "Offline"}
-      </span>
-    </div>
-  )
-}
-
 function VoiceToggleButton({
   voice,
 }: {
@@ -8604,7 +8630,7 @@ function VoiceToggleButton({
         : "Mute mic"
 
   return (
-    <div className="inline-flex shrink-0 items-center gap-1">
+    <>
       <button
         type="button"
         onClick={voice.toggle}
@@ -8612,13 +8638,9 @@ function VoiceToggleButton({
         title={title}
         aria-label={title}
         className={
-          "inline-flex size-11 shrink-0 items-center justify-center rounded-full border transition-[background-color,border-color,color,opacity,scale] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-300 active:scale-[0.96] disabled:opacity-70 " +
+          TOOLBAR_BUTTON +
           " " +
-          (micOn
-            ? "border-white/10 bg-white/[0.045] text-white/74 hover:border-white/18 hover:bg-white/[0.075] hover:text-white/88"
-            : voice.error
-              ? "border-red-300/35 bg-red-500/12 text-red-100"
-              : "border-white/10 bg-white/[0.045] text-red-300 hover:border-white/18 hover:bg-white/[0.075] hover:text-red-200")
+          (micOn ? "" : voice.error ? "text-red-300" : TOOLBAR_BUTTON_OFF)
         }
       >
         {micOn ? (
@@ -8636,7 +8658,7 @@ function VoiceToggleButton({
         voiceError={voice.error}
         onToggleMic={voice.toggle}
       />
-    </div>
+    </>
   )
 }
 
@@ -8741,20 +8763,31 @@ function LobbyWaitingRoom({
       />
 
       <div className="relative z-10 mx-auto flex h-full w-full max-w-[1500px] flex-col gap-3 px-3 py-3 sm:px-5 sm:py-4 lg:px-8">
-        <header className="relative z-40 flex shrink-0 flex-col items-stretch justify-between gap-3 border-b border-white/10 pb-2 sm:flex-row sm:items-center sm:pb-3">
-          <div className="flex items-center justify-between gap-3 sm:block">
-            <p className="text-[10px] font-medium tracking-[0.18em] text-white/45 uppercase sm:text-xs">
+        <header className="relative z-40 flex shrink-0 items-center justify-between gap-3 border-b border-white/10 pb-2.5 sm:pb-3">
+          <div className="min-w-0">
+            <p className="text-[10px] font-medium tracking-[0.18em] text-white/42 uppercase sm:text-xs">
               UNO No Mercy
             </p>
-            <h1 className="mt-0.5 text-lg font-semibold tracking-tight sm:mt-1 sm:text-xl">
-              Room {roomCode}
+            <h1 className="mt-0.5 flex items-center gap-2 text-[17px] font-semibold tracking-tight sm:mt-1 sm:text-xl">
+              <span className="truncate">Room {roomCode}</span>
+              <span
+                role="status"
+                title={connected ? "Connected" : "Offline"}
+                aria-label={connected ? "Connected" : "Offline"}
+                className={
+                  "size-1.5 shrink-0 rounded-full transition-colors duration-300 " +
+                  (connected
+                    ? "bg-emerald-400 shadow-[0_0_0_3px_rgba(52,211,153,0.14)]"
+                    : "bg-white/25")
+                }
+              />
             </h1>
           </div>
-          <div className="flex items-center justify-between gap-1 sm:justify-start sm:gap-2">
+          <ToolbarGroup>
             <VoiceToggleButton voice={voice} />
-            <SoundToggle />
-            <StatusDot connected={connected} />
-            <div className="lg:hidden">
+            <MusicButton />
+            <SoundToggle compact />
+            <div className="flex lg:hidden">
               <MobileChatSheet
                 socket={socket}
                 messages={messages}
@@ -8767,9 +8800,12 @@ function LobbyWaitingRoom({
                 room={room}
               />
             </div>
-            <CopyInviteButton iconOnly onCopy={onCopyInvite} />
-            <HowToPlayGuide />
-          </div>
+            <div className="hidden items-center gap-0.5 sm:flex">
+              <ToolbarDivider />
+              <CopyInviteButton iconOnly toolbar onCopy={onCopyInvite} />
+              <HowToPlayGuide />
+            </div>
+          </ToolbarGroup>
         </header>
 
         <section className="relative z-10 grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] gap-3 overflow-hidden lg:grid-cols-[minmax(0,1fr)_320px] lg:grid-rows-none">
@@ -9157,12 +9193,7 @@ function SoundToggle({ compact = false }: { compact?: boolean }) {
         onClick={handleClick}
         aria-label={enabled ? "Mute sound effects" : "Unmute sound effects"}
         title={enabled ? "Mute sound effects" : "Unmute sound effects"}
-        className={
-          "inline-flex size-9 shrink-0 items-center justify-center rounded-full border transition-[background-color,border-color,color,scale] active:scale-[0.96] " +
-          (enabled
-            ? "border-white/10 bg-white/[0.045] text-white/74 hover:border-white/18 hover:bg-white/[0.075] hover:text-white/88"
-            : "border-white/10 bg-black/30 text-white/45 hover:text-white/65")
-        }
+        className={TOOLBAR_BUTTON + (enabled ? "" : " " + TOOLBAR_BUTTON_OFF)}
       >
         {enabled ? (
           <Volume2 className="size-4" strokeWidth={1.9} />
