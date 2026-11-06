@@ -289,7 +289,7 @@ const EMPTY_TRACKS: Array<MusicTrack> = []
  * Music starts quiet so it sits under voice chat. iPhones ignore this (iOS
  * won't let pages set media volume), so there it plays at the phone's level.
  */
-export const MUSIC_DEFAULT_VOLUME = 40
+export const MUSIC_DEFAULT_VOLUME = 20
 
 type VolumeState = { volume: number; muted: boolean }
 const volumeStore = createStore<VolumeState>(() => {
