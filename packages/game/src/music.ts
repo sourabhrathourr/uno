@@ -46,6 +46,8 @@ export type RoomMusicSnapshot = {
   likes: Record<string, MusicLiker[]>
   /** False when the server has no YouTube API key and cannot search by name. */
   searchAvailable: boolean
+  /** True when "previous" can go back to an earlier song. */
+  canGoBack: boolean
   version: number
 }
 
@@ -61,7 +63,12 @@ export type MusicEnqueueInput = {
   playNow?: boolean
 }
 
-export type MusicControlAction = "pause" | "resume" | "skip" | "stop"
+export type MusicControlAction =
+  | "pause"
+  | "resume"
+  | "skip"
+  | "previous"
+  | "stop"
 
 export type MusicControlInput = { action: MusicControlAction }
 export type MusicRemoveInput = { queueId: string }

@@ -9,8 +9,9 @@ import {
   Pause,
   Play,
   Search,
+  SkipBack,
   SkipForward,
-  Square,
+  Volume1,
   Volume2,
   VolumeX,
   X,
@@ -51,7 +52,7 @@ const UNMUTE_VOLUME = 50
 
 const EASE_DRAWER = "ease-[cubic-bezier(0.32,0.72,0,1)]"
 const PRESS =
-  "transition-[transform,background-color,color,opacity] duration-150 ease-out active:scale-[0.96]"
+  "transition-[scale,background-color,color,opacity] duration-150 ease-out active:scale-[0.96]"
 const HOVER = "[@media(hover:hover)]:hover:bg-white/[0.06]"
 const ICON_BUTTON =
   "grid size-9 shrink-0 place-items-center rounded-full text-white/50 " +
@@ -686,10 +687,10 @@ function NowPlayingCard({
   track: QueuedTrack
 }) {
   const tap = useNeedsTap()
-  const { volume, muted, update } = useMusicVolume()
-  const silent = muted || volume === 0
   const like = useSongLike(track)
   const playing = snapshot.status === "playing"
+  // With nothing earlier, "previous" restarts the song, if it can seek.
+  const canGoBack = snapshot.canGoBack || track.durationSec !== null
 
   return (
     <div className="mx-4 rounded-[22px] bg-white/[0.035] p-3 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05)]">
@@ -711,7 +712,6 @@ function NowPlayingCard({
             {like.label ?? `Requested by ${track.requestedByName}`}
           </p>
         </div>
-        <LikeButton like={like} title={track.title} />
       </div>
 
       <Progress
@@ -720,52 +720,23 @@ function NowPlayingCard({
         onSeek={controller.seek}
       />
 
-      <div className="mt-1 flex items-center justify-between">
-        <div className="flex items-center gap-0.5">
-          <button
-            type="button"
-            onClick={() =>
-              silent
-                ? // Slid to zero: unmuting needs a level you can hear.
-                  update({
-                    muted: false,
-                    volume: volume === 0 ? UNMUTE_VOLUME : volume,
-                  })
-                : update({ muted: true })
-            }
-            aria-label={silent ? "Unmute music for you" : "Mute music for you"}
-            title={silent ? "Unmute (just you)" : "Mute (just you)"}
-            className={ICON_BUTTON}
-          >
-            {silent ? (
-              <VolumeX className="size-4" strokeWidth={2} />
-            ) : (
-              <Volume2 className="size-4" strokeWidth={2} />
-            )}
-          </button>
-          {/* Phones have hardware volume keys; the slider is for desktops. */}
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={muted ? 0 : volume}
-            onChange={(event) =>
-              update({ volume: Number(event.target.value), muted: false })
-            }
-            aria-label="Music volume (just you)"
-            className="hidden h-1 w-16 cursor-pointer accent-white sm:block"
-          />
-        </div>
+      {/* Volume and like balance each other, so the transport sits dead
+          centre. Their icons line up with the ends of the progress bar. */}
+      <div className="mt-1 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center">
+        <VolumeControl className="-ml-2.5 justify-self-start" />
 
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => void controller.control("stop")}
-            aria-label="Stop and clear the queue"
-            title="Stop and clear the queue"
-            className={ICON_BUTTON}
+            onClick={() => void controller.control("previous")}
+            disabled={!canGoBack}
+            aria-label="Previous song for everyone"
+            title="Previous"
+            className={
+              ICON_BUTTON + " disabled:pointer-events-none disabled:opacity-35"
+            }
           >
-            <Square className="size-3.5" strokeWidth={2.2} />
+            <SkipBack className="size-4" strokeWidth={2} fill="currentColor" />
           </button>
           <button
             type="button"
@@ -797,8 +768,8 @@ function NowPlayingCard({
           <button
             type="button"
             onClick={() => void controller.control("skip")}
-            aria-label="Skip for everyone"
-            title="Skip for everyone"
+            aria-label="Next song for everyone"
+            title="Next"
             className={ICON_BUTTON}
           >
             <SkipForward
@@ -809,8 +780,11 @@ function NowPlayingCard({
           </button>
         </div>
 
-        {/* Balances the volume group so the transport sits centred. */}
-        <div className="w-9 sm:w-[100px]" aria-hidden="true" />
+        <LikeButton
+          like={like}
+          title={track.title}
+          className="-mr-2.5 justify-self-end"
+        />
       </div>
 
       {tap && (
@@ -830,14 +804,231 @@ function NowPlayingCard({
   )
 }
 
+const CAN_HOVER = "(hover: hover) and (pointer: fine)"
+
+function subscribeCanHover(onChange: () => void) {
+  const query = window.matchMedia(CAN_HOVER)
+  query.addEventListener("change", onChange)
+  return () => query.removeEventListener("change", onChange)
+}
+
+/** True on devices with a real pointer; phones use their volume keys. */
+function useCanHover() {
+  return useSyncExternalStore(
+    subscribeCanHover,
+    () => window.matchMedia(CAN_HOVER).matches,
+    () => false
+  )
+}
+
+/**
+ * Your own volume, behind one icon so the row stays as clean as the
+ * transport. With a mouse, the icon mutes and hovering it raises a vertical
+ * slider. On a phone, tapping it opens the slider with a mute switch below.
+ */
+function VolumeControl({ className = "" }: { className?: string }) {
+  const { volume, muted, update } = useMusicVolume()
+  const canHover = useCanHover()
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const closeTimer = useRef<number | null>(null)
+  const silent = muted || volume === 0
+  const level = muted ? 0 : volume
+  const Icon = silent ? VolumeX : level < 50 ? Volume1 : Volume2
+
+  function toggleMute() {
+    update(
+      silent
+        ? // Slid to zero: unmuting needs a level you can hear.
+          { muted: false, volume: volume === 0 ? UNMUTE_VOLUME : volume }
+        : { muted: true }
+    )
+  }
+  function show() {
+    if (closeTimer.current !== null) window.clearTimeout(closeTimer.current)
+    closeTimer.current = null
+    setOpen(true)
+  }
+  function hide() {
+    // A short grace period lets the pointer cross the gap to the slider.
+    closeTimer.current = window.setTimeout(() => setOpen(false), 140)
+  }
+  useEffect(
+    () => () => {
+      if (closeTimer.current !== null) window.clearTimeout(closeTimer.current)
+    },
+    []
+  )
+  // On touch the slider stays up until you tap somewhere else.
+  useEffect(() => {
+    if (!open || canHover) return
+    function onPointerDown(event: PointerEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+    document.addEventListener("pointerdown", onPointerDown)
+    return () => document.removeEventListener("pointerdown", onPointerDown)
+  }, [open, canHover])
+
+  return (
+    <div
+      ref={rootRef}
+      className={"relative " + className}
+      onPointerEnter={canHover ? show : undefined}
+      onPointerLeave={canHover ? hide : undefined}
+      onFocus={canHover ? show : undefined}
+      onBlur={(event) => {
+        if (canHover && !event.currentTarget.contains(event.relatedTarget))
+          hide()
+      }}
+    >
+      <button
+        type="button"
+        onClick={canHover ? toggleMute : () => setOpen((value) => !value)}
+        aria-label={
+          canHover
+            ? silent
+              ? "Unmute music for you"
+              : "Mute music for you"
+            : "Music volume (just you)"
+        }
+        aria-expanded={canHover ? undefined : open}
+        title={
+          canHover
+            ? silent
+              ? "Unmute (just you)"
+              : "Mute (just you)"
+            : undefined
+        }
+        className={ICON_BUTTON + (open ? " bg-white/[0.07] text-white/90" : "")}
+      >
+        <Icon className="size-4" strokeWidth={2} />
+      </button>
+      <div
+        className={
+          "absolute bottom-full left-1/2 z-10 mb-1.5 flex origin-bottom -translate-x-1/2 flex-col items-center gap-1 rounded-full bg-neutral-900/95 p-1.5 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08),0_12px_32px_rgba(0,0,0,0.5)] backdrop-blur-md transition-[opacity,scale,translate] duration-150 ease-[cubic-bezier(0.23,1,0.32,1)] " +
+          (open
+            ? "scale-100 opacity-100"
+            : "pointer-events-none invisible translate-y-1 scale-[0.96] opacity-0")
+        }
+      >
+        <VerticalSlider
+          value={level}
+          onChange={(next) => update({ volume: next, muted: false })}
+          label="Music volume (just you)"
+          large={!canHover}
+        />
+        {!canHover && (
+          <button
+            type="button"
+            onClick={toggleMute}
+            aria-label={silent ? "Unmute music for you" : "Mute music for you"}
+            aria-pressed={silent}
+            className={
+              "grid size-9 place-items-center rounded-full " +
+              PRESS +
+              (silent ? " bg-white/[0.1] text-white" : " text-white/55")
+            }
+          >
+            {silent ? (
+              <VolumeX className="size-4" strokeWidth={2} />
+            ) : (
+              <Volume2 className="size-4" strokeWidth={2} />
+            )}
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/** An iOS-style pill: drag anywhere on it, or use the arrow keys. */
+function VerticalSlider({
+  value,
+  onChange,
+  label,
+  large = false,
+}: {
+  value: number
+  onChange: (value: number) => void
+  label: string
+  /** Taller and wider for fingers. */
+  large?: boolean
+}) {
+  const trackRef = useRef<HTMLDivElement>(null)
+  const dragging = useRef(false)
+
+  function setFromPointer(clientY: number) {
+    const rect = trackRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const ratio = (rect.bottom - clientY) / rect.height
+    onChange(Math.round(Math.min(1, Math.max(0, ratio)) * 100))
+  }
+
+  return (
+    <div
+      ref={trackRef}
+      role="slider"
+      tabIndex={0}
+      aria-label={label}
+      aria-orientation="vertical"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={value}
+      aria-valuetext={`${value}%`}
+      onPointerDown={(event) => {
+        dragging.current = true
+        event.currentTarget.setPointerCapture(event.pointerId)
+        setFromPointer(event.clientY)
+      }}
+      onPointerMove={(event) => {
+        if (dragging.current) setFromPointer(event.clientY)
+      }}
+      onPointerUp={() => {
+        dragging.current = false
+      }}
+      onPointerCancel={() => {
+        dragging.current = false
+      }}
+      onKeyDown={(event) => {
+        const step = {
+          ArrowUp: 5,
+          ArrowRight: 5,
+          ArrowDown: -5,
+          ArrowLeft: -5,
+          PageUp: 20,
+          PageDown: -20,
+        }[event.key]
+        if (step !== undefined) {
+          event.preventDefault()
+          onChange(Math.min(100, Math.max(0, value + step)))
+        } else if (event.key === "Home" || event.key === "End") {
+          event.preventDefault()
+          onChange(event.key === "Home" ? 0 : 100)
+        }
+      }}
+      className={
+        "relative cursor-pointer touch-none overflow-hidden rounded-full bg-white/[0.09] outline-none focus-visible:ring-2 focus-visible:ring-white/45 " +
+        (large ? "h-28 w-9" : "h-24 w-7")
+      }
+    >
+      <div
+        className="absolute inset-0 origin-bottom bg-white/90"
+        style={{ transform: `scaleY(${value / 100})` }}
+      />
+    </div>
+  )
+}
+
 function LikeButton({
   like,
   title,
   small = false,
+  className = "",
 }: {
   like: ReturnType<typeof useSongLike>
   title: string
   small?: boolean
+  className?: string
 }) {
   // Show a count only once someone besides you has liked it.
   const showCount = like.likers.length > (like.liked ? 1 : 0)
@@ -858,7 +1049,9 @@ function LikeButton({
         " [@media(hover:hover)]:hover:bg-white/[0.07] " +
         (like.liked
           ? "text-rose-300"
-          : "text-white/45 [@media(hover:hover)]:hover:text-white/90")
+          : "text-white/45 [@media(hover:hover)]:hover:text-white/90") +
+        " " +
+        className
       }
     >
       <Heart

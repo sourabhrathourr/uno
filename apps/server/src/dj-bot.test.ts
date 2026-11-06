@@ -137,6 +137,8 @@ describe("parseDjCommand", () => {
     ],
     ["@DJ next", { type: "skip" }],
     ["@DJ skip", { type: "skip" }],
+    ["@DJ back", { type: "previous" }],
+    ["@DJ prev", { type: "previous" }],
     ["@DJ play", { type: "resume" }],
     ["@DJ pause", { type: "pause" }],
     ["@DJ stop", { type: "stop" }],

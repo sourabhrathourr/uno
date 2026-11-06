@@ -22,6 +22,8 @@ type RoomMusicState = {
   pausedAtSec: number | null
   queue: QueuedTrack[]
   history: MusicHistoryEntry[]
+  /** Songs that played before the current one, oldest first, for "previous". */
+  back: QueuedTrack[]
   likes: Map<string, MusicLiker[]>
   endTimer: ReturnType<typeof setTimeout> | null
   version: number
@@ -38,9 +40,17 @@ type RoomMusicOptions = {
 const END_GRACE_MS = 2_500
 /** Unknown-length tracks may be ended by a client after this long. */
 const MIN_REPORTED_PLAY_SEC = 10
+/** Past this point, "previous" restarts the song instead of going back. */
+const RESTART_THRESHOLD_SEC = 3
 
 /** Where a new song lands: after the queue, at its front, or playing now. */
 export type EnqueueMode = "end" | "next" | "now"
+
+export type PreviousOutcome = {
+  /** True when the current song restarted instead of going back. */
+  restarted: boolean
+  track: QueuedTrack
+}
 
 export type EnqueueOutcome = {
   entry: QueuedTrack
@@ -78,6 +88,7 @@ export class RoomMusic {
         history: [],
         likes: {},
         searchAvailable: this.searchAvailable(),
+        canGoBack: false,
         version: 0,
       }
     }
@@ -99,6 +110,7 @@ export class RoomMusic {
         ])
       ),
       searchAvailable: this.searchAvailable(),
+      canGoBack: state.back.length > 0,
       version: state.version,
     }
   }
@@ -142,6 +154,7 @@ export class RoomMusic {
     }
     // "now" replaces whatever is playing; the queue behind it is untouched.
     if (!state.nowPlaying || mode === "now") {
+      this.remember(state)
       this.start(code, state, entry)
       return ok({ entry, placement: "playing" })
     }
@@ -210,6 +223,33 @@ export class RoomMusic {
     return ok(current)
   }
 
+  /**
+   * Goes back like a music app: a few seconds in, it restarts the song;
+   * otherwise it plays the song before this one and puts this one back at
+   * the front of the queue, so "next" returns to it.
+   */
+  previous(code: string): CommandResult<PreviousOutcome> {
+    const state = this.rooms.get(code)
+    if (!state) return fail("music-no-previous", "There's no earlier song.")
+    const current = state.nowPlaying
+    const seekable = current !== null && current.durationSec !== null
+    const restart = (): CommandResult<PreviousOutcome> => {
+      const result = this.seek(code, 0)
+      return result.ok && current
+        ? ok({ restarted: true, track: current })
+        : fail("music-no-previous", "There's no earlier song.")
+    }
+    if (seekable && this.positionSec(state) > RESTART_THRESHOLD_SEC) {
+      return restart()
+    }
+    const earlier = state.back.pop()
+    if (!earlier) return restart()
+    if (current) state.queue.unshift({ ...current, queueId: randomUUID() })
+    const entry = { ...earlier, queueId: randomUUID() }
+    this.start(code, state, entry)
+    return ok({ restarted: false, track: entry })
+  }
+
   /** Stops playback and clears the queue. History remains. */
   stop(code: string): CommandResult<null> {
     const state = this.rooms.get(code)
@@ -217,6 +257,7 @@ export class RoomMusic {
       return fail("music-idle", "Nothing is playing.")
     }
     this.clearEndTimer(state)
+    this.remember(state)
     state.nowPlaying = null
     state.pausedAtSec = null
     state.queue = []
@@ -267,7 +308,8 @@ export class RoomMusic {
     const state = this.rooms.get(code)
     const current = state?.nowPlaying
     if (!state || !current || current.queueId !== queueId) return null
-    this.advance(code, state)
+    // A song nobody could hear shouldn't be what "previous" goes back to.
+    this.advance(code, state, { remember: false })
     return current
   }
 
@@ -318,6 +360,7 @@ export class RoomMusic {
         pausedAtSec: null,
         queue: [],
         history: [],
+        back: [],
         likes: new Map(),
         endTimer: null,
         version: 0,
@@ -350,7 +393,19 @@ export class RoomMusic {
     state.version++
   }
 
-  private advance(code: string, state: RoomMusicState) {
+  /** Keeps the current song so "previous" can return to it. */
+  private remember(state: RoomMusicState) {
+    if (!state.nowPlaying) return
+    state.back.push(state.nowPlaying)
+    if (state.back.length > MUSIC_HISTORY_LIMIT) state.back.shift()
+  }
+
+  private advance(
+    code: string,
+    state: RoomMusicState,
+    { remember = true }: { remember?: boolean } = {}
+  ) {
+    if (remember) this.remember(state)
     const next = state.queue.shift()
     if (next) {
       this.start(code, state, next)

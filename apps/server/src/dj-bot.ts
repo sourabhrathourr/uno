@@ -5,6 +5,7 @@ import {
   parseYouTubeVideoId,
   type ChatMessage,
   type CommandResult,
+  type MusicControlAction,
   type MusicTrack,
   type Player,
   type QueuedTrack,
@@ -22,6 +23,7 @@ export type DjCommand =
   | { type: "resume" }
   | { type: "pause" }
   | { type: "skip" }
+  | { type: "previous" }
   | { type: "stop" }
   | { type: "clear" }
   | { type: "queue" }
@@ -78,6 +80,11 @@ export function parseDjCommand(
     case "skip":
     case "s":
       return { type: "skip" }
+    case "previous":
+    case "prev":
+    case "back":
+    case "rewind":
+      return { type: "previous" }
     case "stop":
       return { type: "stop" }
     case "clear":
@@ -110,7 +117,7 @@ export const DJ_HELP_TEXT = [
   "Tag me with a song and I'll play it for the whole room:",
   "• @DJ play <song or YouTube link>",
   "• @DJ next <song>: play it right after this one",
-  "• @DJ pause / resume / skip / stop",
+  "• @DJ pause / resume / skip / back / stop",
   "• @DJ queue · @DJ np · @DJ remove <#> · @DJ clear",
   "Open the music library (♪ button) to search, browse history, and like songs.",
 ].join("\n")
@@ -178,7 +185,7 @@ export class MusicController {
 
   control(
     actor: Actor,
-    action: "pause" | "resume" | "skip" | "stop"
+    action: MusicControlAction
   ): CommandResult<RoomMusicSnapshot> {
     const requester = this.requester(actor)
     if (!requester) return notJoined()
@@ -205,6 +212,19 @@ export class MusicController {
           track: next ?? undefined,
           skipped: { track: result.data, byName: requester.name },
         })
+        break
+      }
+      case "previous": {
+        const result = music.previous(actor.code)
+        if (!result.ok) return result
+        const { restarted, track } = result.data
+        this.announce(
+          actor.code,
+          restarted
+            ? `${requester.name} restarted the song.`
+            : `${requester.name} went back a song.`,
+          track
+        )
         break
       }
       case "stop": {
@@ -339,6 +359,7 @@ export class MusicController {
       case "pause":
       case "resume":
       case "skip":
+      case "previous":
       case "stop": {
         const result = this.controlQuietly(code, command.type)
         if (!result.ok) {
@@ -394,7 +415,7 @@ export class MusicController {
 
   private controlQuietly(
     code: string,
-    action: "pause" | "resume" | "skip" | "stop"
+    action: MusicControlAction
   ): CommandResult<{
     message: string
     track: QueuedTrack | null
@@ -422,6 +443,16 @@ export class MusicController {
           : `Skipped “${result.data.title}”. The queue is empty.`,
         track: next,
         skipped: result.data,
+      })
+    }
+    if (action === "previous") {
+      const result = music.previous(code)
+      if (!result.ok) return result
+      return ok({
+        message: result.data.restarted
+          ? `Restarted “${result.data.track.title}”.`
+          : `Back to “${result.data.track.title}”.`,
+        track: result.data.track,
       })
     }
     const result = music.stop(code)

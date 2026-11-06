@@ -205,6 +205,66 @@ describe("room music queue", () => {
   })
 })
 
+describe("previous", () => {
+  it("goes back a song and lets next return to where you were", () => {
+    const music = new RoomMusic()
+    music.enqueue(ROOM, track("a", 60), alice)
+    music.enqueue(ROOM, track("b", 60), alice)
+    music.enqueue(ROOM, track("c", 60), alice)
+    expect(music.snapshot(ROOM).canGoBack).toBe(false)
+    music.skip(ROOM)
+    expect(music.snapshot(ROOM).canGoBack).toBe(true)
+
+    const back = music.previous(ROOM)
+    expect(back.ok && back.data.restarted).toBe(false)
+    let snapshot = music.snapshot(ROOM)
+    expect(snapshot.nowPlaying?.title).toBe("Song a")
+    expect(snapshot.queue.map((entry) => entry.title)).toEqual([
+      "Song b",
+      "Song c",
+    ])
+    expect(snapshot.canGoBack).toBe(false)
+
+    music.skip(ROOM)
+    snapshot = music.snapshot(ROOM)
+    expect(snapshot.nowPlaying?.title).toBe("Song b")
+    expect(snapshot.queue.map((entry) => entry.title)).toEqual(["Song c"])
+  })
+
+  it("restarts the song when it is a few seconds in", () => {
+    const music = new RoomMusic()
+    music.enqueue(ROOM, track("a", 60), alice)
+    music.enqueue(ROOM, track("b", 60), alice)
+    music.skip(ROOM)
+    vi.advanceTimersByTime(10_000)
+    const result = music.previous(ROOM)
+    expect(result.ok && result.data.restarted).toBe(true)
+    expect(music.snapshot(ROOM)).toMatchObject({
+      positionSec: 0,
+      nowPlaying: { title: "Song b" },
+    })
+  })
+
+  it("brings back the last song after stop, but never an unplayable one", () => {
+    const music = new RoomMusic()
+    music.enqueue(ROOM, track("a", 60), alice)
+    music.stop(ROOM)
+    expect(music.previous(ROOM).ok).toBe(true)
+    expect(music.snapshot(ROOM).nowPlaying?.title).toBe("Song a")
+
+    const fresh = new RoomMusic()
+    const broken = fresh.enqueue(ROOM, track("x", 60), alice)
+    fresh.enqueue(ROOM, track("y", 60), alice)
+    fresh.reportUnplayable(ROOM, broken.ok ? broken.data.entry.queueId : "")
+    expect(fresh.snapshot(ROOM).canGoBack).toBe(false)
+  })
+
+  it("fails when there is nothing to go back to", () => {
+    const music = new RoomMusic()
+    expect(music.previous(ROOM).ok).toBe(false)
+  })
+})
+
 describe("room likes", () => {
   it("tracks who liked a song and ignores repeated likes", () => {
     const music = new RoomMusic()
