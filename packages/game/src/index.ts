@@ -172,3 +172,22 @@ export type {
   CancelBlindTradeInput,
   ResolveLastGiftInput,
 } from "./game"
+export {
+  WORLD_ANIMATIONS,
+  WORLD_DANCE_COUNT,
+  WORLD_HALF_EXTENT,
+  WORLD_MAX_BPM,
+  WORLD_MIN_BPM,
+  sanitizeWorldAvatarState,
+  sanitizeWorldTempo,
+} from "./world"
+export type {
+  WorldAnimation,
+  WorldAvatarState,
+  WorldLeftEvent,
+  WorldMoveInput,
+  WorldMovedEvent,
+  WorldTempo,
+  WorldTempoGetInput,
+  WorldTempoTapInput,
+} from "./world"

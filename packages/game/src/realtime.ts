@@ -57,6 +57,14 @@ import type {
   MusicTrackReportInput,
   RoomMusicSnapshot,
 } from "./music"
+import type {
+  WorldLeftEvent,
+  WorldMoveInput,
+  WorldMovedEvent,
+  WorldTempo,
+  WorldTempoGetInput,
+  WorldTempoTapInput,
+} from "./world"
 
 export type GameError = {
   code: string
@@ -232,6 +240,17 @@ export type ClientToServerEvents = {
   "music:ended": (input: MusicTrackReportInput) => void
   /** A client's player cannot play the current track (blocked embed, removed). */
   "music:unplayable": (input: MusicTrackReportInput) => void
+  /** Where this player's lounge avatar is. Relayed to the room, not stored. */
+  "world:move": (input: WorldMoveInput) => void
+  /** This player closed the lounge. */
+  "world:leave": () => void
+  /** Sets the room's beat grid for a song from someone tapping along. */
+  "world:tapTempo": (input: WorldTempoTapInput) => void
+  /** The best known beat grid for a song: tapped, looked up, or none. */
+  "world:getTempo": (
+    input: WorldTempoGetInput,
+    ack: (result: CommandResult<WorldTempo | null>) => void
+  ) => void
   "voice:join": (
     ack: (
       result: CommandResult<{ sessionId: string; states: VoiceStateEvent[] }>
@@ -316,6 +335,9 @@ export type ServerToClientEvents = {
   "voice:signal": (event: VoiceSignalEvent) => void
   "room:error": (error: GameError) => void
   "music:state": (snapshot: RoomMusicSnapshot) => void
+  "world:moved": (event: WorldMovedEvent) => void
+  "world:left": (event: WorldLeftEvent) => void
+  "world:tempo": (tempo: WorldTempo) => void
 }
 
 export type InterServerEvents = Record<string, never>

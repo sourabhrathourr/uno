@@ -21,6 +21,7 @@ import { GiphyService } from "./giphy"
 import { MusicController } from "./dj-bot"
 import { RoomMusic } from "./room-music"
 import { YouTubeService } from "./youtube"
+import { Lounge, TempoLookup } from "./lounge"
 import { ROOM_MEMORY_CLEANUP_INTERVAL_MS, RoomManager } from "./room-manager"
 
 type IceServerConfig = {
@@ -83,6 +84,18 @@ const music = new MusicController({
   emitMusic: (code) => emitMusicState(code),
   emitRoom: (code, room) => {
     void emitRoomState(code, room)
+  },
+})
+
+const lounge = new Lounge({
+  tempoLookup: new TempoLookup(),
+  nowPlaying: (code) => roomMusic.snapshot(code).nowPlaying,
+  playerName: (code, playerId) => {
+    const room = rooms.getRoom(code)
+    return room.ok
+      ? (room.data.players.find((player) => player.id === playerId)?.name ??
+          null)
+      : null
   },
 })
 
@@ -227,6 +240,7 @@ const voice = new RoomVoice(io)
 
 io.on("connection", (socket) => {
   voice.attach(socket)
+  lounge.attach(socket)
   registerPartyHandlers(socket, rooms, (code, room) => {
     void emitRoomState(code, room)
   })
@@ -702,6 +716,7 @@ function firstHeader(value: string | Array<string> | undefined): string {
 function clearExpiredRoomRuntimeState(roomCode: string) {
   voice.clearRoom(roomCode)
   roomMusic.clearRoom(roomCode)
+  lounge.clearRoom(roomCode)
   io.to(roomCode).emit("room:error", {
     code: "room-expired",
     message: "This room expired after 7 days of inactivity.",

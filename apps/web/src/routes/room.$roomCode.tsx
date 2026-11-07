@@ -122,6 +122,13 @@ import {
 } from "@/lib/room-music"
 import { MusicButton, RoomMusic } from "@/components/music-player"
 import {
+  canStageCardWithSelection,
+  cardsInIdOrder,
+  derivePlay,
+} from "@/lib/play-rules"
+import { LoungeButton, LoungeFrame } from "@/lounge/lounge-frame"
+import { useLounge } from "@/lounge/lounge-store"
+import {
   TOOLBAR_BUTTON,
   TOOLBAR_BUTTON_OFF,
   ToolbarDivider,
@@ -200,6 +207,7 @@ function RoomPage() {
   })
 
   const music = useRoomMusic(socket, joinedSocketId, player?.id ?? null)
+  const loungeState = useLounge()
   useEffect(() => {
     publishMusicController(music)
   })
@@ -985,6 +993,45 @@ function RoomPage() {
     }
   }, [room?.status, room?.game?.turnPlayerId, room?.players, player?.id])
 
+  function loungeWorldProps(activeRoom: RoomSnapshot, selfId: string) {
+    return {
+      room: activeRoom,
+      selfId,
+      socket,
+      playerGame: playerGame?.playerId === selfId ? playerGame : null,
+      speaking: Object.fromEntries(
+        Object.entries(voice.voiceStates).map(([id, state]) => [
+          id,
+          Boolean(state?.speaking && !state.muted),
+        ])
+      ),
+      onSendChatMessage: sendChatMessage,
+      actionPending: gameActionPending || gameActionBlocked,
+      actions: {
+        playCards,
+        stageCards,
+        drawCard,
+        endTurn,
+        takePenalty,
+        drawRouletteCard,
+        catchUno,
+      },
+      playerSocial,
+      supportActions: {
+        supportPlayer,
+        requestSupport,
+        respondSupportRequest,
+        kickSupporter,
+      },
+      roomActions: {
+        setReady,
+        startGame,
+        restartGame,
+        copyInvite,
+      },
+    }
+  }
+
   const audioOutputs = (
     <>
       {gameActionBlocked && (
@@ -1053,68 +1100,83 @@ function RoomPage() {
     return (
       <>
         {audioOutputs}
-        <GameTable
-          shortcutsEnabled={!showIntro}
-          actionPending={gameActionPending || gameActionBlocked}
-          room={room}
-          player={player}
-          playerGame={playerGame?.playerId === player.id ? playerGame : null}
-          playerSocial={playerSocial}
-          error={error}
-          onCopyInvite={copyInvite}
-          onPlayCards={playCards}
-          onStageCards={stageCards}
-          onDrawCard={drawCard}
-          onEndTurn={endTurn}
-          onTakePenalty={takePenalty}
-          onDrawRouletteCard={drawRouletteCard}
-          onCatchUno={catchUno}
-          onSupportPlayer={supportPlayer}
-          onKickSupporter={kickSupporter}
-          onRequestSupport={requestSupport}
-          onRespondSupportRequest={respondSupportRequest}
-          onSendAvatarEmojiReaction={sendAvatarEmojiReaction}
-          onSendChatMessage={sendChatMessage}
-          onStartVoteKick={startVoteKick}
-          onCastVoteKick={castVoteKick}
-          onRestartGame={restartGame}
-          onSetSeatOrder={setSeatOrder}
-          voice={voice}
-          socket={socket}
-        />
-        {showIntro && (
-          <GameStartIntro
+        <LoungeFrame world={loungeWorldProps(room, player.id)}>
+          <GameTable
+            shortcutsEnabled={
+              !showIntro &&
+              (!loungeState.open || (loungeState.seated && loungeState.classic))
+            }
+            actionPending={gameActionPending || gameActionBlocked}
             room={room}
-            selfPlayerId={player.id}
-            phase={startIntroPhase}
-            onPhaseChange={setStartIntroPhase}
-            onFinish={() => setStartIntroPhase("done")}
+            player={player}
+            playerGame={playerGame?.playerId === player.id ? playerGame : null}
+            playerSocial={playerSocial}
+            error={error}
+            onCopyInvite={copyInvite}
+            onPlayCards={playCards}
+            onStageCards={stageCards}
+            onDrawCard={drawCard}
+            onEndTurn={endTurn}
+            onTakePenalty={takePenalty}
+            onDrawRouletteCard={drawRouletteCard}
+            onCatchUno={catchUno}
+            onSupportPlayer={supportPlayer}
+            onKickSupporter={kickSupporter}
+            onRequestSupport={requestSupport}
+            onRespondSupportRequest={respondSupportRequest}
+            onSendAvatarEmojiReaction={sendAvatarEmojiReaction}
+            onSendChatMessage={sendChatMessage}
+            onStartVoteKick={startVoteKick}
+            onCastVoteKick={castVoteKick}
+            onRestartGame={restartGame}
+            onSetSeatOrder={setSeatOrder}
+            voice={voice}
+            socket={socket}
           />
-        )}
+          {showIntro && (
+            <GameStartIntro
+              room={room}
+              selfPlayerId={player.id}
+              phase={startIntroPhase}
+              onPhaseChange={setStartIntroPhase}
+              onFinish={() => setStartIntroPhase("done")}
+            />
+          )}
+        </LoungeFrame>
       </>
     )
   }
 
+  const lobby = (
+    <LobbyWaitingRoom
+      socket={socket}
+      room={room}
+      player={player}
+      roomCode={normalizedRoomCode}
+      connected={connected}
+      error={error}
+      isHost={isHost}
+      currentPlayerReady={Boolean(currentPlayer?.ready)}
+      onReady={setReady}
+      onStart={startGame}
+      onCopyInvite={copyInvite}
+      onSendChatMessage={sendChatMessage}
+      onStartVoteKick={startVoteKick}
+      onCastVoteKick={castVoteKick}
+      voice={voice}
+    />
+  )
+
   return (
     <>
       {audioOutputs}
-      <LobbyWaitingRoom
-        socket={socket}
-        room={room}
-        player={player}
-        roomCode={normalizedRoomCode}
-        connected={connected}
-        error={error}
-        isHost={isHost}
-        currentPlayerReady={Boolean(currentPlayer?.ready)}
-        onReady={setReady}
-        onStart={startGame}
-        onCopyInvite={copyInvite}
-        onSendChatMessage={sendChatMessage}
-        onStartVoteKick={startVoteKick}
-        onCastVoteKick={castVoteKick}
-        voice={voice}
-      />
+      {room ? (
+        <LoungeFrame world={loungeWorldProps(room, player.id)}>
+          {lobby}
+        </LoungeFrame>
+      ) : (
+        lobby
+      )}
     </>
   )
 }
@@ -1373,50 +1435,33 @@ function GameTable({
     : null
   const canDrawRoulette =
     !actionPending && Boolean(rouletteChoice?.playerId === player.id)
-  const needsColor = selectedCards.some((card) => card.color === "wild")
-  const remainingAfterSelectedCards =
-    (playerGame?.hand.length ?? 0) - selectedCards.length
-  const canChooseSwap =
-    selectedCards.length > 0 &&
-    selectedCards.length === 1 &&
-    selectedCards[0]?.face.kind === "number" &&
-    selectedCards[0].face.value === 7 &&
-    remainingAfterSelectedCards > 0 &&
-    activeOpponents.length > 0
-  const canChooseRotate =
-    selectedCards.length === 1 &&
-    selectedCards[0]?.face.kind === "number" &&
-    selectedCards[0].face.value === 0 &&
-    remainingAfterSelectedCards > 0
-  const discardActionCard =
-    selectedCards[0]?.face.kind === "discard-color" ? selectedCards[0] : null
-  const discardExtraCards = discardActionCard ? selectedCards.slice(1) : []
-  const submittedCards = discardActionCard ? [discardActionCard] : selectedCards
-  const needsSwap = canChooseSwap && wantsSwap
-  const selectedCardsCanPlay = canPlayStagedCards(
-    selectedCards,
+  const {
+    needsColor,
+    canChooseSwap,
+    canChooseRotate,
+    needsSwap,
+    canDeclareUno,
+    canSubmitPlay,
+    input: playInput,
+  } = derivePlay({
+    hand: playerGame?.hand ?? [],
+    selectedCardIds,
     playableCardIds,
-    drawStack
-  )
-  const remainingAfterPlay =
-    (playerGame?.hand.length ?? 0) - selectedCards.length
-  const finishesWithForbiddenPower =
-    remainingAfterPlay === 0 &&
-    submittedCards.some((card) => isForbiddenFinalCard(card))
-  const canDeclareUno =
-    Boolean(isMyTurn) &&
-    selectedCards.length > 0 &&
-    selectedCardsCanPlay &&
-    remainingAfterPlay === 1
-  const canSubmitPlay =
-    !actionPending &&
-    playerGame?.roomVersion === room.version &&
-    Boolean(isMyTurn) &&
-    pendingPlayedCardIds.length === 0 &&
-    selectedCardsCanPlay &&
-    !finishesWithForbiddenPower &&
-    (!needsColor || Boolean(chosenColor)) &&
-    (!needsSwap || Boolean(swapWithPlayerId))
+    drawStack,
+    isMyTurn: Boolean(isMyTurn),
+    ready:
+      !actionPending &&
+      playerGame?.roomVersion === room.version &&
+      pendingPlayedCardIds.length === 0,
+    activeOpponentCount: activeOpponents.length,
+    choices: {
+      chosenColor,
+      declaredUno,
+      wantsSwap,
+      swapWithPlayerId,
+      wantsRotate,
+    },
+  })
   const canPassTurn =
     !actionPending &&
     playerGame?.roomVersion === room.version &&
@@ -1755,23 +1800,7 @@ function GameTable({
 
   function submitPlay() {
     if (!canSubmitPlay) return
-    const playedCardIds = discardActionCard
-      ? [discardActionCard.id]
-      : selectedCardIds
-    const discardExtraCardIds = discardExtraCards.map((card) => card.id)
-    const accepted = onPlayCards({
-      cardIds: playedCardIds,
-      declaredUno: canDeclareUno && declaredUno,
-      chosenColor: chosenColor ?? undefined,
-      discardCardIds: discardExtraCardIds.length
-        ? discardExtraCardIds
-        : undefined,
-      topCardId: discardActionCard
-        ? (selectedCards[selectedCards.length - 1]?.id ?? discardActionCard.id)
-        : undefined,
-      swapWithPlayerId: needsSwap ? swapWithPlayerId : undefined,
-      rotateHands: canChooseRotate && wantsRotate ? true : undefined,
-    })
+    const accepted = onPlayCards(playInput)
     if (accepted !== false) setPendingPlayedCardIds(selectedCardIds)
   }
 
@@ -2005,6 +2034,7 @@ function GameTable({
               <ToolbarGroup>
                 <VoiceToggleButton voice={voice} />
                 <MusicButton />
+                <LoungeButton />
                 <MobileChatSheet
                   socket={socket}
                   messages={room.chatMessages}
@@ -2466,6 +2496,7 @@ function GameTable({
             <ToolbarGroup className="ml-auto">
               <VoiceToggleButton voice={voice} />
               <MusicButton />
+              <LoungeButton />
               <ToolbarDivider />
               <CopyInviteButton iconOnly toolbar onCopy={onCopyInvite} />
               <HowToPlayGuide />
@@ -6827,145 +6858,6 @@ function tableSeatPosition(index: number, total: number, compact: boolean) {
   }
 }
 
-function canStageCardWithSelection(
-  card: Card,
-  selectedCards: Array<Card>,
-  playableCardIds: Array<string>,
-  isMyTurn: boolean,
-  drawStack: NonNullable<RoomSnapshot["game"]>["drawStack"]
-) {
-  if (!isMyTurn) return false
-  if (selectedCards.some((selected) => selected.id === card.id)) return true
-  if (selectedCards.length === 0) return playableCardIds.includes(card.id)
-  return canPlayStagedCards(
-    [...selectedCards, card],
-    playableCardIds,
-    drawStack
-  )
-}
-
-function cardsInIdOrder(cards: Array<Card>, cardIds: Array<string>) {
-  const cardsById = new Map(cards.map((card) => [card.id, card]))
-  return cardIds
-    .map((cardId) => cardsById.get(cardId))
-    .filter((card): card is Card => Boolean(card))
-}
-
-function canPlayStagedCards(
-  cards: Array<Card>,
-  playableCardIds: Array<string>,
-  drawStack: NonNullable<RoomSnapshot["game"]>["drawStack"]
-) {
-  if (cards.length === 0) return false
-  if (cards.length === 1) return playableCardIds.includes(cards[0]?.id ?? "")
-  if (drawStack) {
-    return (
-      canStackDrawCards(drawStack, cards, playableCardIds) &&
-      cards.some((card) => playableCardIds.includes(card.id))
-    )
-  }
-  if (isDiscardFirstStage(cards, playableCardIds)) return true
-  return (
-    (sameNumberGroup(cards) ||
-      sameDrawGroup(cards) ||
-      sameActionGroup(cards)) &&
-    cards.some((card) => playableCardIds.includes(card.id))
-  )
-}
-
-function isDiscardFirstStage(
-  cards: Array<Card>,
-  playableCardIds: Array<string>
-) {
-  const discardCard = cards.at(0)
-  if (!discardCard || discardCard.face.kind !== "discard-color") return false
-  if (!playableCardIds.includes(discardCard.id)) return false
-
-  return cards.slice(1).every((card) => card.color === discardCard.color)
-}
-
-function canStackDrawCards(
-  drawStack: NonNullable<RoomSnapshot["game"]>["drawStack"] | null,
-  cards: Array<Card>,
-  playableCardIds: Array<string>
-) {
-  if (!drawStack || cards.length === 0 || !sameDrawGroup(cards)) return false
-
-  const minimum = drawStack.minimum
-  const playableGroups = new Set(
-    cards
-      .filter((card) => playableCardIds.includes(card.id))
-      .map((card) => drawGroupKey(card))
-      .filter((key): key is string => Boolean(key))
-  )
-
-  return cards.every((card) => {
-    const amount = drawAmount(card)
-    const group = drawGroupKey(card)
-
-    return Boolean(
-      amount && amount >= minimum && group && playableGroups.has(group)
-    )
-  })
-}
-
-function drawAmount(card: Card) {
-  switch (card.face.kind) {
-    case "draw":
-    case "wild-draw":
-    case "wild-reverse-draw":
-      return card.face.count
-    default:
-      return null
-  }
-}
-
-function isForbiddenFinalCard(card: Card) {
-  return card.face.kind !== "number" && card.face.kind !== "discard-color"
-}
-
-function sameNumberGroup(cards: Array<Card>) {
-  const first = cards.at(0)
-  if (!first || first.face.kind !== "number") return false
-  const value = first.face.value
-  return cards.every(
-    (card) => card.face.kind === "number" && card.face.value === value
-  )
-}
-
-function sameDrawGroup(cards: Array<Card>) {
-  const first = cards.at(0)
-  const key = first ? drawGroupKey(first) : null
-  if (!key) return false
-  return cards.every((card) => drawGroupKey(card) === key)
-}
-
-function sameActionGroup(cards: Array<Card>) {
-  const firstKind = cards[0]?.face.kind
-  if (
-    firstKind !== "skip" &&
-    firstKind !== "skip-everyone" &&
-    firstKind !== "reverse"
-  ) {
-    return false
-  }
-
-  return cards.every((card) => card.face.kind === firstKind)
-}
-
-function drawGroupKey(card: Card) {
-  switch (card.face.kind) {
-    case "draw":
-      return `draw:${card.face.count}`
-    case "wild-draw":
-      return `wild-draw:${card.face.count}`
-    case "wild-reverse-draw":
-      return `wild-reverse-draw:${card.face.count}`
-    default:
-      return null
-  }
-}
-
 function DeckStack({
   canDraw,
   alreadyDrawn,
@@ -8808,6 +8700,7 @@ function LobbyWaitingRoom({
           <ToolbarGroup>
             <VoiceToggleButton voice={voice} />
             <MusicButton />
+            <LoungeButton />
             <SoundToggle compact />
             <div className="flex lg:hidden">
               <MobileChatSheet
